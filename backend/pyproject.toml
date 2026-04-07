@@ -1,0 +1,65 @@
+[project]
+name = "maia-axon"
+version = "0.1.0"
+description = "Group-scoped multimodal document reasoning system with RAG, calculations, and citations"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # API
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "websockets>=13.0",
+    "python-multipart>=0.0.9",
+    # Database
+    "sqlalchemy[asyncio]>=2.0.30",
+    "asyncpg>=0.30.0",
+    "alembic>=1.13.0",
+    "pgvector>=0.3.0",
+    # Redis / Task Queue
+    "redis>=5.0.0",
+    "celery[redis]>=5.4.0",
+    # Object Storage
+    "boto3>=1.35.0",
+    # LLM / AI
+    "openai>=1.50.0",
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.2.0",
+    # Document Processing
+    "pymupdf>=1.24.0",
+    "glmocr>=0.1.0",
+    # HTTP client
+    "httpx>=0.27.0",
+    # Math / Science
+    "numpy>=1.26.0",
+    "scipy>=1.14.0",
+    "sympy>=1.13.0",
+    "pint>=0.24.0",
+    # Utilities
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "structlog>=24.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "httpx>=0.27.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
