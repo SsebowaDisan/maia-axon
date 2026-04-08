@@ -1,0 +1,96 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import "katex/dist/katex.min.css";
+@import "@xyflow/react/dist/style.css";
+
+:root {
+  --bg: 246 243 236;
+  --panel: 255 252 247;
+  --line: 210 219 229;
+  --ink: 19 33 52;
+  --muted: 105 122 145;
+  --accent: 23 97 122;
+  --accent-soft: 222 240 246;
+  --warn: 184 126 34;
+  --success: 28 126 88;
+  --danger: 176 68 52;
+}
+
+.dark {
+  --bg: 18 23 31;
+  --panel: 24 31 43;
+  --line: 56 73 92;
+  --ink: 241 245 249;
+  --muted: 156 163 175;
+  --accent: 94 201 216;
+  --accent-soft: 17 47 53;
+  --warn: 232 171 74;
+  --success: 70 196 134;
+  --danger: 235 114 92;
+}
+
+* {
+  border-color: rgb(var(--line) / 1);
+}
+
+html,
+body,
+#__next {
+  min-height: 100%;
+}
+
+body {
+  color: rgb(var(--ink) / 1);
+  background:
+    radial-gradient(circle at top left, rgba(23, 97, 122, 0.08), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(184, 126, 34, 0.08), transparent 26%),
+    rgb(var(--bg) / 1);
+  background-size: auto, auto, 100% 100%;
+  font-family: var(--font-sans), sans-serif;
+}
+
+.app-grid {
+  background-image: radial-gradient(rgba(23, 97, 122, 0.06) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.panel-surface {
+  @apply rounded-[28px] border bg-panel/90 shadow-panel backdrop-blur-sm;
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--line) / 1) transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgb(var(--line) / 1);
+  border-radius: 999px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.react-flow__node {
+  border-radius: 18px;
+  border: 1px solid rgb(var(--line) / 1);
+  background: rgb(var(--panel) / 0.96);
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.08);
+  color: rgb(var(--ink) / 1);
+  padding: 12px 14px;
+  min-width: 160px;
+  font-size: 13px;
+}
+
+.react-flow__edge-path {
+  stroke: rgb(var(--accent) / 0.45);
+  stroke-width: 1.75;
+}

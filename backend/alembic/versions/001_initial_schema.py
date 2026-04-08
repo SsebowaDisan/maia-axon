@@ -145,7 +145,7 @@ def upgrade() -> None:
             sa.ForeignKey("chunks.id", ondelete="CASCADE"),
             primary_key=True,
         ),
-        sa.Column("embedding", Vector(3072), nullable=False),
+        sa.Column("embedding", Vector(1536), nullable=False),
     )
     op.execute(
         "CREATE INDEX idx_chunk_embeddings_ivfflat ON chunk_embeddings "

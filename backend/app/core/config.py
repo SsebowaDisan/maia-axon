@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 200
     glmocr_max_workers: int = 32
     embedding_model: str = "text-embedding-3-large"
-    embedding_dimensions: int = 3072
+    embedding_dimensions: int = 1536
 
     # Retrieval
     retrieval_top_k: int = 10
