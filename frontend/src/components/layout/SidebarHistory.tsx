@@ -27,11 +27,12 @@ import {
 
 import { DocumentUploader } from "@/components/admin/DocumentUploader";
 import { GroupManager } from "@/components/admin/GroupManager";
+import { DeleteConfirmDialog } from "@/components/shared/DeleteConfirmDialog";
 import { UserAssignment } from "@/components/admin/UserAssignment";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { ChatMessage, Group, MessageResponse } from "@/lib/types";
+import type { ChatMessage, ConversationSummary, Group, MessageResponse } from "@/lib/types";
 import { formatRelativeTime, titleFromMessage } from "@/lib/utils";
 import { useAuthStore } from "@/stores/authStore";
 import { useChatStore } from "@/stores/chatStore";
@@ -434,6 +435,7 @@ export function SidebarHistory() {
   const [documentsGroupId, setDocumentsGroupId] = useState<string | null>(null);
   const [deleteGroupTarget, setDeleteGroupTarget] = useState<Group | null>(null);
   const [deleteGroupText, setDeleteGroupText] = useState("");
+  const [deleteConversationTarget, setDeleteConversationTarget] = useState<ConversationSummary | null>(null);
   const [deletingGroup, setDeletingGroup] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
 
@@ -800,10 +802,7 @@ export function SidebarHistory() {
                           className="rounded-full p-2 text-muted opacity-0 transition hover:bg-danger/10 hover:text-danger group-hover/conversation:opacity-100 group-focus-within/conversation:opacity-100"
                           onClick={(event) => {
                             event.stopPropagation();
-                            if (window.confirm("Delete this conversation?")) {
-                              void deleteConversation(conversation.id);
-                              void fetchConversations();
-                            }
+                            setDeleteConversationTarget(conversation);
                           }}
                           title="Delete"
                           aria-label="Delete conversation"
@@ -1010,6 +1009,33 @@ export function SidebarHistory() {
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+
+      <DeleteConfirmDialog
+        open={deleteConversationTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteConversationTarget(null);
+          }
+        }}
+        title="Delete conversation"
+        description={
+          <>
+            Type <span className="font-semibold text-ink">delete</span> to remove{" "}
+            <span className="font-semibold text-ink">
+              {deleteConversationTarget?.title || titleFromMessage("this conversation")}
+            </span>.
+          </>
+        }
+        confirmLabel="Delete conversation"
+        onConfirm={async () => {
+          if (!deleteConversationTarget) {
+            return;
+          }
+          await deleteConversation(deleteConversationTarget.id);
+          await fetchConversations();
+          setDeleteConversationTarget(null);
+        }}
+      />
 
       <Dialog.Root
         open={createGroupOpen}

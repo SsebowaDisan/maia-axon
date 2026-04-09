@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { AlertTriangle, CheckCircle2, Loader2, RotateCcw, Upload } from "lucide-react";
 
+import { DeleteConfirmDialog } from "@/components/shared/DeleteConfirmDialog";
 import { Button } from "@/components/ui/button";
 import type { Document, DocumentStatusValue } from "@/lib/types";
 import { documentProgressLabel, formatBytes, statusLabel } from "@/lib/utils";
@@ -29,6 +31,8 @@ export function IndexingStatus({
   const deleteDocument = useDocumentStore((state) => state.deleteDocument);
   const reindexDocument = useDocumentStore((state) => state.reindexDocument);
   const statusOverride = useDocumentStore((state) => state.documentStatuses[document.id]);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const status = statusOverride?.status ?? document.status;
   const progressCurrent = statusOverride?.progress_current ?? document.progress_current;
@@ -99,12 +103,34 @@ export function IndexingStatus({
           variant="ghost"
           onClick={(event) => {
             event.stopPropagation();
-            void deleteDocument(document.id, groupId);
+            setDeleteOpen(true);
           }}
         >
           Delete
         </Button>
       </div>
+      <DeleteConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title="Delete document"
+        description={
+          <>
+            Type <span className="font-semibold text-ink">delete</span> to remove{" "}
+            <span className="font-semibold text-ink">{document.filename}</span>.
+          </>
+        }
+        confirmLabel="Delete document"
+        isDeleting={deleting}
+        onConfirm={async () => {
+          setDeleting(true);
+          try {
+            await deleteDocument(document.id, groupId);
+            setDeleteOpen(false);
+          } finally {
+            setDeleting(false);
+          }
+        }}
+      />
     </div>
   );
 }

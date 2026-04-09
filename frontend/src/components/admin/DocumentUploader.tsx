@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { FileUp, Plus, X } from "lucide-react";
 import { useDropzone } from "react-dropzone";
 
@@ -57,6 +57,24 @@ export function DocumentUploader({ groupId }: { groupId: string | null }) {
 
   const [previewDocument, setPreviewDocument] = useState<Document | null>(null);
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
+  const [pendingAutoCloseFiles, setPendingAutoCloseFiles] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!uploadDialogOpen || pendingAutoCloseFiles.length === 0) {
+      return;
+    }
+
+    const startedProcessing = uploadStates.some(
+      (upload) =>
+        pendingAutoCloseFiles.includes(upload.fileName) &&
+        upload.status === "processing",
+    );
+
+    if (startedProcessing) {
+      setUploadDialogOpen(false);
+      setPendingAutoCloseFiles([]);
+    }
+  }, [pendingAutoCloseFiles, uploadDialogOpen, uploadStates]);
 
   const onDrop = useCallback(
     (files: File[]) => {
@@ -64,7 +82,7 @@ export function DocumentUploader({ groupId }: { groupId: string | null }) {
         return;
       }
       if (files.length > 0) {
-        setUploadDialogOpen(false);
+        setPendingAutoCloseFiles(files.map((file) => file.name));
       }
       files.forEach((file) => {
         void uploadDocument(groupId, file);

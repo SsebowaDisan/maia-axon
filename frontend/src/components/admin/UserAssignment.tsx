@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Shield } from "lucide-react";
 
+import { DeleteConfirmDialog } from "@/components/shared/DeleteConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
@@ -19,6 +20,8 @@ export function UserAssignment({ groupId }: { groupId: string }) {
   const [draft, setDraft] = useState({ username: "", password: "", role: "user" });
   const [createError, setCreateError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<User | null>(null);
+  const [isRemoving, setIsRemoving] = useState(false);
   const assignedUsers = useMemo(() => groupUsers[groupId] ?? [], [groupId, groupUsers]);
 
   const refreshUsers = useCallback(() => {
@@ -118,7 +121,7 @@ export function UserAssignment({ groupId }: { groupId: string }) {
               <p className="text-sm font-semibold text-ink">{user.name}</p>
               <p className="text-xs uppercase tracking-[0.14em] text-muted">{user.role}</p>
             </div>
-            <Button type="button" size="sm" variant="ghost" onClick={() => void removeUser(groupId, user.id)}>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setRemoveTarget(user)}>
               Remove
             </Button>
           </div>
@@ -152,6 +155,36 @@ export function UserAssignment({ groupId }: { groupId: string }) {
           ) : null}
         </div>
       </div>
+
+      <DeleteConfirmDialog
+        open={removeTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRemoveTarget(null);
+          }
+        }}
+        title="Remove user"
+        description={
+          <>
+            Type <span className="font-semibold text-ink">delete</span> to remove{" "}
+            <span className="font-semibold text-ink">{removeTarget?.name ?? "this user"}</span> from the project.
+          </>
+        }
+        confirmLabel="Remove user"
+        isDeleting={isRemoving}
+        onConfirm={async () => {
+          if (!removeTarget) {
+            return;
+          }
+          setIsRemoving(true);
+          try {
+            await removeUser(groupId, removeTarget.id);
+            setRemoveTarget(null);
+          } finally {
+            setIsRemoving(false);
+          }
+        }}
+      />
     </div>
   );
 }
