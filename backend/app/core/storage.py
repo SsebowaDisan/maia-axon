@@ -17,8 +17,10 @@ def get_s3_client():
             endpoint_url=settings.s3_endpoint_url,
             aws_access_key_id=settings.s3_access_key,
             aws_secret_access_key=settings.s3_secret_key,
-            config=Config(signature_version="s3v4"),
-            region_name="us-east-1",
+            # Google Cloud Storage's S3 interoperability works best with the
+            # XML API endpoint, region "auto", and path-style bucket URLs.
+            config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+            region_name="auto",
         )
     return _client
 
