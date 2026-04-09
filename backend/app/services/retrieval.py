@@ -60,6 +60,19 @@ class StructuralQueryPlan:
     reference_label: str | None = None
 
 
+def _wants_table_of_contents(query: str) -> bool:
+    lowered = query.lower()
+    return any(
+        marker in lowered
+        for marker in ("table of contents", "table of content", "toc", "contents page", "show contents")
+    )
+
+
+def _wants_index_listing(query: str) -> bool:
+    lowered = query.lower()
+    return bool(re.search(r"\b(book )?index\b", lowered)) or "show me the index" in lowered
+
+
 def _fallback_topic_request(query: str) -> int | None:
     lowered = query.lower()
     if "last" in lowered:
@@ -107,6 +120,12 @@ def _plan_topic_request_with_llm(query: str) -> int | None:
 
 
 def _fallback_structural_query_plan(query: str) -> StructuralQueryPlan:
+    if _wants_table_of_contents(query):
+        return StructuralQueryPlan(route="table_of_contents")
+
+    if _wants_index_listing(query):
+        return StructuralQueryPlan(route="index_listing")
+
     topic_index = _fallback_topic_request(query)
     if topic_index is not None:
         return StructuralQueryPlan(route="topic_outline", topic_index=topic_index)
@@ -130,7 +149,9 @@ def _plan_structural_query_with_llm(query: str) -> StructuralQueryPlan:
                     "role": "system",
                     "content": (
                         "Classify this PDF question into one route. "
-                        "Allowed routes: generic, document_overview, topic_outline, page_target, formula_lookup, figure_lookup. "
+                        "Allowed routes: generic, document_overview, topic_outline, page_target, formula_lookup, figure_lookup, table_of_contents, index_listing. "
+                        "Use table_of_contents when the user asks for the contents, table of contents, chapters, or sections list of a PDF. "
+                        "Use index_listing when the user asks for the index of a PDF or book. "
                         "Use topic_outline for questions like nth topic/last topic/chapter order/section order. "
                         "Use document_overview for questions asking what the PDF covers, its themes, topics, or structure overall. "
                         "Use page_target for page-specific questions. "
@@ -145,7 +166,7 @@ def _plan_structural_query_with_llm(query: str) -> StructuralQueryPlan:
         )
         payload = json.loads(response.choices[0].message.content or "{}")
         route = str(payload.get("route", "generic")).strip().lower()
-        if route not in {"generic", "document_overview", "topic_outline", "page_target", "formula_lookup", "figure_lookup"}:
+        if route not in {"generic", "document_overview", "topic_outline", "page_target", "formula_lookup", "figure_lookup", "table_of_contents", "index_listing"}:
             route = "generic"
         topic_index = int(payload.get("topic_index", 0) or 0)
         page_number = int(payload.get("page_number", 0) or 0)
@@ -356,6 +377,127 @@ def _extract_topics_from_toc(text: str) -> list[dict]:
         seen.add(key)
         deduped.append(topic)
     return deduped
+
+
+def _extract_index_entries(text: str) -> list[dict]:
+    normalized = " ".join(text.replace("\n", " ").split())
+    normalized = re.sub(r"\bIndex\b", " ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\b[A-Z]\b", " ", normalized)
+    normalized = " ".join(normalized.split())
+
+    pattern = re.compile(
+        r"([A-Za-z][A-Za-z0-9'()/\- ]{2,}?),\s*(\d{1,3})(?:-\d{1,3})?(?:,\s*\d{1,3}(?:-\d{1,3})?)*"
+    )
+
+    entries: list[dict] = []
+    seen: set[tuple[str, int]] = set()
+    for match in pattern.finditer(normalized):
+        term = " ".join(match.group(1).split()).strip(" ,.-")
+        page_number = int(match.group(2))
+        if len(term) < 3:
+            continue
+        key = (term.lower(), page_number)
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append({"title": term, "page_number": page_number})
+    return entries
+
+
+async def _table_of_contents_listing_search(
+    db: AsyncSession,
+    group_id: UUID,
+    document_ids: list[UUID] | None,
+) -> list[RetrievalResult]:
+    docs = await _get_ready_documents(db, group_id, document_ids)
+    if not docs:
+        return []
+
+    target_doc_ids = [row.id for row in docs]
+    section_rows = await _load_document_chunks(db, target_doc_ids, ["section"])
+    if not section_rows:
+        return []
+
+    per_doc: dict[UUID, list] = {}
+    for row in section_rows:
+        per_doc.setdefault(row.document_id, []).append(row)
+
+    for doc_id, rows in per_doc.items():
+        toc_rows = [
+            row for row in rows
+            if _page_number_from_metadata(row.metadata_) <= 20
+            and any(marker in row.content_text.lower() for marker in ("sommaire", "contents", "table of contents"))
+        ]
+        for toc_row in toc_rows:
+            topics = _extract_topics_from_toc(toc_row.content_text or "")
+            if not topics:
+                continue
+            return [
+                RetrievalResult(
+                    source_type="pdf",
+                    document_id=doc_id,
+                    document_name=toc_row.filename,
+                    page_number=topic["page_number"],
+                    chunk_type="toc_entry",
+                    content=topic["title"],
+                    relevance_score=max(0.99 - index * 0.01, 0.6),
+                )
+                for index, topic in enumerate(topics)
+            ]
+
+    return []
+
+
+async def _index_listing_search(
+    db: AsyncSession,
+    group_id: UUID,
+    document_ids: list[UUID] | None,
+) -> list[RetrievalResult]:
+    docs = await _get_ready_documents(db, group_id, document_ids)
+    if not docs:
+        return []
+
+    rows = await _load_document_chunks(db, [row.id for row in docs], ["section", "page"])
+    if not rows:
+        return []
+
+    for doc in docs:
+        threshold = max(1, int(doc.page_count or 1) - 25)
+        doc_rows = [
+            row for row in rows
+            if row.document_id == doc.id
+            and _page_number_from_metadata(row.metadata_) >= threshold
+            and "index" in (row.content_text or "").lower()
+        ]
+        entries: list[dict] = []
+        for row in doc_rows:
+            entries.extend(_extract_index_entries(row.content_text or ""))
+        if not entries:
+            continue
+
+        deduped: list[dict] = []
+        seen: set[tuple[str, int]] = set()
+        for entry in entries:
+            key = (entry["title"].lower(), entry["page_number"])
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(entry)
+
+        return [
+            RetrievalResult(
+                source_type="pdf",
+                document_id=doc.id,
+                document_name=doc.filename,
+                page_number=entry["page_number"],
+                chunk_type="index_entry",
+                content=entry["title"],
+                relevance_score=max(0.99 - index * 0.002, 0.65),
+            )
+            for index, entry in enumerate(deduped[:160])
+        ]
+
+    return []
 
 
 async def _topic_outline_search(
@@ -941,6 +1083,14 @@ async def library_search(
         structural_results = await _document_overview_search(db, group_id, document_ids)
         if structural_results:
             return RetrievalResponse(results=structural_results[: settings.rerank_top_k], query_embedding=None)
+    elif plan.route == "table_of_contents":
+        structural_results = await _table_of_contents_listing_search(db, group_id, document_ids)
+        if structural_results:
+            return RetrievalResponse(results=structural_results, query_embedding=None)
+    elif plan.route == "index_listing":
+        structural_results = await _index_listing_search(db, group_id, document_ids)
+        if structural_results:
+            return RetrievalResponse(results=structural_results, query_embedding=None)
     elif plan.route == "topic_outline":
         structural_results = await _topic_outline_search(db, query, group_id, document_ids, plan.topic_index)
         if structural_results:

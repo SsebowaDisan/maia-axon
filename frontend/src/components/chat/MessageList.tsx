@@ -15,6 +15,19 @@ const FALLBACK_WELCOME: WelcomePayload = {
   suggested_questions: [],
 };
 
+const ONBOARDING_MARKDOWN = [
+  "### How to use Maia",
+  "- Type `#` in the composer to choose a project or document workspace.",
+  "- Type `@` after selecting a project to target one or more specific PDFs.",
+  "- Open **Library**, choose the correct project, and use **Upload PDFs** to add new files.",
+  "- Wait until a document shows **Ready** in the Library before asking grounded questions about it.",
+  "- Ask in plain language. Maia will use the selected project documents and cite pages when available.",
+].join("\n");
+
+function buildWelcomeMarkdown(introMarkdown: string) {
+  return `${introMarkdown.trim()}\n\n${ONBOARDING_MARKDOWN}`;
+}
+
 export function MessageList({ messages }: { messages: ChatMessage[] }) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -40,22 +53,57 @@ function WelcomeCanvas() {
   const activeGroupId = useGroupStore((state) => state.activeGroupId);
   const setDraft = useChatStore((state) => state.setDraft);
   const setDraftMode = useChatStore((state) => state.setDraftMode);
+  const setWelcomeStreaming = useChatStore((state) => state.setWelcomeStreaming);
   const [welcome, setWelcome] = useState<WelcomePayload>(FALLBACK_WELCOME);
   const [loading, setLoading] = useState(true);
+  const [displayedMarkdown, setDisplayedMarkdown] = useState("");
 
   useEffect(() => {
     let cancelled = false;
+    let timer: number | null = null;
 
     async function loadWelcome() {
       setLoading(true);
+      setDisplayedMarkdown("");
+      setWelcomeStreaming(true);
       try {
         const payload = await api.getWelcome(activeGroupId);
         if (!cancelled) {
           setWelcome(payload);
+          const fullMarkdown = buildWelcomeMarkdown(payload.intro_markdown);
+          let index = 0;
+          const typeNext = () => {
+            if (cancelled) {
+              return;
+            }
+            index += 3;
+            setDisplayedMarkdown(fullMarkdown.slice(0, index));
+            if (index < fullMarkdown.length) {
+              timer = window.setTimeout(typeNext, 12);
+              return;
+            }
+            setWelcomeStreaming(false);
+          };
+          typeNext();
         }
       } catch {
         if (!cancelled) {
           setWelcome(FALLBACK_WELCOME);
+          const fullMarkdown = buildWelcomeMarkdown(FALLBACK_WELCOME.intro_markdown);
+          let index = 0;
+          const typeNext = () => {
+            if (cancelled) {
+              return;
+            }
+            index += 3;
+            setDisplayedMarkdown(fullMarkdown.slice(0, index));
+            if (index < fullMarkdown.length) {
+              timer = window.setTimeout(typeNext, 12);
+              return;
+            }
+            setWelcomeStreaming(false);
+          };
+          typeNext();
         }
       } finally {
         if (!cancelled) {
@@ -68,8 +116,12 @@ function WelcomeCanvas() {
 
     return () => {
       cancelled = true;
+      setWelcomeStreaming(false);
+      if (timer) {
+        window.clearTimeout(timer);
+      }
     };
-  }, [activeGroupId]);
+  }, [activeGroupId, setWelcomeStreaming]);
 
   return (
     <div className="mx-auto flex min-h-full w-full max-w-[980px] flex-col justify-start px-6 pb-10 pt-4">
@@ -84,7 +136,7 @@ function WelcomeCanvas() {
           {loading ? (
             <p className="text-base leading-8 text-muted">Preparing your workspace briefing...</p>
           ) : (
-            <MarkdownRenderer content={welcome.intro_markdown} citations={[]} />
+            <MarkdownRenderer content={displayedMarkdown || buildWelcomeMarkdown(welcome.intro_markdown)} citations={[]} />
           )}
         </div>
         {!!welcome.suggested_questions.length && (

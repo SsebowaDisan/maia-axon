@@ -99,9 +99,7 @@ export function IndexingStatus({
           variant="ghost"
           onClick={(event) => {
             event.stopPropagation();
-            if (window.confirm("Delete this document from the group?")) {
-              void deleteDocument(document.id, groupId);
-            }
+            void deleteDocument(document.id, groupId);
           }}
         >
           Delete

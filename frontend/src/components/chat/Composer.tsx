@@ -59,6 +59,7 @@ export function Composer() {
   const setMode = useChatStore((state) => state.setMode);
   const sendMessage = useChatStore((state) => state.sendMessage);
   const streaming = useChatStore((state) => state.streaming);
+  const welcomeStreaming = useChatStore((state) => state.welcomeStreaming);
   const clearChat = useChatStore((state) => state.clearChat);
   const startNewConversation = useConversationStore((state) => state.startNewConversation);
   const fetchConversations = useConversationStore((state) => state.fetchConversations);
@@ -81,7 +82,11 @@ export function Composer() {
     [activeGroupId, groups],
   );
   const needsProjectSelection = mode !== "standard";
-  const canSend = (!!value.trim() || promptAttachments.length > 0) && !streaming && !!fallbackGroup;
+  const canSend =
+    (!!value.trim() || promptAttachments.length > 0) &&
+    !streaming &&
+    !welcomeStreaming &&
+    !!fallbackGroup;
 
   const activeGroup = groups.find((group) => group.id === activeGroupId) ?? null;
 
@@ -230,6 +235,9 @@ export function Composer() {
     : fallbackGroup
       ? "Ask anything..."
       : "No project available yet";
+  const resolvedPlaceholder = welcomeStreaming
+    ? "Please wait while Maia finishes the workspace briefing..."
+    : placeholder;
 
   return (
     <div
@@ -340,7 +348,7 @@ export function Composer() {
             type="button"
             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-black/[0.06] bg-[rgb(246,246,247)] text-muted transition hover:border-black hover:bg-black hover:text-white"
             onClick={() => fileInputRef.current?.click()}
-            disabled={uploadingAttachment || streaming}
+            disabled={uploadingAttachment || streaming || welcomeStreaming}
             aria-label="Attach file"
             title="Attach PDF, Word, or image"
           >
@@ -385,8 +393,8 @@ export function Composer() {
           <Textarea
             ref={textareaRef}
             rows={1}
-            placeholder={placeholder}
-            disabled={streaming || (!fallbackGroup && needsProjectSelection)}
+            placeholder={resolvedPlaceholder}
+            disabled={streaming || welcomeStreaming || (!fallbackGroup && needsProjectSelection)}
             value={value}
             onChange={(event) => {
               setDraft(event.target.value);

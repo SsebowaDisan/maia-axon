@@ -443,6 +443,31 @@ def generate_welcome_payload(
     }
 
 
+def is_structural_listing_sources(sources: list[RetrievalResult]) -> bool:
+    if not sources:
+        return False
+    return all(source.chunk_type in {"toc_entry", "index_entry"} for source in sources)
+
+
+def structural_listing_agent(sources: list[RetrievalResult]) -> AnswerResponse:
+    citations = _build_citations(sources)
+    first = sources[0]
+    is_toc = first.chunk_type == "toc_entry"
+    heading = "Table of Contents" if is_toc else "Index"
+    intro = f"## {heading}\nFrom **{first.document_name}**.\n"
+    lines = []
+    for source, citation in zip(sources, citations, strict=False):
+        label = source.content.strip()
+        lines.append(f"- {label} - [{citation.page}](citation:{citation.id})")
+
+    body = "\n".join(lines)
+    return AnswerResponse(
+        text=f"{intro}\n{body}".strip(),
+        sections=[AnswerSection(type="explanation", content=body, grounded=True)],
+        citations=citations,
+    )
+
+
 def _format_sources_for_prompt(results: list[RetrievalResult]) -> str:
     """Format retrieval results as context for the LLM prompt."""
     parts = []

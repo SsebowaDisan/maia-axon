@@ -32,6 +32,8 @@ from app.services.answer_engine import (
     generate_answer,
     generate_conversation_metadata,
     generate_welcome_payload,
+    is_structural_listing_sources,
+    structural_listing_agent,
 )
 from app.services.retrieval import deep_search, library_search
 
@@ -224,12 +226,15 @@ async def chat(
         sources = retrieval.results
 
     # Generate answer
-    answer = await generate_answer(
-        query=effective_message,
-        sources=sources,
-        conversation_history=history,
-        search_mode=body.mode,
-    )
+    if is_structural_listing_sources(sources):
+        answer = structural_listing_agent(sources)
+    else:
+        answer = await generate_answer(
+            query=effective_message,
+            sources=sources,
+            conversation_history=history,
+            search_mode=body.mode,
+        )
 
     serialized = _serialize_answer(answer)
 

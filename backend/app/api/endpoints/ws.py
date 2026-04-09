@@ -41,7 +41,9 @@ from app.services.answer_engine import (
     ensure_inline_citation_references,
     generate_conversation_metadata,
     identity_agent,
+    is_structural_listing_sources,
     language_instruction_for_query,
+    structural_listing_agent,
 )
 from app.services.prompt_attachments import build_attachment_context, load_prompt_attachment
 from app.services.retrieval import deep_search, library_search
@@ -360,6 +362,33 @@ async def websocket_chat(websocket: WebSocket):
                         "content": "I couldn't find relevant information in the selected group's documents.",
                     })
                     await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
+                    continue
+
+                if is_structural_listing_sources(sources):
+                    answer = structural_listing_agent(sources)
+                    citations = [_serialize_citation(c) for c in answer.citations]
+                    answer.mindmap = _build_mindmap(answer)
+
+                    await websocket.send_json({"type": "status", "status": "reasoning"})
+                    await websocket.send_json({"type": "token", "content": answer.text})
+                    await websocket.send_json({"type": "citations", "data": citations})
+                    await websocket.send_json({
+                        "type": "mindmap",
+                        "data": _serialize_mindmap(answer.mindmap),
+                    })
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
+
+                    assistant_msg = Message(
+                        conversation_id=conversation.id,
+                        role="assistant",
+                        content=answer.text,
+                        citations={"citations": citations},
+                        mindmap=_serialize_mindmap(answer.mindmap),
+                        search_mode=mode,
+                    )
+                    _ensure_conversation_metadata(conversation, message, mode)
+                    db.add(assistant_msg)
+                    await db.commit()
                     continue
 
                 # --- Stage 2: Intent Classification ---

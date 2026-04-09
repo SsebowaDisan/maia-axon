@@ -43,11 +43,13 @@ interface ChatState {
   draftMode: "compose" | "user_edit" | "assistant_edit";
   mode: SearchMode;
   streaming: boolean;
+  welcomeStreaming: boolean;
   connectionError: string | null;
   initialized: boolean;
   initialize: () => void;
   setMode: (mode: SearchMode) => void;
   setDraft: (draft: string) => void;
+  setWelcomeStreaming: (streaming: boolean) => void;
   addPromptAttachments: (files: FileList | File[]) => Promise<void>;
   removePromptAttachment: (attachmentId: string) => void;
   clearPromptAttachments: () => void;
@@ -74,6 +76,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   draftMode: "compose",
   mode: "library",
   streaming: false,
+  welcomeStreaming: false,
   connectionError: null,
   initialized: false,
   initialize() {
@@ -151,6 +154,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
   setDraft(draft) {
     set({ draft });
+  },
+  setWelcomeStreaming(welcomeStreaming) {
+    set({ welcomeStreaming });
   },
   async addPromptAttachments(files) {
     const entries = Array.from(files);
