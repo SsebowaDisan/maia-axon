@@ -380,13 +380,15 @@ def generate_welcome_payload(
                         "Write professionally and clearly. "
                         "The introduction must briefly explain that Maia AI is being developed and trained by Axon Group to assist with technical questions grounded in uploaded documents and general technical reasoning. "
                         "Include a short section that explicitly lists the currently available books or PDFs when they are provided. "
+                        "For each available book or PDF, include a concise one-sentence summary based only on the provided summary_source or metadata. "
+                        "Format the list so each title is immediately followed by its short summary. "
                         "The tone must sound like a serious technical assistant, not marketing copy. "
                         "Do not mention today's date, training data cutoffs, knowledge cutoffs, model release dates, or any statement such as 'up to October 2023'. "
                         "Generate 5 to 7 suggested questions on the spot from the provided documents. "
                         "Do not hardcode generic sample questions unrelated to the supplied PDFs. "
                         "When the document titles suggest formulas, calculations, design methods, acoustics, fans, coating, or engineering processes, include calculation-style and engineering-style questions as appropriate. "
                         "Keep each suggested question concise, practical, and professional. "
-                        "The intro_markdown must be valid Markdown and should preferably contain a short bullet list of the available books."
+                        "The intro_markdown must be valid Markdown and should preferably contain a short bullet list of the available books with summary lines."
                     ),
                 },
                 {
@@ -420,7 +422,14 @@ def generate_welcome_payload(
         if str(doc.get("filename", "")).strip()
     ]
     fallback_docs = ", ".join(doc_names[:4]) or "the uploaded technical documents"
-    listed_books = "\n".join(f"- {name}" for name in doc_names[:6])
+    listed_books = "\n".join(
+        (
+            f"- **{str(doc.get('filename', '')).strip()}**: "
+            f"{str(doc.get('summary_source', '')).strip()[:220].rstrip(' ,.;:') or 'Technical reference available in this workspace.'}"
+        )
+        for doc in documents[:6]
+        if str(doc.get("filename", "")).strip()
+    )
     fallback_questions: list[str] = []
     if doc_names:
         primary_name = doc_names[0]

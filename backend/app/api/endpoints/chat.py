@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.models.chunk import Chunk
 from app.models.conversation import Conversation, Message
 from app.models.document import Document
 from app.models.group import GroupAssignment
@@ -40,6 +41,19 @@ from app.services.retrieval import deep_search, library_search
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
+def _page_number_from_metadata(metadata: dict | None) -> int:
+    if not metadata:
+        return 0
+    try:
+        return int(metadata.get("page_number", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _normalize_summary_source(text: str) -> str:
+    return " ".join((text or "").split())[:900]
+
+
 @router.get("/welcome", response_model=WelcomeResponse)
 async def welcome(
     group_id: UUID | None = Query(default=None),
@@ -48,6 +62,7 @@ async def welcome(
 ):
     document_query = (
         select(
+            Document.id,
             Document.filename,
             Document.page_count,
             Document.status,
@@ -71,15 +86,62 @@ async def welcome(
         document_query = document_query.where(Document.status == "ready")
 
     result = await db.execute(document_query.limit(8))
+    document_rows = result.all()
     documents = [
         {
+            "id": str(row.id),
             "filename": row.filename,
             "page_count": row.page_count,
             "status": row.status,
             "group_id": str(row.group_id),
         }
-        for row in result.all()
+        for row in document_rows
     ]
+
+    if documents:
+        document_ids = [UUID(document["id"]) for document in documents]
+        chunk_result = await db.execute(
+            select(
+                Chunk.document_id,
+                Chunk.content_text,
+                Chunk.metadata_,
+                Chunk.chunk_type,
+            )
+            .where(
+                Chunk.document_id.in_(document_ids),
+                Chunk.chunk_type.in_(["section", "page"]),
+            )
+            .order_by(Chunk.created_at.asc())
+        )
+        chunks_by_document: dict[str, list[dict]] = {}
+        for row in chunk_result.all():
+            chunks_by_document.setdefault(str(row.document_id), []).append(
+                {
+                    "content_text": row.content_text or "",
+                    "page_number": _page_number_from_metadata(row.metadata_),
+                    "chunk_type": row.chunk_type,
+                }
+            )
+
+        for document in documents:
+            candidate_chunks = chunks_by_document.get(document["id"], [])
+            candidate_chunks.sort(key=lambda item: (item["page_number"] or 9999, 0 if item["chunk_type"] == "section" else 1))
+            summary_source = None
+            for chunk in candidate_chunks:
+                page_number = chunk["page_number"]
+                text = _normalize_summary_source(chunk["content_text"])
+                if 3 <= page_number <= 18 and len(text) >= 220:
+                    summary_source = text
+                    break
+            if not summary_source:
+                for chunk in candidate_chunks:
+                    text = _normalize_summary_source(chunk["content_text"])
+                    if len(text) >= 160:
+                        summary_source = text
+                        break
+            if summary_source:
+                document["summary_source"] = summary_source
+            document.pop("id", None)
 
     payload = generate_welcome_payload(group_name=group_name, documents=documents)
     return WelcomeResponse(**payload)

@@ -2,6 +2,7 @@ import fitz
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -364,4 +365,38 @@ async def get_page(
         ocr_text=public_page.ocr_text,
         ocr_confidence=public_page.ocr_confidence,
         regions=public_page.regions,
+    )
+
+
+@router.get("/documents/{document_id}/pages/{page_number}/image")
+async def get_page_image(
+    document_id: UUID,
+    page_number: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    doc = result.scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await _check_group_access(doc.group_id, user, db)
+
+    result = await db.execute(
+        select(Page.id)
+        .where(Page.document_id == document_id, Page.page_number == page_number)
+        .order_by(Page.created_at.desc(), Page.id.desc())
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    key = f"documents/{document_id}/pages/{page_number}.png"
+    try:
+        image_bytes = download_file(key)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Page image not found") from exc
+
+    return Response(
+        content=image_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=3600"},
     )
