@@ -1,7 +1,7 @@
 """add document progress fields
 
 Revision ID: 003_add_document_progress_fields
-Revises: 002_add_conversation_title_icon
+Revises: 002
 Create Date: 2026-04-09 15:10:00.000000
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 revision = "003_add_document_progress_fields"
-down_revision = "002_add_conversation_title_icon"
+down_revision = "002"
 branch_labels = None
 depends_on = None
 
