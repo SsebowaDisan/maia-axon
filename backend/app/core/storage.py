@@ -15,6 +15,10 @@ def _is_google_cloud_storage() -> bool:
     return host in {"storage.googleapis.com", "www.googleapis.com"}
 
 
+def uses_browser_direct_upload() -> bool:
+    return _is_google_cloud_storage()
+
+
 def get_s3_client():
     global _s3_client
     if _s3_client is None:
@@ -64,6 +68,25 @@ def upload_pdf(document_id: UUID, file_bytes: bytes) -> str:
     return upload_file(file_bytes, key, content_type="application/pdf")
 
 
+def create_pdf_upload_session(
+    document_id: UUID,
+    *,
+    content_type: str = "application/pdf",
+    size_bytes: int | None = None,
+    origin: str | None = None,
+) -> str:
+    if not _is_google_cloud_storage():
+        raise RuntimeError("Direct browser upload is only supported for Google Cloud Storage")
+
+    bucket = get_gcs_client().bucket(settings.s3_bucket_name)
+    blob = bucket.blob(f"documents/{document_id}/original.pdf")
+    return blob.create_resumable_upload_session(
+        content_type=content_type,
+        size=size_bytes,
+        origin=origin,
+    )
+
+
 def upload_page_image(document_id: UUID, page_number: int, image_bytes: bytes) -> str:
     key = f"documents/{document_id}/pages/{page_number}.png"
     return upload_file(image_bytes, key, content_type="image/png")
@@ -71,6 +94,33 @@ def upload_page_image(document_id: UUID, page_number: int, image_bytes: bytes) -
 
 def get_file_url(key: str) -> str:
     return f"{_public_base_url()}/{settings.s3_bucket_name}/{key}"
+
+
+def get_file_metadata(key: str) -> dict | None:
+    if _is_google_cloud_storage():
+        bucket = get_gcs_client().bucket(settings.s3_bucket_name)
+        blob = bucket.get_blob(key)
+        if blob is None:
+            return None
+        return {
+            "size": blob.size,
+            "content_type": blob.content_type,
+            "updated": blob.updated,
+        }
+
+    client = get_s3_client()
+    try:
+        response = client.head_object(Bucket=settings.s3_bucket_name, Key=key)
+    except client.exceptions.NoSuchKey:
+        return None
+    except Exception:
+        return None
+
+    return {
+        "size": response.get("ContentLength"),
+        "content_type": response.get("ContentType"),
+        "updated": response.get("LastModified"),
+    }
 
 
 def to_public_url(url: str) -> str:

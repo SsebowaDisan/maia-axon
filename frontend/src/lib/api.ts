@@ -3,6 +3,7 @@ import type {
   ConversationDetail,
   ConversationSummary,
   Document,
+  DocumentUploadInitResponse,
   DocumentStatus,
   Group,
   GroupAssignment,
@@ -131,7 +132,22 @@ export const api = {
   listDocuments(groupId: string) {
     return request<Document[]>(`/groups/${groupId}/documents`);
   },
-  uploadDocument(
+  initDocumentUpload(groupId: string, file: File) {
+    return request<DocumentUploadInitResponse>(`/groups/${groupId}/documents/uploads`, {
+      method: "POST",
+      body: JSON.stringify({
+        filename: file.name,
+        file_size_bytes: file.size,
+        content_type: file.type || "application/pdf",
+      }),
+    });
+  },
+  completeDocumentUpload(documentId: string) {
+    return request<{ document: Document }>(`/documents/${documentId}/complete-upload`, {
+      method: "POST",
+    });
+  },
+  async uploadDocumentViaProxy(
     groupId: string,
     file: File,
     onProgress?: (progress: number) => void,
@@ -170,6 +186,59 @@ export const api = {
       const formData = new FormData();
       formData.append("file", file);
       xhr.send(formData);
+    });
+  },
+  uploadDocument(
+    groupId: string,
+    file: File,
+    onProgress?: (progress: number) => void,
+  ): Promise<Document> {
+    return api.initDocumentUpload(groupId, file).then(async (init) => {
+      if (init.strategy === "proxy" || !init.upload_url || !init.document) {
+        return api.uploadDocumentViaProxy(groupId, file, onProgress);
+      }
+
+      const uploadedDocument = init.document;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("PUT", init.upload_url!);
+          xhr.setRequestHeader("Content-Type", file.type || "application/pdf");
+
+          xhr.upload.onprogress = (event) => {
+            if (!event.lengthComputable || !onProgress) {
+              return;
+            }
+            onProgress(Math.round((event.loaded / event.total) * 100));
+          };
+
+          xhr.onerror = () =>
+            reject(
+              new Error(
+                "Upload failed. If the file is large, verify Cloud Storage CORS is configured for the frontend origin.",
+              ),
+            );
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve();
+              return;
+            }
+            reject(new Error(`Upload failed with status ${xhr.status}`));
+          };
+
+          xhr.send(file);
+        });
+
+        const finalized = await api.completeDocumentUpload(uploadedDocument.id);
+        return finalized.document;
+      } catch (error) {
+        try {
+          await api.deleteDocument(uploadedDocument.id);
+        } catch {
+          // Best effort cleanup for incomplete direct uploads.
+        }
+        throw error;
+      }
     });
   },
   getDocumentStatus(documentId: string) {

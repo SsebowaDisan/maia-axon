@@ -63,6 +63,12 @@ export interface DocumentStatus {
   error_detail: string | null;
 }
 
+export interface DocumentUploadInitResponse {
+  strategy: "direct_gcs" | "proxy";
+  document: Document | null;
+  upload_url: string | null;
+}
+
 export interface PageRegion {
   type?: string;
   glm_label?: string;

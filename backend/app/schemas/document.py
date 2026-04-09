@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -25,6 +26,22 @@ class DocumentStatusResponse(BaseModel):
     status: str
     page_count: int | None
     error_detail: str | None
+
+
+class DocumentUploadInitRequest(BaseModel):
+    filename: str
+    file_size_bytes: int
+    content_type: str = "application/pdf"
+
+
+class DocumentUploadInitResponse(BaseModel):
+    strategy: Literal["direct_gcs", "proxy"]
+    document: DocumentResponse | None = None
+    upload_url: str | None = None
+
+
+class DocumentUploadCompleteResponse(BaseModel):
+    document: DocumentResponse
 
 
 class PageResponse(BaseModel):

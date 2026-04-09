@@ -1,18 +1,34 @@
 import fitz
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_admin
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.storage import delete_document_files, download_file, to_public_url, upload_pdf
+from app.core.storage import (
+    create_pdf_upload_session,
+    delete_document_files,
+    download_file,
+    get_file_metadata,
+    get_file_url,
+    to_public_url,
+    upload_pdf,
+    uses_browser_direct_upload,
+)
 from app.models.document import Document, Page
 from app.models.group import Group, GroupAssignment
 from app.models.user import User
-from app.schemas.document import DocumentResponse, DocumentStatusResponse, PageResponse
+from app.schemas.document import (
+    DocumentResponse,
+    DocumentStatusResponse,
+    DocumentUploadCompleteResponse,
+    DocumentUploadInitRequest,
+    DocumentUploadInitResponse,
+    PageResponse,
+)
 from app.tasks.ingestion import process_document
 
 router = APIRouter(tags=["documents"])
@@ -60,6 +76,32 @@ async def _check_group_access(group_id: UUID, user: User, db: AsyncSession) -> G
     return group
 
 
+def _validate_pdf_upload(filename: str | None, file_size_bytes: int, content_type: str | None = None):
+    if not filename or not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    if content_type and content_type not in {"application/pdf", "application/octet-stream"}:
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    size_mb = file_size_bytes / (1024 * 1024)
+    if size_mb > settings.max_upload_size_mb:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large. Max size: {settings.max_upload_size_mb} MB",
+        )
+
+
+def _create_document_record(group_id: UUID, filename: str, file_size_bytes: int, uploaded_by: UUID) -> Document:
+    doc = Document(
+        group_id=group_id,
+        filename=filename,
+        file_url="",
+        file_size_bytes=file_size_bytes,
+        status="uploading",
+        uploaded_by=uploaded_by,
+    )
+    return doc
+
+
 # --- @ command: list docs in group ---
 
 
@@ -96,27 +138,11 @@ async def upload_document(
     if result.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Group not found")
 
-    # Validate file
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
-
     content = await file.read()
-    size_mb = len(content) / (1024 * 1024)
-    if size_mb > settings.max_upload_size_mb:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File too large. Max size: {settings.max_upload_size_mb} MB",
-        )
+    _validate_pdf_upload(file.filename, len(content), file.content_type)
 
     # Create document record
-    doc = Document(
-        group_id=group_id,
-        filename=file.filename,
-        file_url="",  # will be set after upload
-        file_size_bytes=len(content),
-        status="uploading",
-        uploaded_by=admin.id,
-    )
+    doc = _create_document_record(group_id, file.filename, len(content), admin.id)
     db.add(doc)
     await db.flush()
 
@@ -131,6 +157,83 @@ async def upload_document(
     process_document.delay(str(doc.id))
 
     return _with_public_file_url(doc)
+
+
+@router.post(
+    "/groups/{group_id}/documents/uploads",
+    response_model=DocumentUploadInitResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_document_upload_session(
+    group_id: UUID,
+    body: DocumentUploadInitRequest,
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Group).where(Group.id == group_id))
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    _validate_pdf_upload(body.filename, body.file_size_bytes, body.content_type)
+
+    if not uses_browser_direct_upload():
+        return DocumentUploadInitResponse(strategy="proxy")
+
+    doc = _create_document_record(group_id, body.filename, body.file_size_bytes, admin.id)
+    db.add(doc)
+    await db.flush()
+
+    doc.file_url = get_file_url(f"documents/{doc.id}/original.pdf")
+    await db.flush()
+    await db.refresh(doc)
+
+    upload_url = create_pdf_upload_session(
+        doc.id,
+        content_type=body.content_type,
+        size_bytes=body.file_size_bytes,
+        origin=request.headers.get("origin"),
+    )
+
+    return DocumentUploadInitResponse(
+        strategy="direct_gcs",
+        document=_with_public_file_url(doc),
+        upload_url=upload_url,
+    )
+
+
+@router.post(
+    "/documents/{document_id}/complete-upload",
+    response_model=DocumentUploadCompleteResponse,
+)
+async def complete_document_upload(
+    document_id: UUID,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    doc = result.scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    metadata = get_file_metadata(f"documents/{document_id}/original.pdf")
+    if metadata is None:
+        doc.status = "failed"
+        doc.error_detail = "Uploaded file not found in storage"
+        await db.flush()
+        await db.refresh(doc)
+        raise HTTPException(status_code=400, detail="Uploaded file not found in storage")
+
+    doc.file_size_bytes = metadata.get("size") or doc.file_size_bytes
+    doc.file_url = get_file_url(f"documents/{document_id}/original.pdf")
+    doc.status = "splitting"
+    doc.error_detail = None
+    await db.flush()
+    await db.refresh(doc)
+
+    process_document.delay(str(doc.id))
+
+    return DocumentUploadCompleteResponse(document=_with_public_file_url(doc))
 
 
 @router.get("/documents/{document_id}", response_model=DocumentResponse)
