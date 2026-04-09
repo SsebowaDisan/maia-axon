@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Plus, Shield } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,17 +10,25 @@ import type { User } from "@/lib/types";
 import { useGroupStore } from "@/stores/groupStore";
 
 export function UserAssignment({ groupId }: { groupId: string }) {
-  const assignedUsers = useGroupStore((state) => state.groupUsers[groupId] ?? []);
+  const groupUsers = useGroupStore((state) => state.groupUsers);
   const fetchGroupUsers = useGroupStore((state) => state.fetchGroupUsers);
   const assignUser = useGroupStore((state) => state.assignUser);
   const removeUser = useGroupStore((state) => state.removeUser);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [query, setQuery] = useState("");
+  const [draft, setDraft] = useState({ username: "", password: "", role: "user" });
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const assignedUsers = useMemo(() => groupUsers[groupId] ?? [], [groupId, groupUsers]);
+
+  const refreshUsers = useCallback(() => {
+    return api.listUsers().then(setAllUsers).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     void fetchGroupUsers(groupId);
-    api.listUsers().then(setAllUsers).catch(() => undefined);
-  }, [fetchGroupUsers, groupId]);
+    void refreshUsers();
+  }, [fetchGroupUsers, groupId, refreshUsers]);
 
   const assignedIds = useMemo(() => new Set(assignedUsers.map((user) => user.id)), [assignedUsers]);
 
@@ -31,14 +40,83 @@ export function UserAssignment({ groupId }: { groupId: string }) {
     return user.name.toLowerCase().includes(needle) || user.email.toLowerCase().includes(needle);
   });
 
+  async function handleCreateUser() {
+    const username = draft.username.trim();
+    const password = draft.password.trim();
+
+    if (!username || !password) {
+      setCreateError("Username and password are required");
+      return;
+    }
+
+    setIsCreating(true);
+    setCreateError(null);
+
+    try {
+      const user = await api.createUser({
+        username,
+        password,
+        role: draft.role,
+      });
+      await assignUser(groupId, user.id);
+      await refreshUsers();
+      setDraft({ username: "", password: "", role: "user" });
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : "Failed to create user");
+    } finally {
+      setIsCreating(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
+      <div className="rounded-[24px] border border-line bg-white/55 p-4">
+        <p className="mb-3 text-sm font-semibold text-ink">Create user</p>
+        <div className="space-y-3">
+          <Input
+            placeholder="Username"
+            value={draft.username}
+            onChange={(event) => setDraft((state) => ({ ...state, username: event.target.value }))}
+          />
+          <Input
+            type="password"
+            placeholder="Password"
+            value={draft.password}
+            onChange={(event) => setDraft((state) => ({ ...state, password: event.target.value }))}
+          />
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant={draft.role === "user" ? "primary" : "secondary"}
+              className="flex-1"
+              onClick={() => setDraft((state) => ({ ...state, role: "user" }))}
+            >
+              User
+            </Button>
+            <Button
+              type="button"
+              variant={draft.role === "admin" ? "primary" : "secondary"}
+              className="flex-1"
+              onClick={() => setDraft((state) => ({ ...state, role: "admin" }))}
+            >
+              <Shield className="h-4 w-4" />
+              Admin
+            </Button>
+          </div>
+          {createError ? <p className="text-sm text-danger">{createError}</p> : null}
+          <Button type="button" className="w-full" disabled={isCreating} onClick={() => void handleCreateUser()}>
+            <Plus className="h-4 w-4" />
+            {isCreating ? "Creating..." : "Create and assign"}
+          </Button>
+        </div>
+      </div>
+
       <div className="space-y-3">
         {assignedUsers.map((user) => (
           <div key={user.id} className="flex items-center justify-between rounded-[24px] border border-line bg-panel/80 px-4 py-3">
             <div>
               <p className="text-sm font-semibold text-ink">{user.name}</p>
-              <p className="text-xs text-muted">{user.email}</p>
+              <p className="text-xs uppercase tracking-[0.14em] text-muted">{user.role}</p>
             </div>
             <Button type="button" size="sm" variant="ghost" onClick={() => void removeUser(groupId, user.id)}>
               Remove
@@ -64,7 +142,7 @@ export function UserAssignment({ groupId }: { groupId: string }) {
             >
               <span>
                 <span className="block text-sm font-medium">{user.name}</span>
-                <span className="text-xs text-muted">{user.email}</span>
+                <span className="text-xs uppercase tracking-[0.14em] text-muted">{user.role}</span>
               </span>
               <span className="text-xs text-accent">Assign</span>
             </button>

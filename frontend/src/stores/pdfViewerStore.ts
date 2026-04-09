@@ -7,6 +7,7 @@ import type { Citation, Document, PageData } from "@/lib/types";
 
 interface PDFViewerState {
   currentDocument: Document | null;
+  currentWebCitation: Citation | null;
   currentPage: number;
   zoom: number;
   highlightCitations: Citation[];
@@ -29,6 +30,7 @@ function pageKey(documentId: string, pageNumber: number) {
 
 export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
   currentDocument: null,
+  currentWebCitation: null,
   currentPage: 1,
   zoom: 1,
   highlightCitations: [],
@@ -36,10 +38,39 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
   pageData: null,
   loading: false,
   async openCitation(citation, document) {
-    if (!citation.document_id || !document) {
+    if (citation.source_type === "web") {
+      set({
+        currentDocument: null,
+        currentWebCitation: citation,
+        currentPage: 1,
+        pageData: null,
+        highlightCitations: [citation],
+        loading: false,
+      });
       return;
     }
-    await get().loadPage(document, citation.page, [citation]);
+
+    if (!citation.document_id) {
+      return;
+    }
+
+    const fallbackDocument =
+      document ??
+      ({
+        id: citation.document_id,
+        group_id: "",
+        filename: citation.document_name || citation.title || "Source document",
+        file_url: citation.url ?? "",
+        file_size_bytes: null,
+        page_count: null,
+        status: "ready",
+        error_detail: null,
+        uploaded_by: "",
+        created_at: "",
+        updated_at: "",
+      } satisfies Document);
+
+    await get().loadPage(fallbackDocument, citation.page, [citation]);
   },
   async loadPage(document, pageNumber, highlightCitations = []) {
     const key = pageKey(document.id, pageNumber);
@@ -47,6 +78,7 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
 
     set({
       currentDocument: document,
+      currentWebCitation: null,
       currentPage: pageNumber,
       highlightCitations,
       loading: !cached,
@@ -98,6 +130,7 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
   close() {
     set({
       currentDocument: null,
+      currentWebCitation: null,
       pageData: null,
       highlightCitations: [],
     });

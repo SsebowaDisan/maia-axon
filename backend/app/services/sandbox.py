@@ -19,6 +19,13 @@ ALLOWED_MODULES = {
 SANDBOX_TIMEOUT = 30  # seconds
 
 
+def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    root_name = str(name).split(".")[0]
+    if root_name not in ALLOWED_MODULES:
+        raise ImportError(f"Import of '{root_name}' is not allowed in the calculation sandbox")
+    return __import__(name, globals, locals, fromlist, level)
+
+
 def _execute_in_process(code: str, result_queue: multiprocessing.Queue):
     """Execute code in a restricted subprocess."""
     try:
@@ -32,6 +39,7 @@ def _execute_in_process(code: str, result_queue: multiprocessing.Queue):
             "True": True, "False": False, "None": None,
             "print": lambda *args: None,  # Suppress print
             "pow": pow,
+            "__import__": _safe_import,
         }
 
         restricted_globals: dict[str, Any] = {"__builtins__": safe_builtins}

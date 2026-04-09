@@ -32,9 +32,11 @@ class PageResponse(BaseModel):
     document_id: UUID
     page_number: int
     image_url: str
+    page_width: float | None = None
+    page_height: float | None = None
     markdown: str | None
     ocr_text: str | None
     ocr_confidence: float | None
-    regions: dict | None
+    regions: list[dict] | dict | None
 
     model_config = {"from_attributes": True}

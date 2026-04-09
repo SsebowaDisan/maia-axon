@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronUp, PanelRightOpen } from "lucide-react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 
 import { MindmapCanvas } from "@/components/mindmap/MindmapCanvas";
 import { PDFViewer } from "@/components/pdf/PDFViewer";
@@ -13,13 +13,10 @@ export function DocumentPanel() {
   const [mindmapCollapsed, setMindmapCollapsed] = useState(false);
 
   return (
-    <div className="flex h-full flex-col gap-4 p-2">
-      <div className="flex items-center justify-between rounded-[24px] border border-line bg-panel/95 px-4 py-3">
-        <div>
-          <p className="font-display text-xl text-ink">Sources & Reasoning</p>
-          <p className="text-xs text-muted">Mindmap above, page viewer below. Click to inspect evidence.</p>
-        </div>
-        <div className="flex items-center gap-2">
+    <div className="flex h-full min-h-0 flex-col gap-3 p-3">
+      <div className="flex items-start justify-between px-2 py-1">
+        <p className="font-display text-[1.35rem] font-semibold tracking-[-0.03em] text-ink">Sources</p>
+        <div className="flex items-center">
           <Button
             type="button"
             variant="ghost"
@@ -28,14 +25,10 @@ export function DocumentPanel() {
           >
             {mindmapCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           </Button>
-          <span className="rounded-full border border-line px-3 py-1 text-xs text-muted">
-            <PanelRightOpen className="mr-1 inline h-3.5 w-3.5" />
-            Panel 3
-          </span>
         </div>
       </div>
       {!mindmapCollapsed ? (
-        <div className="h-[38%] min-h-[220px] rounded-[28px] border border-line bg-panel/92 p-3">
+        <div className="h-[34%] min-h-[180px] rounded-[22px] bg-black/[0.02] p-3">
           <MindmapCanvas data={mindmap} />
         </div>
       ) : null}

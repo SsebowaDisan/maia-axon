@@ -19,5 +19,6 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
 )
 
-# Auto-discover tasks
+# Register task modules explicitly so the worker can consume queued ingestion jobs.
+celery_app.conf.imports = ("app.tasks.ingestion",)
 celery_app.autodiscover_tasks(["app.tasks"])

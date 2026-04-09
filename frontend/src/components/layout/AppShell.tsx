@@ -13,11 +13,13 @@ import { ChatPanel } from "@/components/layout/ChatPanel";
 import { DocumentPanel } from "@/components/layout/DocumentPanel";
 import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { cn } from "@/lib/utils";
+import { useChatStore } from "@/stores/chatStore";
+import { usePDFViewerStore } from "@/stores/pdfViewerStore";
 
 function ResizeHandle() {
   return (
-    <PanelResizeHandle className="group relative mx-1 w-1.5 rounded-full bg-transparent">
-      <div className="absolute inset-y-0 left-1/2 w-1 -translate-x-1/2 rounded-full bg-line transition group-hover:bg-accent" />
+    <PanelResizeHandle className="group relative mx-1 w-px bg-transparent">
+      <div className="absolute inset-y-6 left-1/2 w-px -translate-x-1/2 bg-black/[0.08] transition group-hover:bg-black/[0.16]" />
     </PanelResizeHandle>
   );
 }
@@ -44,6 +46,20 @@ function useViewportMode() {
 export function AppShell() {
   const mode = useViewportMode();
   const [mobileTab, setMobileTab] = useState<"history" | "chat" | "sources">("chat");
+  const searchMode = useChatStore((state) => state.mode);
+  const currentDocument = usePDFViewerStore((state) => state.currentDocument);
+  const currentWebCitation = usePDFViewerStore((state) => state.currentWebCitation);
+  const closeViewer = usePDFViewerStore((state) => state.close);
+  const showSourcesPanel = searchMode !== "standard" && (!!currentDocument || !!currentWebCitation);
+
+  useEffect(() => {
+    if (searchMode === "standard") {
+      closeViewer();
+      if (mobileTab === "sources") {
+        setMobileTab("chat");
+      }
+    }
+  }, [closeViewer, mobileTab, searchMode]);
 
   const panels = {
     history: <SidebarHistory />,
@@ -54,13 +70,15 @@ export function AppShell() {
   if (mode !== "desktop") {
     return (
       <ErrorBoundary>
-        <div className="flex h-screen flex-col gap-4 p-4">
-          <div className="grid grid-cols-3 gap-2 rounded-[28px] border border-line bg-panel/90 p-2 shadow-card">
+        <div className="flex h-screen flex-col gap-4 bg-bg p-4">
+          <div className="grid grid-cols-3 gap-2 rounded-[24px] bg-panel p-2 shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
             {[
               { key: "history", label: "History", icon: History },
               { key: "chat", label: "Chat", icon: MessageSquareText },
               { key: "sources", label: "Sources", icon: Network },
-            ].map((tab) => {
+            ]
+              .filter((tab) => tab.key !== "sources" || showSourcesPanel)
+              .map((tab) => {
               const Icon = tab.icon;
               const active = mobileTab === tab.key;
               return (
@@ -79,7 +97,7 @@ export function AppShell() {
               );
             })}
           </div>
-          <div className="min-h-0 flex-1 rounded-[32px] border border-line bg-panel/70 p-2 shadow-panel">
+          <div className="min-h-0 flex-1 rounded-[28px] bg-panel p-2 shadow-[0_18px_36px_rgba(15,23,42,0.05)]">
             {panels[mobileTab]}
           </div>
         </div>
@@ -89,40 +107,30 @@ export function AppShell() {
 
   return (
     <ErrorBoundary>
-      <div className="h-screen p-4 app-grid">
-        <div className="mb-4 flex items-center justify-between rounded-[30px] border border-line bg-panel/88 px-6 py-4 shadow-card">
-          <div>
-            <p className="font-display text-[2.25rem] leading-none text-ink">Maia Axon</p>
-            <p className="mt-2 text-sm text-muted">
-              Multimodal engineering reasoning with citations, calculations, and source inspection.
-            </p>
-          </div>
-          <div className="hidden items-center gap-2 md:flex">
-            <span className="rounded-full border border-line px-3 py-2 text-xs text-muted"># groups</span>
-            <span className="rounded-full border border-line px-3 py-2 text-xs text-muted">@ documents</span>
-            <span className="rounded-full border border-line px-3 py-2 text-xs text-muted">3-panel workspace</span>
-          </div>
-        </div>
-
-        <div className="h-[calc(100vh-7.5rem)] rounded-[34px] border border-line bg-panel/55 p-2 shadow-panel">
-          <PanelGroup direction="horizontal" autoSaveId="maia-axon-panels">
-            <Panel defaultSize={22} minSize={18} maxSize={32}>
-              <div className="h-full rounded-[30px] border border-line bg-panel/90">
+      <div className="h-screen bg-bg px-3 py-3 app-grid">
+        <div className="h-[calc(100vh-1.5rem)] rounded-[28px] bg-panel/70 p-1 shadow-[0_20px_45px_rgba(15,23,42,0.05)]">
+          <PanelGroup direction="horizontal" className="h-full min-h-0">
+            <Panel defaultSize={20} minSize={17} maxSize={28}>
+              <div className="h-full min-h-0 overflow-hidden rounded-[24px] bg-panel">
                 <SidebarHistory />
               </div>
             </Panel>
             <ResizeHandle />
-            <Panel minSize={35}>
-              <div className="h-full rounded-[30px] border border-line bg-panel/85">
+            <Panel defaultSize={56} minSize={40}>
+              <div className="h-full min-h-0 overflow-hidden rounded-[24px] bg-panel">
                 <ChatPanel />
               </div>
             </Panel>
-            <ResizeHandle />
-            <Panel defaultSize={28} minSize={22} maxSize={38}>
-              <div className="h-full rounded-[30px] border border-line bg-panel/90">
-                <DocumentPanel />
-              </div>
-            </Panel>
+            {showSourcesPanel ? (
+              <>
+                <ResizeHandle />
+                <Panel defaultSize={24} minSize={20} maxSize={32}>
+                  <div className="h-full min-h-0 overflow-hidden rounded-[24px] bg-panel">
+                    <DocumentPanel />
+                  </div>
+                </Panel>
+              </>
+            ) : null}
           </PanelGroup>
         </div>
       </div>

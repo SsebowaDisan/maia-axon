@@ -140,7 +140,18 @@ async def delete_group(
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    group = await _get_group_or_404(group_id, db)
+    result = await db.execute(
+        select(Group)
+        .options(
+            selectinload(Group.assignments),
+            selectinload(Group.documents),
+            selectinload(Group.conversations),
+        )
+        .where(Group.id == group_id)
+    )
+    group = result.scalar_one_or_none()
+    if group is None:
+        raise HTTPException(status_code=404, detail="Group not found")
     await db.delete(group)
 
 

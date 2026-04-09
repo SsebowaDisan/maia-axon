@@ -91,10 +91,12 @@ function flattenTree(root: MindmapNode) {
 
 function MindmapCanvasInner({ data }: { data: MindmapNode | null }) {
   const activeGroupId = useGroupStore((state) => state.activeGroupId);
-  const documents = useDocumentStore((state) =>
-    activeGroupId ? state.documentsByGroup[activeGroupId] ?? [] : [],
-  );
+  const documentsByGroup = useDocumentStore((state) => state.documentsByGroup);
   const openCitation = usePDFViewerStore((state) => state.openCitation);
+  const documents = useMemo(
+    () => (activeGroupId ? documentsByGroup[activeGroupId] ?? [] : []),
+    [activeGroupId, documentsByGroup],
+  );
 
   const flow = useMemo(() => (data ? flattenTree(data) : { nodes: [], edges: [] }), [data]);
 
@@ -103,22 +105,16 @@ function MindmapCanvasInner({ data }: { data: MindmapNode | null }) {
     if (!source) {
       return;
     }
-
-    if (source.source_type === "web" && source.url) {
-      window.open(source.url, "_blank", "noopener,noreferrer");
-      return;
-    }
-
-    const document = documents.find((item) => item.id === source.document_id);
-    if (document) {
-      void openCitation(source, document);
-    }
+    const document = source.source_type === "pdf"
+      ? documents.find((item) => item.id === source.document_id) ?? null
+      : null;
+    void openCitation(source, document);
   };
 
   if (!data) {
     return (
-      <div className="flex h-full items-center justify-center rounded-[28px] border border-dashed border-line bg-panel/50 p-6 text-center text-sm text-muted">
-        Ask a question to see how the answer was constructed.
+      <div className="flex h-full items-center justify-center rounded-[24px] bg-black/[0.02] p-6 text-center text-sm text-muted">
+        Ask a question to see the reasoning map.
       </div>
     );
   }

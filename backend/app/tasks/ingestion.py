@@ -7,11 +7,12 @@ frontend can show progress: splitting → glm_ocr → captioning → embedding �
 import base64
 import json
 import logging
+import re
 import uuid
 
 import fitz  # PyMuPDF
 import openai
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, delete
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
@@ -35,6 +36,12 @@ def _get_openai_client() -> openai.OpenAI:
     return openai.OpenAI(api_key=settings.openai_api_key)
 
 
+_MATH_TOKEN_RE = re.compile(
+    r"(?i)(\b[a-z]{1,4}\s*=|Δ|α|β|γ|λ|μ|η|ρ|π|Σ|√|\bm/s\b|\bpa\b|\bmbar\b|\bbar\b|\bkw\b|\bw\b|\bkg/s\b|\bm³/h\b|\bm3/h\b|\d+\s*(pa|mbar|bar|kw|w|kg/s|m/s|mm|cm|m³/h|m3/h))"
+)
+_TOC_LINE_RE = re.compile(r"\.{2,}\s*\d{1,3}$")
+
+
 def _update_status(db: Session, doc_id: str, status: str, error: str | None = None):
     doc = db.query(Document).filter(Document.id == uuid.UUID(doc_id)).first()
     if doc:
@@ -42,6 +49,16 @@ def _update_status(db: Session, doc_id: str, status: str, error: str | None = No
         if error:
             doc.error_detail = error
         db.commit()
+
+
+def _reset_document_processing_state(doc_id: str, db: Session):
+    document_uuid = uuid.UUID(doc_id)
+    db.execute(delete(ChunkEmbedding).where(ChunkEmbedding.chunk_id.in_(
+        db.query(Chunk.id).filter(Chunk.document_id == document_uuid).subquery()
+    )))
+    db.execute(delete(Chunk).where(Chunk.document_id == document_uuid))
+    db.execute(delete(Page).where(Page.document_id == document_uuid))
+    db.commit()
 
 
 # ---- Stage 1: Split PDF into page images ----
@@ -52,6 +69,8 @@ def _split_pdf(doc_id: str, db: Session) -> list[dict]:
     doc = db.query(Document).filter(Document.id == uuid.UUID(doc_id)).first()
     if not doc:
         raise ValueError(f"Document {doc_id} not found")
+
+    _reset_document_processing_state(doc_id, db)
 
     key = f"documents/{doc_id}/original.pdf"
     pdf_bytes = download_file(key)
@@ -79,11 +98,17 @@ def _split_pdf(doc_id: str, db: Session) -> list[dict]:
         db.add(page_record)
         db.flush()
 
+        text_page = page.get_textpage()
+        extracted_text = page.get_text("text", textpage=text_page)
+        text_dict = page.get_text("dict", textpage=text_page)
+
         pages.append({
             "page_id": str(page_record.id),
             "page_number": page_num + 1,
             "image_url": image_url,
             "image_bytes": img_bytes,
+            "embedded_text": extracted_text,
+            "text_dict": text_dict,
         })
 
     db.commit()
@@ -95,43 +120,29 @@ def _split_pdf(doc_id: str, db: Session) -> list[dict]:
 
 
 def _run_glm_ocr(pages: list[dict], doc_id: str, db: Session) -> list[dict]:
-    """Run GLM-OCR on each page image. Returns enriched page data with regions."""
-    try:
-        from glmocr import GlmOcr, parse
-    except ImportError:
-        logger.warning("glmocr not installed, using fallback OCR")
-        return _fallback_ocr(pages, doc_id, db)
-
+    """Extract embedded text first, with OpenAI vision OCR fallback for weak pages."""
     results = []
+
     for page_data in pages:
-        try:
-            result = parse(
-                page_data["image_bytes"],
-                output_format="both",
-                enable_merge_formula_numbers=True,
-                layout_nms=True,
+        embedded_text = (page_data.get("embedded_text") or "").strip()
+        if _page_is_searchable(embedded_text):
+            extracted = _extract_searchable_page(page_data)
+        else:
+            logger.info(
+                "[%s] Page %s has weak embedded text, using OpenAI vision fallback",
+                doc_id,
+                page_data["page_number"],
             )
+            extracted = _run_openai_page_ocr(page_data)
 
-            markdown = result.markdown if hasattr(result, "markdown") else str(result)
-            regions = _parse_glm_regions(result)
-            ocr_text = result.text if hasattr(result, "text") else markdown
+        page = db.query(Page).filter(Page.id == uuid.UUID(page_data["page_id"])).first()
+        if page:
+            page.markdown = extracted["markdown"]
+            page.ocr_text = extracted["ocr_text"]
+            page.regions = extracted["regions"]
+            page.ocr_confidence = extracted["ocr_confidence"]
 
-            page = db.query(Page).filter(Page.id == uuid.UUID(page_data["page_id"])).first()
-            if page:
-                page.markdown = markdown
-                page.ocr_text = ocr_text
-                page.regions = regions
-                page.ocr_confidence = _estimate_confidence(regions)
-
-            results.append({
-                **page_data,
-                "markdown": markdown,
-                "ocr_text": ocr_text,
-                "regions": regions,
-            })
-        except Exception as e:
-            logger.error(f"GLM-OCR failed on page {page_data['page_number']}: {e}")
-            results.append({**page_data, "markdown": "", "ocr_text": "", "regions": []})
+        results.append({**page_data, **extracted})
 
     db.commit()
     return results
@@ -216,6 +227,200 @@ def _estimate_confidence(regions: list[dict]) -> float:
         return 0.0
     non_empty = sum(1 for r in regions if r.get("content"))
     return min(non_empty / max(len(regions), 1), 1.0)
+
+
+def _clean_line(text: str) -> str:
+    return " ".join(text.replace("\u00ad", "").split())
+
+
+def _line_looks_like_equation(text: str) -> bool:
+    if len(text) < 3:
+        return False
+    if _MATH_TOKEN_RE.search(text):
+        return True
+    if "=" in text and any(ch.isalpha() for ch in text):
+        return True
+    if "/" in text and any(ch.isalpha() for ch in text) and any(ch.isdigit() for ch in text):
+        return True
+    return False
+
+
+def _line_looks_like_toc_entry(text: str) -> bool:
+    return _TOC_LINE_RE.search(text) is not None
+
+
+def _page_is_searchable(text: str) -> bool:
+    if len(text.strip()) >= 80:
+        return True
+    alpha_chars = sum(1 for ch in text if ch.isalpha())
+    return alpha_chars >= 40
+
+
+def _merge_bboxes(bboxes: list[list[float]]) -> list[float]:
+    return [
+        round(min(b[0] for b in bboxes), 2),
+        round(min(b[1] for b in bboxes), 2),
+        round(max(b[2] for b in bboxes), 2),
+        round(max(b[3] for b in bboxes), 2),
+    ]
+
+
+def _extract_searchable_page(page_data: dict) -> dict:
+    text_dict = page_data.get("text_dict", {})
+    markdown = (page_data.get("embedded_text") or "").strip()
+    regions = []
+
+    for block in text_dict.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        block_bbox = [round(v, 2) for v in block.get("bbox", [0, 0, 0, 0])]
+        block_lines = []
+        block_line_bboxes = []
+        equation_buffer = []
+        equation_bboxes = []
+        previous_text_bbox = None
+
+        def flush_text_buffer():
+            if not block_lines:
+                return
+            regions.append({
+                "type": "text",
+                "glm_label": "text",
+                "bbox": _merge_bboxes(block_line_bboxes) if block_line_bboxes else block_bbox,
+                "content": "\n".join(block_lines),
+            })
+            block_lines.clear()
+            block_line_bboxes.clear()
+
+        def flush_equation_buffer():
+            if not equation_buffer:
+                return
+            equation_text = "\n".join(equation_buffer)
+            regions.append({
+                "type": "equation",
+                "glm_label": "equation",
+                "bbox": _merge_bboxes(equation_bboxes),
+                "content": equation_text,
+                "latex": equation_text,
+            })
+            equation_buffer.clear()
+            equation_bboxes.clear()
+
+        for line in block.get("lines", []):
+            spans = line.get("spans", [])
+            line_text = _clean_line("".join(span.get("text", "") for span in spans))
+            if not line_text:
+                continue
+            line_bbox = [round(v, 2) for v in line.get("bbox", block_bbox)]
+            if _line_looks_like_equation(line_text):
+                flush_text_buffer()
+                if equation_bboxes:
+                    previous_bbox = equation_bboxes[-1]
+                    vertical_gap = line_bbox[1] - previous_bbox[3]
+                    left_delta = abs(line_bbox[0] - previous_bbox[0])
+                    if vertical_gap > 10 or left_delta > 40:
+                        flush_equation_buffer()
+                equation_buffer.append(line_text)
+                equation_bboxes.append(line_bbox)
+            else:
+                flush_equation_buffer()
+                if previous_text_bbox and block_lines:
+                    vertical_gap = line_bbox[1] - previous_text_bbox[3]
+                    indent_delta = abs(line_bbox[0] - previous_text_bbox[0])
+                    if vertical_gap > 12 or indent_delta > 24 or _line_looks_like_toc_entry(block_lines[-1]):
+                        flush_text_buffer()
+                block_lines.append(line_text)
+                block_line_bboxes.append(line_bbox)
+                previous_text_bbox = line_bbox
+                if _line_looks_like_toc_entry(line_text):
+                    flush_text_buffer()
+        flush_equation_buffer()
+        flush_text_buffer()
+
+    if not regions and markdown:
+        regions.append({
+            "type": "text",
+            "glm_label": "text",
+            "bbox": [0, 0, 0, 0],
+            "content": markdown,
+        })
+
+    return {
+        "markdown": markdown,
+        "ocr_text": markdown,
+        "regions": regions,
+        "ocr_confidence": 1.0,
+    }
+
+
+def _run_openai_page_ocr(page_data: dict) -> dict:
+    client = _get_openai_client()
+    img_b64 = base64.b64encode(page_data["image_bytes"]).decode()
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        max_tokens=1800,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Extract readable engineering-document text from the page image. "
+                    "Return JSON with keys markdown, equations, and figures. "
+                    "equations must be an array of visible formulas or variable assignments. "
+                    "figures must be an array of short technical descriptions for diagrams or drawings."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+                    },
+                    {
+                        "type": "text",
+                        "text": "Extract the page text and identify formulas and engineering drawings.",
+                    },
+                ],
+            },
+        ],
+    )
+    payload = json.loads(response.choices[0].message.content or "{}")
+    markdown = (payload.get("markdown") or "").strip()
+    equations = [str(eq).strip() for eq in payload.get("equations", []) if str(eq).strip()]
+    figures = [str(fig).strip() for fig in payload.get("figures", []) if str(fig).strip()]
+    regions = []
+
+    if markdown:
+        regions.append({
+            "type": "text",
+            "glm_label": "vision_text",
+            "bbox": [0, 0, 0, 0],
+            "content": markdown,
+        })
+    for equation in equations:
+        regions.append({
+            "type": "equation",
+            "glm_label": "vision_equation",
+            "bbox": [0, 0, 0, 0],
+            "content": equation,
+            "latex": equation,
+        })
+    for figure in figures:
+        regions.append({
+            "type": "figure",
+            "glm_label": "vision_figure",
+            "bbox": [0, 0, 0, 0],
+            "content": figure,
+            "description": figure,
+        })
+
+    return {
+        "markdown": markdown,
+        "ocr_text": markdown,
+        "regions": regions,
+        "ocr_confidence": 0.8,
+    }
 
 
 def _fallback_ocr(pages: list[dict], doc_id: str, db: Session) -> list[dict]:
@@ -362,37 +567,32 @@ def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
         page_id = page_data["page_id"]
         page_number = page_data["page_number"]
 
-        text_buffer = []
-        text_bboxes = []
+        recent_text_context: list[str] = []
 
         for region in regions:
             if region["type"] == "skip":
                 continue
 
             if region["type"] == "text":
-                text_buffer.append(region.get("content", ""))
-                text_bboxes.append(region.get("bbox", [0, 0, 0, 0]))
+                content = (region.get("content") or "").strip()
+                if not content:
+                    continue
+                chunk = Chunk(
+                    document_id=uuid.UUID(doc_id),
+                    page_id=uuid.UUID(page_id),
+                    chunk_type="section",
+                    content_text=content,
+                    bbox_references=[region.get("bbox", [0, 0, 0, 0])],
+                    metadata_={"page_number": page_number},
+                )
+                db.add(chunk)
+                chunks.append(chunk)
+                recent_text_context.append(content)
+                recent_text_context = recent_text_context[-2:]
                 continue
 
-            # Flush text buffer before non-text region
-            if text_buffer:
-                content = "\n".join(text_buffer)
-                if content.strip():
-                    chunk = Chunk(
-                        document_id=uuid.UUID(doc_id),
-                        page_id=uuid.UUID(page_id),
-                        chunk_type="section",
-                        content_text=content,
-                        bbox_references=text_bboxes.copy(),
-                        metadata_={"page_number": page_number},
-                    )
-                    db.add(chunk)
-                    chunks.append(chunk)
-                text_buffer.clear()
-                text_bboxes.clear()
-
             if region["type"] == "equation":
-                context_before = "\n".join(text_buffer[-2:]) if text_buffer else ""
+                context_before = "\n".join(recent_text_context[-2:]) if recent_text_context else ""
                 content = region.get("latex", region.get("content", ""))
                 if context_before:
                     content = f"{context_before}\n\n{content}"
@@ -439,21 +639,6 @@ def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
                     )
                     db.add(chunk)
                     chunks.append(chunk)
-
-        # Flush remaining text
-        if text_buffer:
-            content = "\n".join(text_buffer)
-            if content.strip():
-                chunk = Chunk(
-                    document_id=uuid.UUID(doc_id),
-                    page_id=uuid.UUID(page_id),
-                    chunk_type="section",
-                    content_text=content,
-                    bbox_references=text_bboxes.copy(),
-                    metadata_={"page_number": page_number},
-                )
-                db.add(chunk)
-                chunks.append(chunk)
 
         # Full-page chunk as fallback
         page_text = page_data.get("ocr_text", page_data.get("markdown", ""))
@@ -524,8 +709,8 @@ def process_document(self, doc_id: str):
         pages = _split_pdf(doc_id, db)
         logger.info(f"[{doc_id}] Split into {len(pages)} pages")
 
-        # Stage 2: GLM-OCR
-        logger.info(f"[{doc_id}] Stage 2: Running GLM-OCR")
+        # Stage 2: embedded text extraction with OCR fallback
+        logger.info(f"[{doc_id}] Stage 2: Extracting text with OCR fallback")
         _update_status(db, doc_id, "glm_ocr")
         pages = _run_glm_ocr(pages, doc_id, db)
 

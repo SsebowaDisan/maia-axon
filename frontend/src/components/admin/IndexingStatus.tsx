@@ -20,9 +20,11 @@ const iconByStatus: Record<DocumentStatusValue, React.ComponentType<{ className?
 export function IndexingStatus({
   document,
   groupId,
+  onOpen,
 }: {
   document: Document;
   groupId: string;
+  onOpen?: (document: Document) => void;
 }) {
   const deleteDocument = useDocumentStore((state) => state.deleteDocument);
   const reindexDocument = useDocumentStore((state) => state.reindexDocument);
@@ -31,16 +33,27 @@ export function IndexingStatus({
   const status = statusOverride?.status ?? document.status;
   const Icon = iconByStatus[status];
   const isProcessing = !["ready", "failed"].includes(status);
+  const isPreviewable = status === "ready" && (document.page_count ?? 0) > 0 && !!onOpen;
 
   return (
     <div className="rounded-[24px] border border-line bg-panel/80 p-4">
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-semibold text-ink">{document.filename}</p>
+        <button
+          type="button"
+          className={`min-w-0 text-left ${isPreviewable ? "cursor-pointer transition hover:opacity-80" : "cursor-default"}`}
+          onClick={() => {
+            if (isPreviewable) {
+              onOpen(document);
+            }
+          }}
+          disabled={!isPreviewable}
+        >
+          <p className="truncate text-sm font-semibold text-ink">{document.filename}</p>
           <p className="mt-1 text-xs text-muted">
             {formatBytes(document.file_size_bytes)} · {document.page_count ?? "?"} pages
+            {isPreviewable ? " · Open preview" : ""}
           </p>
-        </div>
+        </button>
         <div
           className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${
             status === "ready"
@@ -57,7 +70,15 @@ export function IndexingStatus({
       {document.error_detail ? <p className="mt-2 text-xs text-danger">{document.error_detail}</p> : null}
       <div className="mt-4 flex items-center gap-2">
         {status === "failed" ? (
-          <Button type="button" size="sm" variant="secondary" onClick={() => void reindexDocument(document.id)}>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={(event) => {
+              event.stopPropagation();
+              void reindexDocument(document.id);
+            }}
+          >
             <RotateCcw className="h-3.5 w-3.5" />
             Retry
           </Button>
@@ -66,7 +87,8 @@ export function IndexingStatus({
           type="button"
           size="sm"
           variant="ghost"
-          onClick={() => {
+          onClick={(event) => {
+            event.stopPropagation();
             if (window.confirm("Delete this document from the group?")) {
               void deleteDocument(document.id, groupId);
             }

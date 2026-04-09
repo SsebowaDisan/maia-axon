@@ -1,0 +1,9 @@
+backend/.env
+frontend/.env
+frontend-dev.log
+frontend-dev.err.log
+*.log
+ventilatoren-sample.pdf
+__pycache__/
+*.pyc
+.DS_Store

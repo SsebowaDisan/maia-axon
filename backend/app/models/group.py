@@ -26,7 +26,11 @@ class Group(Base):
     # Relationships
     assignments = relationship("GroupAssignment", back_populates="group", cascade="all, delete-orphan")
     documents = relationship("Document", back_populates="group", cascade="all, delete-orphan")
-    conversations = relationship("Conversation", back_populates="group")
+    conversations = relationship(
+        "Conversation",
+        back_populates="group",
+        cascade="all, delete-orphan",
+    )
 
 
 class GroupAssignment(Base):

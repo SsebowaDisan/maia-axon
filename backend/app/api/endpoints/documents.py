@@ -1,3 +1,4 @@
+import fitz
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -7,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, require_admin
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.storage import delete_document_files, upload_pdf
+from app.core.storage import delete_document_files, download_file, to_public_url, upload_pdf
 from app.models.document import Document, Page
 from app.models.group import Group, GroupAssignment
 from app.models.user import User
@@ -15,6 +16,30 @@ from app.schemas.document import DocumentResponse, DocumentStatusResponse, PageR
 from app.tasks.ingestion import process_document
 
 router = APIRouter(tags=["documents"])
+
+
+def _with_public_file_url(doc: Document) -> Document:
+    doc.file_url = to_public_url(doc.file_url)
+    return doc
+
+
+def _with_public_image_url(page: Page) -> Page:
+    page.image_url = to_public_url(page.image_url)
+    return page
+
+
+def _get_pdf_page_dimensions(document_id: UUID, page_number: int) -> tuple[float | None, float | None]:
+    try:
+        pdf_key = f"documents/{document_id}/original.pdf"
+        pdf_bytes = download_file(pdf_key)
+        pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        try:
+            pdf_page = pdf_doc[page_number - 1]
+            return float(pdf_page.rect.width), float(pdf_page.rect.height)
+        finally:
+            pdf_doc.close()
+    except Exception:
+        return None, None
 
 
 async def _check_group_access(group_id: UUID, user: User, db: AsyncSession) -> Group:
@@ -51,7 +76,7 @@ async def list_documents(
         .where(Document.group_id == group_id)
         .order_by(Document.created_at.desc())
     )
-    return result.scalars().all()
+    return [_with_public_file_url(doc) for doc in result.scalars().all()]
 
 
 @router.post(
@@ -100,11 +125,12 @@ async def upload_document(
     doc.file_url = file_url
     doc.status = "splitting"
     await db.flush()
+    await db.refresh(doc)
 
     # Trigger async ingestion pipeline
     process_document.delay(str(doc.id))
 
-    return doc
+    return _with_public_file_url(doc)
 
 
 @router.get("/documents/{document_id}", response_model=DocumentResponse)
@@ -118,7 +144,7 @@ async def get_document(
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
     await _check_group_access(doc.group_id, user, db)
-    return doc
+    return _with_public_file_url(doc)
 
 
 @router.get("/documents/{document_id}/status", response_model=DocumentStatusResponse)
@@ -190,9 +216,25 @@ async def get_page(
     await _check_group_access(doc.group_id, user, db)
 
     result = await db.execute(
-        select(Page).where(Page.document_id == document_id, Page.page_number == page_number)
+        select(Page)
+        .where(Page.document_id == document_id, Page.page_number == page_number)
+        .order_by(Page.created_at.desc(), Page.id.desc())
     )
-    page = result.scalar_one_or_none()
+    page = result.scalars().first()
     if page is None:
         raise HTTPException(status_code=404, detail="Page not found")
-    return page
+
+    page_width, page_height = _get_pdf_page_dimensions(document_id, page_number)
+    public_page = _with_public_image_url(page)
+    return PageResponse(
+        id=public_page.id,
+        document_id=public_page.document_id,
+        page_number=public_page.page_number,
+        image_url=public_page.image_url,
+        page_width=page_width,
+        page_height=page_height,
+        markdown=public_page.markdown,
+        ocr_text=public_page.ocr_text,
+        ocr_confidence=public_page.ocr_confidence,
+        regions=public_page.regions,
+    )

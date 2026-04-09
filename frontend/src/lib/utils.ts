@@ -76,14 +76,59 @@ export function statusLabel(status: DocumentStatusValue) {
 }
 
 export function transformCitationLinks(content: string, citations: Citation[]) {
-  return content.replace(/\[Source (\d+)\]/g, (_match, rawNumber: string) => {
+  const toCitationLink = (rawNumber: string) => {
     const index = Number(rawNumber) - 1;
     const citation = citations[index];
     if (!citation) {
-      return `[Source ${rawNumber}]`;
+      return `[${rawNumber}]`;
     }
-    return `[Source ${rawNumber}](citation:${citation.id})`;
-  });
+    return `[[${rawNumber}]](citation:${citation.id})`;
+  };
+
+  return content
+    .replace(/\[Source\s+(\d+)\]/gi, (_match, rawNumber: string) => toCitationLink(rawNumber))
+    .replace(/\(Source\s+(\d+)\)/gi, (_match, rawNumber: string) => toCitationLink(rawNumber))
+    .replace(/(?<!\[)\[(\d+)\](?!\(citation:)/g, (_match, rawNumber: string) => toCitationLink(rawNumber))
+    .replace(/\bSource\s+(\d+)\b/gi, (_match, rawNumber: string) => toCitationLink(rawNumber));
+}
+
+export function normalizeMathMarkdown(content: string) {
+  const normalizedDelimiters = content
+    .replace(/\\\[((?:.|\n)*?)\\\]/g, (_match, formula: string) => `\n$$${formula.trim()}$$\n`)
+    .replace(/\\\(((?:.|\n)*?)\\\)/g, (_match, formula: string) => `$${formula.trim()}$`);
+
+  const lines = normalizedDelimiters.split("\n");
+  let inFence = false;
+
+  return lines
+    .map((line) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("```")) {
+        inFence = !inFence;
+        return line;
+      }
+      if (inFence || !trimmed || trimmed.includes("$")) {
+        return line;
+      }
+
+      const equationMatch = line.match(
+        /^(\s*(?:[-*]\s+)?(?:\d+\.\s+)?.*?:\s+)?([A-Za-z][A-Za-z0-9]*(?:_[{A-Za-z0-9,+\-*/ ]+)?\s*=\s*.+?)(\s*(?:\[\[\d+\]\]\(citation:[^)]+\)|\[\d+\]|\[Source\s+\d+\]))?\s*$/i,
+      );
+
+      if (!equationMatch) {
+        return line;
+      }
+
+      const [, prefix = "", formula = "", citation = ""] = equationMatch;
+      const formulaText = formula.trim();
+
+      if (!/[\\_^=]|\\frac|\\cdot|\\pi|\\eta|\\Delta/i.test(formulaText)) {
+        return line;
+      }
+
+      return `${prefix}$${formulaText}$${citation}`;
+    })
+    .join("\n");
 }
 
 export function inferClarification(message: ChatMessage) {
@@ -114,4 +159,18 @@ export function citationById(citations: Citation[]) {
 export function titleFromMessage(content: string) {
   const normalized = content.replace(/\s+/g, " ").trim();
   return normalized.slice(0, 80) || "Untitled conversation";
+}
+
+export function toEditableDraft(content: string) {
+  return content
+    .replace(/\[\[(\d+)\]\]\(citation:[^)]+\)/g, "[$1]")
+    .replace(/\[(?:Source\s+)?\d+\]/gi, "")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*]\s+/gm, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
 }

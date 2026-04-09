@@ -23,6 +23,10 @@ def get_s3_client():
     return _client
 
 
+def _public_base_url() -> str:
+    return settings.s3_public_url or settings.s3_endpoint_url
+
+
 def upload_file(file_bytes: bytes, key: str, content_type: str = "application/octet-stream") -> str:
     client = get_s3_client()
     client.put_object(
@@ -31,7 +35,7 @@ def upload_file(file_bytes: bytes, key: str, content_type: str = "application/oc
         Body=file_bytes,
         ContentType=content_type,
     )
-    return f"{settings.s3_endpoint_url}/{settings.s3_bucket_name}/{key}"
+    return f"{_public_base_url()}/{settings.s3_bucket_name}/{key}"
 
 
 def upload_pdf(document_id: UUID, file_bytes: bytes) -> str:
@@ -45,7 +49,15 @@ def upload_page_image(document_id: UUID, page_number: int, image_bytes: bytes) -
 
 
 def get_file_url(key: str) -> str:
-    return f"{settings.s3_endpoint_url}/{settings.s3_bucket_name}/{key}"
+    return f"{_public_base_url()}/{settings.s3_bucket_name}/{key}"
+
+
+def to_public_url(url: str) -> str:
+    public_base = _public_base_url().rstrip("/")
+    internal_base = settings.s3_endpoint_url.rstrip("/")
+    if url.startswith(internal_base):
+        return f"{public_base}{url[len(internal_base):]}"
+    return url
 
 
 def download_file(key: str) -> bytes:

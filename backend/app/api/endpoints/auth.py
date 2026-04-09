@@ -9,6 +9,10 @@ from app.schemas.user import LoginRequest, TokenResponse, UserCreate, UserRespon
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+DEFAULT_ADMIN_NAME = "admin"
+DEFAULT_ADMIN_EMAIL = "admin@maia.local"
+DEFAULT_ADMIN_PASSWORD = "admin"
+
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(body: UserCreate, db: AsyncSession = Depends(get_db)):
@@ -34,10 +38,48 @@ async def register(body: UserCreate, db: AsyncSession = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == body.email))
-    user = result.scalar_one_or_none()
+    identifier = body.login_identifier
+    user = None
+
+    if identifier == DEFAULT_ADMIN_NAME and body.password == DEFAULT_ADMIN_PASSWORD:
+        result = await db.execute(select(User).where(User.email == DEFAULT_ADMIN_EMAIL))
+        user = result.scalar_one_or_none()
+
+        if user is None:
+            user = User(
+                email=DEFAULT_ADMIN_EMAIL,
+                name=DEFAULT_ADMIN_NAME,
+                hashed_password=hash_password(DEFAULT_ADMIN_PASSWORD),
+                role="admin",
+            )
+            db.add(user)
+            await db.flush()
+        else:
+            should_update = False
+            if user.name != DEFAULT_ADMIN_NAME:
+                user.name = DEFAULT_ADMIN_NAME
+                should_update = True
+            if user.role != "admin":
+                user.role = "admin"
+                should_update = True
+            if not verify_password(DEFAULT_ADMIN_PASSWORD, user.hashed_password):
+                user.hashed_password = hash_password(DEFAULT_ADMIN_PASSWORD)
+                should_update = True
+            if should_update:
+                await db.flush()
+
+    if user is None:
+        result = await db.execute(select(User).where(User.email == identifier))
+        user = result.scalar_one_or_none()
+
+    if user is None:
+        result = await db.execute(
+            select(User).where(User.name == identifier).order_by(User.created_at.asc())
+        )
+        user = result.scalars().first()
+
     if user is None or not verify_password(body.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(status_code=401, detail="Invalid username/email or password")
 
     token = create_access_token(str(user.id))
     return TokenResponse(

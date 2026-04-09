@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     # Object Storage
     s3_endpoint_url: str = "http://localhost:9000"
+    s3_public_url: str | None = None
     s3_access_key: str = "maia_access"
     s3_secret_key: str = "maia_secret_key"
     s3_bucket_name: str = "maia-axon"

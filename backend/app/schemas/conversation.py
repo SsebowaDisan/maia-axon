@@ -13,6 +13,7 @@ class ConversationResponse(BaseModel):
     user_id: UUID
     group_id: UUID
     title: str | None
+    title_icon: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -37,6 +38,7 @@ class ConversationDetailResponse(BaseModel):
     user_id: UUID
     group_id: UUID
     title: str | None
+    title_icon: str | None
     created_at: datetime
     updated_at: datetime
     messages: list[MessageResponse]
@@ -48,5 +50,18 @@ class ChatRequest(BaseModel):
     conversation_id: UUID | None = None
     group_id: UUID
     document_ids: list[UUID] | None = None
-    mode: str = "library"  # "library" or "deep_search"
+    attachment_ids: list[str] | None = None
+    mode: str = "library"  # "standard", "library", or "deep_search"
     message: str
+
+
+class WelcomeResponse(BaseModel):
+    intro_markdown: str
+    suggested_questions: list[str]
+
+
+class PromptAttachmentResponse(BaseModel):
+    id: str
+    filename: str
+    media_type: str
+    size_bytes: int

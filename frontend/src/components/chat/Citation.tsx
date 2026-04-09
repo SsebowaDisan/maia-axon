@@ -23,7 +23,7 @@ export function CitationChip({
           <button
             type="button"
             className={cn(
-              "mx-0.5 inline-flex items-center rounded-full border border-accent/20 bg-accentSoft px-2.5 py-1 text-xs font-semibold text-accent transition hover:bg-accent hover:text-white",
+              "mx-0.5 inline-flex items-center rounded-full border border-black/10 bg-black/[0.04] px-2.5 py-1 text-xs font-semibold text-black transition hover:bg-black hover:text-white",
               className,
             )}
             onClick={onClick}
@@ -34,7 +34,7 @@ export function CitationChip({
         <Tooltip.Portal>
           <Tooltip.Content
             sideOffset={8}
-            className="z-50 max-w-[280px] rounded-2xl border border-line bg-panel px-3 py-2 text-left text-xs text-ink shadow-card"
+            className="z-50 max-w-[280px] rounded-[22px] border border-black/10 bg-white px-3 py-3 text-left text-xs text-ink shadow-[0_18px_48px_rgba(15,23,42,0.08)]"
           >
             <p className="font-semibold">{citation.document_name || citation.title || "Source"}</p>
             <p className="mt-1 text-muted">

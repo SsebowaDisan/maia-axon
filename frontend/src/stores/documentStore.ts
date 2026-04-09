@@ -4,6 +4,7 @@ import { create } from "zustand";
 
 import { api } from "@/lib/api";
 import type { Document, DocumentStatus, UploadProgressState } from "@/lib/types";
+import { useGroupStore } from "@/stores/groupStore";
 
 interface DocumentState {
   documentsByGroup: Record<string, Document[]>;
@@ -37,6 +38,22 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
           [groupId]: documents,
         },
       }));
+    } catch (error) {
+      if (error instanceof Error && error.message === "Group not found") {
+        const activeGroupId = useGroupStore.getState().activeGroupId;
+        set((state) => ({
+          documentsByGroup: {
+            ...state.documentsByGroup,
+            [groupId]: [],
+          },
+          selectedDocumentIds: [],
+        }));
+        if (activeGroupId === groupId) {
+          useGroupStore.getState().setActiveGroup(null);
+        }
+        return;
+      }
+      throw error;
     } finally {
       set({ loading: false });
     }
@@ -99,12 +116,6 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
       await get().pollStatus(document.id);
       await get().fetchDocuments(groupId);
-
-      set((state) => ({
-        uploadStates: state.uploadStates.map((entry) =>
-          entry.documentId === document.id ? { ...entry, status: "done" } : entry,
-        ),
-      }));
     } catch (error) {
       set((state) => ({
         uploadStates: state.uploadStates.map((entry) =>
@@ -142,13 +153,28 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   },
   async pollStatus(documentId) {
     let attempts = 0;
-    while (attempts < 60) {
+    while (attempts < 900) {
       const status = await api.getDocumentStatus(documentId);
       set((state) => ({
         documentStatuses: {
           ...state.documentStatuses,
           [documentId]: status,
         },
+        uploadStates: state.uploadStates.map((entry) =>
+          entry.documentId === documentId
+            ? {
+                ...entry,
+                progress: status.status === "ready" ? 100 : entry.progress >= 100 ? entry.progress : 100,
+                status:
+                  status.status === "failed"
+                    ? "failed"
+                    : status.status === "ready"
+                      ? "done"
+                      : "processing",
+                error: status.error_detail ?? entry.error,
+              }
+            : entry,
+        ),
       }));
       if (status.status === "ready" || status.status === "failed") {
         return;

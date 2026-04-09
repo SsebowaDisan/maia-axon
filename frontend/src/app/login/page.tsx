@@ -14,8 +14,8 @@ export default function LoginPage() {
   const login = useAuthStore((state) => state.login);
   const isLoading = useAuthStore((state) => state.isLoading);
   const error = useAuthStore((state) => state.error);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [identifier, setIdentifier] = useState("admin");
+  const [password, setPassword] = useState("admin");
 
   useEffect(() => {
     if (user) {
@@ -26,7 +26,7 @@ export default function LoginPage() {
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     try {
-      await login(email, password);
+      await login(identifier, password);
       router.replace("/");
     } catch {
       return;
@@ -34,55 +34,43 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-bg p-6">
-      <div className="grid w-full max-w-5xl gap-6 lg:grid-cols-[1.15fr_0.85fr]">
-        <div className="panel-surface overflow-hidden p-10">
-          <div className="max-w-lg">
-            <p className="font-display text-5xl leading-tight text-ink">Maia Axon</p>
-            <p className="mt-5 text-base leading-8 text-muted">
-              Query multimodal engineering libraries, compare document methods, and open evidence directly
-              from inline citations.
-            </p>
-            <div className="mt-8 grid gap-3 sm:grid-cols-2">
-              {[
-                "Group-scoped knowledge",
-                "Scanned PDF evidence",
-                "Math-aware responses",
-                "Clickable source highlights",
-              ].map((item) => (
-                <div key={item} className="rounded-[24px] border border-line bg-white/55 px-4 py-4 text-sm">
-                  {item}
-                </div>
-              ))}
-            </div>
-          </div>
+    <div className="flex min-h-screen items-center justify-center bg-bg px-6 py-10">
+      <div className="w-full max-w-md rounded-[32px] border border-white/70 bg-white/82 p-8 shadow-[0_32px_80px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+        <div className="space-y-3">
+          <p className="text-sm font-medium uppercase tracking-[0.22em] text-muted/80">Maia Axon</p>
+          <p className="font-display text-4xl font-semibold tracking-[-0.04em] text-ink">Sign In</p>
+          <p className="text-sm leading-6 text-muted">
+            Default access is ready. Use <span className="font-semibold text-ink">admin</span> for the
+            username and <span className="font-semibold text-ink">admin</span> for the password.
+          </p>
         </div>
 
-        <div className="panel-surface p-8">
-          <p className="font-display text-3xl text-ink">Sign In</p>
-          <p className="mt-3 text-sm leading-7 text-muted">
-            Internal access only. Use the backend-issued account credentials.
-          </p>
-          <form className="mt-8 space-y-4" onSubmit={(event) => void handleSubmit(event)}>
-            <Input
-              type="email"
-              placeholder="Email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-            />
-            <Input
-              type="password"
-              placeholder="Password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-            {error ? <p className="text-sm text-danger">{error}</p> : null}
-            <Button type="submit" className="w-full" disabled={isLoading}>
-              Continue
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          </form>
-        </div>
+        <form className="mt-8 space-y-4" onSubmit={(event) => void handleSubmit(event)}>
+          <Input
+            type="text"
+            placeholder="Username"
+            value={identifier}
+            onChange={(event) => setIdentifier(event.target.value)}
+          />
+          <Input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+          {error ? <p className="text-sm text-danger">{error}</p> : null}
+          <Button
+            type="submit"
+            className="h-12 w-full rounded-full bg-ink text-white shadow-[0_20px_40px_rgba(19,33,52,0.18)] hover:bg-ink/92"
+            disabled={isLoading}
+          >
+            Continue
+            <ArrowRight className="h-4 w-4" />
+          </Button>
+        </form>
+        <p className="mt-5 text-center text-xs tracking-[0.08em] text-muted/80">
+          Username: <span className="text-ink">admin</span> | Password: <span className="text-ink">admin</span>
+        </p>
       </div>
     </div>
   );

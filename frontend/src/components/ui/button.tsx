@@ -9,9 +9,9 @@ type ButtonSize = "sm" | "md" | "icon";
 
 const variantClasses: Record<ButtonVariant, string> = {
   primary:
-    "bg-accent text-white hover:bg-accent/90 shadow-[0_14px_32px_rgba(23,97,122,0.18)]",
-  secondary: "bg-accentSoft text-accent hover:bg-accentSoft/80",
-  ghost: "bg-transparent text-ink hover:bg-black/5 dark:hover:bg-white/5",
+    "bg-accent text-white hover:bg-accent/92 shadow-[0_10px_24px_rgba(17,17,17,0.12)]",
+  secondary: "bg-black/[0.04] text-ink hover:bg-black/[0.06]",
+  ghost: "bg-transparent text-muted hover:bg-black/[0.04] hover:text-ink dark:hover:bg-white/5",
   danger: "bg-danger text-white hover:bg-danger/90",
 };
 
@@ -32,7 +32,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       <button
         ref={ref}
         className={cn(
-          "inline-flex items-center justify-center gap-2 rounded-2xl font-medium transition disabled:cursor-not-allowed disabled:opacity-60",
+          "inline-flex items-center justify-center gap-2 rounded-full font-medium transition disabled:cursor-not-allowed disabled:opacity-60",
           variantClasses[variant],
           sizeClasses[size],
           className,

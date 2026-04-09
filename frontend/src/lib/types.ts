@@ -1,4 +1,4 @@
-export type SearchMode = "library" | "deep_search";
+export type SearchMode = "library" | "deep_search" | "standard";
 
 export type StreamingStatus = "idle" | "retrieving" | "reasoning" | "calculating" | "done";
 
@@ -82,6 +82,8 @@ export interface PageData {
   document_id: string;
   page_number: number;
   image_url: string;
+  page_width: number | null;
+  page_height: number | null;
   markdown: string | null;
   ocr_text: string | null;
   ocr_confidence: number | null;
@@ -95,6 +97,7 @@ export interface Citation {
   document_name: string;
   page: number;
   bbox: number[] | null;
+  boxes?: number[][] | null;
   snippet: string;
   url: string | null;
   title: string | null;
@@ -124,6 +127,7 @@ export interface ConversationSummary {
   user_id: string;
   group_id: string;
   title: string | null;
+  title_icon: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -136,6 +140,7 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  attachments?: PromptAttachment[];
   createdAt: string;
   citations: Citation[];
   mindmap: MindmapNode | null;
@@ -146,10 +151,18 @@ export interface ChatMessage {
   needsClarification: boolean;
 }
 
+export interface PromptAttachment {
+  id: string;
+  filename: string;
+  media_type: string;
+  size_bytes: number;
+}
+
 export interface ChatQueryPayload {
   type: "query";
   group_id: string;
   document_ids: string[];
+  attachment_ids: string[];
   mode: SearchMode;
   message: string;
   conversation_id: string | null;
@@ -173,3 +186,8 @@ export interface UploadProgressState {
 }
 
 export type AdminTab = "groups" | "documents" | "users";
+
+export interface WelcomePayload {
+  intro_markdown: string;
+  suggested_questions: string[];
+}

@@ -2,8 +2,15 @@
 
 import { create } from "zustand";
 
+import { api } from "@/lib/api";
 import { chatSocket } from "@/lib/ws";
-import type { ChatMessage, ChatQueryPayload, SearchMode, WsServerEvent } from "@/lib/types";
+import type {
+  ChatMessage,
+  ChatQueryPayload,
+  PromptAttachment,
+  SearchMode,
+  WsServerEvent,
+} from "@/lib/types";
 import { useAuthStore } from "@/stores/authStore";
 import { useConversationStore } from "@/stores/conversationStore";
 import { useDocumentStore } from "@/stores/documentStore";
@@ -17,6 +24,7 @@ function makeMessage(
     id: crypto.randomUUID(),
     role: partial.role,
     content: partial.content,
+    attachments: partial.attachments ?? [],
     createdAt: new Date().toISOString(),
     citations: partial.citations ?? [],
     mindmap: partial.mindmap ?? null,
@@ -30,12 +38,21 @@ function makeMessage(
 
 interface ChatState {
   messages: ChatMessage[];
+  draft: string;
+  promptAttachments: PromptAttachment[];
+  draftMode: "compose" | "user_edit" | "assistant_edit";
   mode: SearchMode;
   streaming: boolean;
   connectionError: string | null;
   initialized: boolean;
   initialize: () => void;
   setMode: (mode: SearchMode) => void;
+  setDraft: (draft: string) => void;
+  addPromptAttachments: (files: FileList | File[]) => Promise<void>;
+  removePromptAttachment: (attachmentId: string) => void;
+  clearPromptAttachments: () => void;
+  setDraftMode: (draftMode: "compose" | "user_edit" | "assistant_edit") => void;
+  updateMessageContent: (messageId: string, content: string) => void;
   clearChat: () => void;
   hydrateMessages: (messages: ChatMessage[]) => void;
   sendMessage: (message: string) => Promise<void>;
@@ -52,6 +69,9 @@ function lastAssistantIndex(messages: ChatMessage[]) {
 
 export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
+  draft: "",
+  promptAttachments: [],
+  draftMode: "compose",
   mode: "library",
   streaming: false,
   connectionError: null,
@@ -104,9 +124,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             needsClarification: message.citations.length === 0 && /\?$/.test(message.content.trim()),
           }));
           useConversationStore.getState().setActiveConversationId(event.conversation_id);
-          void useConversationStore.getState().fetchConversations(
-            useGroupStore.getState().activeGroupId,
-          );
+          void useConversationStore.getState().fetchConversations();
           set({ streaming: false });
           break;
         case "error":
@@ -131,9 +149,43 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setMode(mode) {
     set({ mode });
   },
+  setDraft(draft) {
+    set({ draft });
+  },
+  async addPromptAttachments(files) {
+    const entries = Array.from(files);
+    const uploaded = await Promise.all(entries.map((file) => api.uploadPromptAttachment(file)));
+    set((state) => ({
+      promptAttachments: [...state.promptAttachments, ...uploaded],
+    }));
+  },
+  removePromptAttachment(attachmentId) {
+    set((state) => ({
+      promptAttachments: state.promptAttachments.filter((attachment) => attachment.id !== attachmentId),
+    }));
+  },
+  clearPromptAttachments() {
+    set({ promptAttachments: [] });
+  },
+  setDraftMode(draftMode) {
+    set({ draftMode });
+  },
+  updateMessageContent(messageId, content) {
+    set((state) => ({
+      messages: state.messages.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              content,
+              needsClarification: false,
+            }
+          : message,
+      ),
+    }));
+  },
   clearChat() {
     useMindmapStore.getState().clearMindmap();
-    set({ messages: [], streaming: false });
+    set({ messages: [], streaming: false, draft: "", draftMode: "compose", promptAttachments: [] });
   },
   hydrateMessages(messages) {
     set({ messages });
@@ -141,21 +193,40 @@ export const useChatStore = create<ChatState>((set, get) => ({
     useMindmapStore.getState().setMindmapData(lastAssistant?.mindmap ?? null);
   },
   async sendMessage(content) {
-    const { mode } = get();
+    const { mode, promptAttachments } = get();
     const token = useAuthStore.getState().token;
-    const groupId = useGroupStore.getState().activeGroupId;
+    const groupState = useGroupStore.getState();
+    const conversationState = useConversationStore.getState();
+    const groupId =
+      mode === "standard"
+        ? groupState.activeGroupId ?? groupState.groups[0]?.id ?? null
+        : groupState.activeGroupId;
     const documentIds = useDocumentStore.getState().selectedDocumentIds;
-    const conversationId = useConversationStore.getState().activeConversationId;
+    const activeConversationGroupId =
+      conversationState.activeConversation?.group_id ??
+      conversationState.conversations.find(
+        (conversation) => conversation.id === conversationState.activeConversationId,
+      )?.group_id ??
+      null;
+    const conversationId =
+      conversationState.activeConversationId && activeConversationGroupId === groupId
+        ? conversationState.activeConversationId
+        : null;
 
-    if (!token || !groupId || !content.trim()) {
+    if (!token || !groupId || (!content.trim() && promptAttachments.length === 0)) {
       return;
     }
 
     get().initialize();
 
+    const visibleUserContent =
+      content.trim() ||
+      `Attached: ${promptAttachments.map((attachment) => attachment.filename).join(", ")}`;
+
     const userMessage = makeMessage({
       role: "user",
-      content,
+      content: visibleUserContent,
+      attachments: promptAttachments,
       searchMode: mode,
     });
     const assistantMessage = makeMessage({
@@ -163,19 +234,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
       content: "",
       searchMode: mode,
       isStreaming: true,
-      status: "retrieving",
+      status: mode === "standard" ? "reasoning" : "retrieving",
     });
 
     set((state) => ({
       messages: [...state.messages, userMessage, assistantMessage],
       streaming: true,
       connectionError: null,
+      promptAttachments: [],
     }));
 
     const payload: ChatQueryPayload = {
       type: "query",
       group_id: groupId,
       document_ids: documentIds,
+      attachment_ids: promptAttachments.map((attachment) => attachment.id),
       mode,
       message: content,
       conversation_id: conversationId,

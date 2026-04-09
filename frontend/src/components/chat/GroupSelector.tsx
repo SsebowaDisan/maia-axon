@@ -1,23 +1,22 @@
 "use client";
 
+import { forwardRef } from "react";
 import { FolderOpen } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import type { Group } from "@/lib/types";
 
-export function GroupSelector({
-  groups,
-  query,
-  onQueryChange,
-  onSelect,
-}: {
+export const GroupSelector = forwardRef<HTMLDivElement, {
   groups: Group[];
   query: string;
   onQueryChange: (value: string) => void;
   onSelect: (group: Group) => void;
-}) {
+}>(function GroupSelector(
+  { groups, query, onQueryChange, onSelect },
+  ref,
+) {
   return (
-    <div className="absolute bottom-full left-14 mb-3 w-[320px] rounded-[24px] border border-line bg-panel p-3 shadow-card">
+    <div ref={ref} className="absolute bottom-full left-14 mb-3 w-[320px] rounded-[24px] border border-line bg-panel p-3 shadow-card">
       <Input
         autoFocus
         placeholder="Search groups..."
@@ -51,4 +50,4 @@ export function GroupSelector({
       </div>
     </div>
   );
-}
+});

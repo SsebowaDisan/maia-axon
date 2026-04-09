@@ -14,7 +14,7 @@ interface AuthState {
   error: string | null;
   setHydrated: () => void;
   bootstrap: () => Promise<void>;
-  login: (email: string, password: string) => Promise<void>;
+  login: (identifier: string, password: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -49,10 +49,10 @@ export const useAuthStore = create<AuthState>()(
           set({ isLoading: false });
         }
       },
-      async login(email, password) {
+      async login(identifier, password) {
         set({ isLoading: true, error: null });
         try {
-          const response = await api.login(email, password);
+          const response = await api.login(identifier, password);
           setStoredToken(response.access_token);
           set({
             token: response.access_token,

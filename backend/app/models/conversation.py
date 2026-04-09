@@ -18,9 +18,10 @@ class Conversation(Base):
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
     group_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("groups.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("groups.id", ondelete="CASCADE"), nullable=False, index=True
     )
     title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    title_icon: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

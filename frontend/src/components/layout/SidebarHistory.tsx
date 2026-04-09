@@ -1,14 +1,28 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
+  Brain,
+  ChartColumn,
+  Cog,
+  FileText,
+  Folder,
   FolderCog,
+  FolderOpen,
+  Globe,
+  History,
   LogOut,
   MessageSquareMore,
   Plus,
   Search,
+  Settings2,
+  Shield,
+  Sigma,
   Trash2,
+  Wrench,
+  X,
 } from "lucide-react";
 
 import { DocumentUploader } from "@/components/admin/DocumentUploader";
@@ -17,13 +31,26 @@ import { UserAssignment } from "@/components/admin/UserAssignment";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { AdminTab, ChatMessage, MessageResponse } from "@/lib/types";
-import { bucketConversations, formatRelativeTime, titleFromMessage } from "@/lib/utils";
+import type { ChatMessage, Group, MessageResponse } from "@/lib/types";
+import { formatRelativeTime, titleFromMessage } from "@/lib/utils";
 import { useAuthStore } from "@/stores/authStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useConversationStore } from "@/stores/conversationStore";
 import { useDocumentStore } from "@/stores/documentStore";
 import { useGroupStore } from "@/stores/groupStore";
+
+type WorkspaceMode = "admin" | null;
+
+const conversationIconMap = {
+  brain: Brain,
+  sigma: Sigma,
+  file: FileText,
+  search: Search,
+  globe: Globe,
+  chart: ChartColumn,
+  wrench: Wrench,
+  message: MessageSquareMore,
+} as const;
 
 function mapMessage(message: MessageResponse): ChatMessage {
   return {
@@ -37,13 +64,15 @@ function mapMessage(message: MessageResponse): ChatMessage {
     searchMode: message.search_mode ?? "library",
     isStreaming: false,
     status: "done",
-    needsClarification: message.role === "assistant" && (message.citations?.citations?.length ?? 0) === 0 && /\?$/.test(message.content.trim()),
+    needsClarification:
+      message.role === "assistant" &&
+      (message.citations?.citations?.length ?? 0) === 0 &&
+      /\?$/.test(message.content.trim()),
   };
 }
 
-function AdminView() {
+function AdminWorkspaceView() {
   const groups = useGroupStore((state) => state.groups);
-  const [tab, setTab] = useState<AdminTab>("groups");
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(groups[0]?.id ?? null);
 
   useEffect(() => {
@@ -55,31 +84,321 @@ function AdminView() {
   return (
     <div className="flex h-full flex-col">
       <div className="mb-4 rounded-[24px] border border-line bg-white/55 p-2">
-        {(["groups", "documents", "users"] as AdminTab[]).map((item) => (
-          <button
-            key={item}
-            type="button"
-            className={`w-full rounded-2xl px-3 py-2 text-left text-sm capitalize transition ${
-              item === tab ? "bg-accentSoft text-accent" : "hover:bg-black/5"
-            }`}
-            onClick={() => setTab(item)}
-          >
-            {item}
-          </button>
-        ))}
+        <button type="button" className="w-full rounded-2xl bg-accentSoft px-3 py-2 text-left text-sm text-accent">
+          People
+        </button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-        {tab === "groups" ? <GroupManager selectedGroupId={selectedGroupId} onSelectGroup={setSelectedGroupId} /> : null}
-        {tab === "documents" && selectedGroupId ? <DocumentUploader groupId={selectedGroupId} /> : null}
-        {tab === "users" && selectedGroupId ? <UserAssignment groupId={selectedGroupId} /> : null}
-        {(tab === "documents" || tab === "users") && !selectedGroupId ? (
+        {selectedGroupId ? (
+          <UserAssignment groupId={selectedGroupId} />
+        ) : (
           <div className="rounded-[26px] border border-dashed border-line p-6 text-center text-sm text-muted">
-            Choose a group first in the Groups tab.
+            Create a project in Library first, then assign people to it.
           </div>
-        ) : null}
+        )}
       </div>
     </div>
+  );
+}
+
+function LibraryDialog({
+  open,
+  onOpenChange,
+  groups,
+  activeGroupId,
+  isAdmin,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  groups: Group[];
+  activeGroupId: string | null;
+  isAdmin: boolean;
+}) {
+  const setActiveGroup = useGroupStore((state) => state.setActiveGroup);
+  const fetchDocuments = useDocumentStore((state) => state.fetchDocuments);
+  const clearSelection = useDocumentStore((state) => state.clearSelection);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(activeGroupId ?? groups[0]?.id ?? null);
+
+  const documentCount = useMemo(
+    () => groups.reduce((total, group) => total + group.document_count, 0),
+    [groups],
+  );
+  const selectedGroup = useMemo(
+    () => groups.find((group) => group.id === selectedGroupId) ?? null,
+    [groups, selectedGroupId],
+  );
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const nextSelectedGroupId =
+      activeGroupId && groups.some((group) => group.id === activeGroupId)
+        ? activeGroupId
+        : groups[0]?.id ?? null;
+    setSelectedGroupId(nextSelectedGroupId);
+  }, [activeGroupId, groups, open]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    if (!selectedGroupId || !groups.some((group) => group.id === selectedGroupId)) {
+      if (selectedGroupId !== null) {
+        setSelectedGroupId(groups[0]?.id ?? null);
+      }
+      return;
+    }
+    setActiveGroup(selectedGroupId);
+    clearSelection();
+    void fetchDocuments(selectedGroupId);
+  }, [clearSelection, fetchDocuments, groups, open, selectedGroupId, setActiveGroup]);
+
+  function handleSelectProject(groupId: string | null) {
+    setSelectedGroupId(groupId);
+  }
+
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/18 backdrop-blur-[18px]" />
+        <Dialog.Content
+          aria-describedby={undefined}
+          className="fixed left-1/2 top-1/2 z-[60] flex h-[min(860px,calc(100vh-2rem))] w-[min(1120px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[34px] border border-black/[0.06] bg-white p-6 shadow-[0_30px_80px_rgba(17,17,17,0.14)] outline-none"
+          onPointerDownOutside={() => onOpenChange(false)}
+        >
+          <div className="flex items-start justify-between gap-4 border-b border-black/[0.06] pb-5">
+            <div className="flex items-center gap-4">
+              <span className="rounded-full bg-black p-3 text-white">
+                <FolderCog className="h-5 w-5" />
+              </span>
+              <div>
+                <Dialog.Title className="font-display text-[1.875rem] font-semibold tracking-[-0.04em] text-ink">
+                  Library
+                </Dialog.Title>
+                <p className="mt-1 text-sm text-muted">
+                  Upload PDFs, create projects, and prepare documents for RAG.
+                </p>
+              </div>
+            </div>
+            <Dialog.Close asChild>
+              <button
+                type="button"
+                className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
+                aria-label="Close library"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </Dialog.Close>
+          </div>
+
+          <div className="mt-5 grid min-h-0 flex-1 gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
+            <div className="flex min-h-0 flex-col overflow-hidden">
+              <div className="mb-4 grid grid-cols-2 gap-3">
+                <div className="rounded-[24px] bg-black px-4 py-4 text-white">
+                  <p className="text-2xl font-semibold tracking-[-0.04em]">{groups.length}</p>
+                  <p className="mt-1 text-xs uppercase tracking-[0.16em] text-white/65">Projects</p>
+                </div>
+                <div className="rounded-[24px] bg-black/[0.04] px-4 py-4">
+                  <p className="text-2xl font-semibold tracking-[-0.04em] text-ink">{documentCount}</p>
+                  <p className="mt-1 text-xs uppercase tracking-[0.16em] text-muted">PDFs</p>
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1">
+                <GroupManager selectedGroupId={selectedGroupId} onSelectGroup={handleSelectProject} />
+              </div>
+            </div>
+
+            <div className="flex min-h-0 flex-col overflow-hidden">
+              <div className="rounded-[28px] bg-black/[0.03] p-5">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+                      RAG Intake
+                    </p>
+                    <p className="mt-2 text-[1.625rem] font-semibold tracking-[-0.04em] text-ink">
+                      {selectedGroup?.name ?? "Choose a project"}
+                    </p>
+                    <p className="mt-2 max-w-xl text-sm leading-6 text-muted">
+                      {selectedGroup
+                        ? "Add PDFs to this project and the system will index them so they are ready for retrieval and grounded answers."
+                        : "Select a project first. PDF upload stays disabled until a project is selected."}
+                    </p>
+                  </div>
+                  {selectedGroup ? (
+                    <Badge className="bg-black text-white">{selectedGroup.document_count} PDFs</Badge>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="mt-4 min-h-0 flex-1">
+                {isAdmin ? (
+                  <DocumentUploader groupId={selectedGroup?.id ?? null} />
+                ) : (
+                  <div className="rounded-[26px] border border-dashed border-line p-8 text-center text-sm text-muted">
+                    Only admins can upload PDFs to the library.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function SettingsDialog({
+  open,
+  onOpenChange,
+  userName,
+  userRole,
+  isAdmin,
+  groups,
+  activeGroupId,
+  onOpenLibrary,
+  onOpenAdmin,
+  onLogout,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  userName: string;
+  userRole: string;
+  isAdmin: boolean;
+  groups: Group[];
+  activeGroupId: string | null;
+  onOpenLibrary: () => void;
+  onOpenAdmin: () => void;
+  onLogout: () => void;
+}) {
+  const documentCount = useMemo(
+    () => groups.reduce((total, group) => total + group.document_count, 0),
+    [groups],
+  );
+  const activeGroup = useMemo(
+    () => groups.find((group) => group.id === activeGroupId) ?? groups[0] ?? null,
+    [activeGroupId, groups],
+  );
+
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/18 backdrop-blur-[18px]" />
+        <Dialog.Content
+          aria-describedby={undefined}
+          className="fixed left-1/2 top-1/2 z-50 w-[min(460px,calc(100vw-2rem))] max-h-[min(720px,calc(100vh-2rem))] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
+          onPointerDownOutside={() => onOpenChange(false)}
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <span className="rounded-full bg-black p-3 text-white">
+                <Settings2 className="h-5 w-5" />
+              </span>
+              <div>
+                <Dialog.Title className="font-display text-[1.625rem] font-semibold tracking-[-0.04em] text-ink">
+                  Settings
+                </Dialog.Title>
+                <p className="mt-1 text-sm text-muted">{userName} / {userRole}</p>
+              </div>
+            </div>
+            <Dialog.Close asChild>
+              <button
+                type="button"
+                className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
+                aria-label="Close settings"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </Dialog.Close>
+          </div>
+
+          <div className="mt-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+              Choose workspace
+            </p>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              Open the library to manage projects and PDFs, or open admin to manage users and access.
+            </p>
+          </div>
+
+          <div className="mt-5 grid gap-3">
+            <button
+              type="button"
+              className="rounded-[28px] bg-black px-5 py-5 text-left text-white transition hover:bg-black/92"
+              onClick={onOpenLibrary}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-3">
+                    <span className="rounded-full bg-white/12 p-2.5">
+                      <FolderCog className="h-4 w-4" />
+                    </span>
+                    <div>
+                      <p className="text-base font-semibold">Library</p>
+                      <p className="mt-1 text-sm text-white/70">
+                        Projects, PDFs, and document organization.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Badge className="bg-white/10 text-white">{groups.length} projects</Badge>
+                    <Badge className="bg-white/10 text-white">{documentCount} PDFs</Badge>
+                    <Badge className="bg-white/10 text-white">
+                      {activeGroup?.name ?? "No active project"}
+                    </Badge>
+                  </div>
+                </div>
+                <ArrowLeft className="h-4 w-4 rotate-180 text-white/80" />
+              </div>
+            </button>
+
+            {isAdmin ? (
+              <button
+                type="button"
+                className="rounded-[28px] bg-black/[0.04] px-5 py-5 text-left text-ink transition hover:bg-black/[0.06]"
+                onClick={onOpenAdmin}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-3">
+                      <span className="rounded-full bg-black p-2.5 text-white">
+                        <Shield className="h-4 w-4" />
+                      </span>
+                      <div>
+                        <p className="text-base font-semibold">Admin</p>
+                        <p className="mt-1 text-sm text-muted">
+                          Create users and assign project access.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-4">
+                      <Badge>People and permissions</Badge>
+                    </div>
+                  </div>
+                  <ArrowLeft className="h-4 w-4 rotate-180 text-muted" />
+                </div>
+              </button>
+            ) : null}
+          </div>
+
+          <div className="mt-4">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between rounded-[24px] bg-black/[0.04] px-5 py-4 text-left text-ink transition hover:bg-black/[0.06]"
+              onClick={onLogout}
+            >
+              <span className="flex items-center gap-3">
+                <LogOut className="h-4 w-4" />
+                <span className="text-sm font-medium">Sign out</span>
+              </span>
+              <ArrowLeft className="h-4 w-4 rotate-180" />
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
@@ -95,38 +414,73 @@ export function SidebarHistory() {
   const startNewConversation = useConversationStore((state) => state.startNewConversation);
   const fetchConversations = useConversationStore((state) => state.fetchConversations);
   const groups = useGroupStore((state) => state.groups);
+  const activeGroupId = useGroupStore((state) => state.activeGroupId);
+  const createGroup = useGroupStore((state) => state.createGroup);
+  const deleteGroup = useGroupStore((state) => state.deleteGroup);
   const setActiveGroup = useGroupStore((state) => state.setActiveGroup);
+  const documentsByGroup = useDocumentStore((state) => state.documentsByGroup);
   const fetchDocuments = useDocumentStore((state) => state.fetchDocuments);
   const clearSelection = useDocumentStore((state) => state.clearSelection);
   const hydrateMessages = useChatStore((state) => state.hydrateMessages);
   const clearChat = useChatStore((state) => state.clearChat);
-  const [manageMode, setManageMode] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [createGroupOpen, setCreateGroupOpen] = useState(false);
+  const [groupNameDraft, setGroupNameDraft] = useState("");
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [documentsGroupId, setDocumentsGroupId] = useState<string | null>(null);
+  const [deleteGroupTarget, setDeleteGroupTarget] = useState<Group | null>(null);
+  const [deleteGroupText, setDeleteGroupText] = useState("");
+  const [deletingGroup, setDeletingGroup] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        document.getElementById("history-search")?.focus();
+        setSearchOpen(true);
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        startNewConversation();
-        clearChat();
+        setCreateGroupOpen(true);
       }
     };
 
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [clearChat, startNewConversation]);
+  }, []);
 
-  const groupLookup = useMemo(
-    () =>
-      groups.reduce<Record<string, string>>((acc, group) => {
-        acc[group.id] = group.name;
-        return acc;
-      }, {}),
-    [groups],
-  );
+  useEffect(() => {
+    if (searchOpen) {
+      searchInputRef.current?.focus();
+    }
+  }, [searchOpen]);
+
+  useEffect(() => {
+    setExpandedGroups((current) => {
+      const next = { ...current };
+      let changed = false;
+
+      for (const group of groups) {
+        if (!(group.id in next)) {
+          next[group.id] = group.id === activeGroupId || (!activeGroupId && groups[0]?.id === group.id);
+          changed = true;
+        }
+      }
+
+      for (const key of Object.keys(next)) {
+        if (!groups.some((group) => group.id === key)) {
+          delete next[key];
+          changed = true;
+        }
+      }
+
+      return changed ? next : current;
+    });
+  }, [activeGroupId, groups]);
 
   const filteredConversations = useMemo(() => {
     const needle = searchTerm.toLowerCase();
@@ -135,7 +489,58 @@ export function SidebarHistory() {
     );
   }, [conversations, searchTerm]);
 
-  const grouped = bucketConversations(filteredConversations);
+  const grouped = useMemo(() => {
+    const groupedById = filteredConversations.reduce<Record<string, typeof filteredConversations>>(
+      (acc, conversation) => {
+        acc[conversation.group_id] ??= [];
+        acc[conversation.group_id].push(conversation);
+        return acc;
+      },
+      {},
+    );
+
+    const sections = groups.map((group) => ({
+      id: group.id,
+      label: group.name,
+      items: groupedById[group.id] ?? [],
+    }));
+
+    const knownGroupIds = new Set(groups.map((group) => group.id));
+    const otherItems = filteredConversations.filter((conversation) => !knownGroupIds.has(conversation.group_id));
+
+    if (otherItems.length) {
+      sections.push({
+        id: "other",
+        label: "Other",
+        items: otherItems,
+      });
+    }
+
+    return sections;
+  }, [filteredConversations, groups]);
+
+  const documentsGroup = useMemo(
+    () => groups.find((group) => group.id === documentsGroupId) ?? null,
+    [documentsGroupId, groups],
+  );
+  const groupDocuments = useMemo(
+    () => (documentsGroupId ? documentsByGroup[documentsGroupId] ?? [] : []),
+    [documentsByGroup, documentsGroupId],
+  );
+
+  function closeDocumentsDialog() {
+    setDocumentsGroupId(null);
+  }
+
+  function closeDeleteGroupDialog() {
+    setDeleteGroupTarget(null);
+    setDeleteGroupText("");
+  }
+
+  function closeCreateGroupDialog() {
+    setCreateGroupOpen(false);
+    setGroupNameDraft("");
+  }
 
   async function handleSelectConversation(conversationId: string, groupId: string) {
     setActiveGroup(groupId);
@@ -145,86 +550,254 @@ export function SidebarHistory() {
     hydrateMessages(detail.messages.map(mapMessage));
   }
 
+  function toggleGroupSection(groupId: string) {
+    setExpandedGroups((current) => ({
+      ...current,
+      [groupId]: !current[groupId],
+    }));
+  }
+
+  async function handleCreateGroup() {
+    const name = groupNameDraft.trim();
+    if (!name) {
+      return;
+    }
+
+    setCreatingGroup(true);
+    try {
+      const group = await createGroup({ name });
+      setActiveGroup(group.id);
+      clearSelection();
+      clearChat();
+      startNewConversation();
+      setGroupNameDraft("");
+      setCreateGroupOpen(false);
+      await fetchDocuments(group.id);
+      await fetchConversations();
+    } finally {
+      setCreatingGroup(false);
+    }
+  }
+
+  async function handleStartChat(groupId: string) {
+    setExpandedGroups((current) => ({
+      ...current,
+      [groupId]: true,
+    }));
+    setActiveGroup(groupId);
+    clearSelection();
+    clearChat();
+    startNewConversation();
+    await fetchDocuments(groupId);
+    await fetchConversations();
+  }
+
+  async function handleOpenDocuments(groupId: string) {
+    setDocumentsGroupId(groupId);
+    await fetchDocuments(groupId);
+  }
+
+  async function handleDeleteGroup() {
+    if (!deleteGroupTarget || deleteGroupText.trim().toLowerCase() !== "delete") {
+      return;
+    }
+
+    setDeletingGroup(true);
+    try {
+      await deleteGroup(deleteGroupTarget.id);
+      if (activeGroupId === deleteGroupTarget.id) {
+        clearSelection();
+        clearChat();
+        startNewConversation();
+      }
+      setDeleteGroupTarget(null);
+      setDeleteGroupText("");
+      await fetchConversations();
+    } finally {
+      setDeletingGroup(false);
+    }
+  }
+
   return (
-    <div className="flex h-full flex-col px-2 py-2">
-      <div className="mb-4 flex items-center justify-between gap-3 px-2">
-        <div>
-          <p className="font-display text-[2rem] leading-none text-ink">
-            {manageMode ? "Manage" : "History"}
-          </p>
-          <p className="mt-2 text-sm text-muted">
-            {manageMode ? "Groups, documents, and access." : "Past conversations grouped by time."}
-          </p>
+    <div className="flex h-full flex-col px-4 py-4">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="rounded-full bg-black/[0.05] p-2 text-ink">
+            {workspaceMode === "admin" ? <Shield className="h-4 w-4" /> : <History className="h-4 w-4" />}
+          </span>
+          <div>
+            <p className="font-display text-[1.75rem] font-semibold tracking-[-0.04em] text-ink">
+              {workspaceMode === "admin" ? "Admin" : "History"}
+            </p>
+          </div>
         </div>
-        {manageMode ? (
-          <Button type="button" variant="ghost" size="icon" onClick={() => setManageMode(false)}>
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        ) : null}
+        <div className="flex items-center gap-2">
+          {!workspaceMode ? (
+            <>
+              <Button
+                type="button"
+                variant="secondary"
+                size="icon"
+                onClick={() => setSearchOpen((current) => !current)}
+                title="Search"
+                aria-label="Search"
+              >
+                <Search className="h-4 w-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="icon"
+                onClick={() => setCreateGroupOpen(true)}
+                title="Create group"
+                aria-label="Create group"
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            </>
+          ) : (
+            <Button type="button" variant="ghost" size="icon" onClick={() => setWorkspaceMode(null)}>
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
 
-      {!manageMode ? (
+      {!workspaceMode ? (
         <>
-          <Input
-            id="history-search"
-            placeholder="Search conversations..."
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            className="mb-3"
-          />
-          <div className="mb-4 flex gap-2">
-            <Button
-              type="button"
-              className="flex-1"
-              onClick={() => {
-                startNewConversation();
-                clearChat();
-              }}
-            >
-              <Plus className="h-4 w-4" />
-              New Chat
-            </Button>
-            {user?.role === "admin" ? (
-              <Button type="button" variant="secondary" size="icon" onClick={() => setManageMode(true)}>
-                <FolderCog className="h-4 w-4" />
-              </Button>
-            ) : null}
-          </div>
+          {searchOpen || searchTerm ? (
+            <div className="relative mb-4">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+              <Input
+                id="history-search"
+                ref={searchInputRef}
+                placeholder="Search"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                className="pl-11 pr-11"
+              />
+              {(searchTerm || searchOpen) && (
+                <button
+                  type="button"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1 text-muted transition hover:bg-black/[0.05] hover:text-ink"
+                  onClick={() => {
+                    setSearchTerm("");
+                    setSearchOpen(false);
+                  }}
+                  aria-label="Close search"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          ) : null}
 
           <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin pr-1">
-            {Object.entries(grouped).map(([bucket, items]) => (
-              <div key={bucket} className="mb-5">
-                <div className="mb-2 flex items-center gap-2 px-2">
-                  <Search className="h-3.5 w-3.5 text-muted" />
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">{bucket}</p>
+            {grouped.map((section) => (
+              <div key={section.id} className="group mb-5">
+                <div className="mb-2 flex items-center justify-between gap-2 px-2">
+                  <button
+                    type="button"
+                    className="flex min-w-0 items-center gap-2 text-left"
+                    onClick={() => toggleGroupSection(section.id)}
+                  >
+                    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-muted">
+                      {expandedGroups[section.id] ? (
+                        <FolderOpen className="h-4 w-4 stroke-[1.8]" />
+                      ) : (
+                        <Folder className="h-4 w-4 stroke-[1.8]" />
+                      )}
+                    </span>
+                    <p className="truncate text-xs font-semibold uppercase tracking-[0.18em] text-muted">
+                      {section.label}
+                    </p>
+                  </button>
+                  {section.id !== "other" ? (
+                    <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        title="New chat"
+                        aria-label={`New chat in ${section.label}`}
+                        onClick={() => void handleStartChat(section.id)}
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        title="Group PDFs"
+                        aria-label={`View PDFs in ${section.label}`}
+                        onClick={() => void handleOpenDocuments(section.id)}
+                      >
+                        <FileText className="h-3.5 w-3.5" />
+                      </Button>
+                      {user?.role === "admin" ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          title="Delete group"
+                          aria-label={`Delete ${section.label}`}
+                          onClick={() => {
+                            const target = groups.find((group) => group.id === section.id) ?? null;
+                            setDeleteGroupTarget(target);
+                            setDeleteGroupText("");
+                          }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
-                <div className="space-y-2">
-                  {items.map((conversation) => (
+                {expandedGroups[section.id] ? <div className="space-y-2">
+                  {section.items.map((conversation) => (
                     <div
                       key={conversation.id}
-                      className={`block w-full rounded-[24px] border px-4 py-3 text-left transition ${
+                      className={`group/conversation block w-full rounded-[24px] border px-4 py-3 text-left transition ${
                         activeConversationId === conversation.id
-                          ? "border-accent bg-accentSoft/45"
-                          : "border-line bg-panel/80 hover:bg-white/75"
+                          ? "border-black/[0.08] bg-black/[0.03]"
+                          : "border-transparent bg-black/[0.02] hover:bg-black/[0.04]"
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center justify-between gap-3">
+                        {(() => {
+                          const ConversationIcon =
+                            conversationIconMap[
+                              (conversation.title_icon as keyof typeof conversationIconMap) || "message"
+                            ] ?? MessageSquareMore;
+
+                          return (
+                            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/[0.04] text-muted">
+                              <ConversationIcon className="h-4 w-4" />
+                            </span>
+                          );
+                        })()}
                         <button
                           type="button"
-                          className="min-w-0 text-left"
-                          onClick={() => void handleSelectConversation(conversation.id, conversation.group_id)}
+                          className="min-w-0 flex-1 text-left"
+                          onClick={() =>
+                            void handleSelectConversation(conversation.id, conversation.group_id)
+                          }
                         >
                           <p className="truncate text-sm font-semibold text-ink">
                             {conversation.title || titleFromMessage("Untitled conversation")}
                           </p>
-                          <div className="mt-2 flex flex-wrap items-center gap-2">
-                            <Badge>{groupLookup[conversation.group_id] ?? "Group"}</Badge>
-                            <span className="text-xs text-muted">{formatRelativeTime(conversation.updated_at)}</span>
+                          <div className="mt-2">
+                            <span className="text-xs text-muted">
+                              {formatRelativeTime(conversation.updated_at)}
+                            </span>
                           </div>
                         </button>
                         <button
                           type="button"
-                          className="rounded-full p-2 text-muted transition hover:bg-danger/10 hover:text-danger"
+                          className="rounded-full p-2 text-muted opacity-0 transition hover:bg-danger/10 hover:text-danger group-hover/conversation:opacity-100 group-focus-within/conversation:opacity-100"
                           onClick={(event) => {
                             event.stopPropagation();
                             if (window.confirm("Delete this conversation?")) {
@@ -232,37 +805,268 @@ export function SidebarHistory() {
                               void fetchConversations();
                             }
                           }}
+                          title="Delete"
+                          aria-label="Delete conversation"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
                       </div>
                     </div>
                   ))}
-                </div>
+                  {!section.items.length ? (
+                    <div className="rounded-[22px] bg-black/[0.02] px-5 py-5 text-sm text-muted">
+                      No chats in this group yet
+                    </div>
+                  ) : null}
+                </div> : null}
               </div>
             ))}
-            {!filteredConversations.length ? (
-              <div className="rounded-[26px] border border-dashed border-line p-6 text-center text-sm text-muted">
-                No conversations found yet.
+            {!groups.length ? (
+              <div className="rounded-[22px] bg-black/[0.02] px-6 py-7 text-center text-sm text-muted">
+                <MessageSquareMore className="mx-auto mb-3 h-5 w-5 text-muted/80" />
+                No groups yet
               </div>
             ) : null}
           </div>
         </>
       ) : (
-        <AdminView />
+        <AdminWorkspaceView />
       )}
 
-      <div className="mt-4 rounded-[26px] border border-line bg-white/60 p-4">
-        <div className="flex items-center justify-between">
+      <button
+        type="button"
+        className="mt-4 flex items-center justify-between rounded-[22px] bg-black/[0.03] px-4 py-4 text-left transition hover:bg-black/[0.05]"
+        onClick={() => setSettingsOpen(true)}
+        aria-label="Open settings"
+      >
+        <div className="flex items-center gap-3">
+          <span className="rounded-full bg-black p-2.5 text-white">
+            <Settings2 className="h-3.5 w-3.5" />
+          </span>
           <div>
-            <p className="font-medium text-ink">{user?.name ?? "Unknown user"}</p>
-            <p className="text-xs uppercase tracking-[0.18em] text-muted">{user?.role ?? "guest"}</p>
+            <p className="font-medium text-ink">Settings</p>
+            <p className="text-xs uppercase tracking-[0.18em] text-muted">Account</p>
           </div>
-          <Button type="button" variant="ghost" size="icon" onClick={logout}>
-            <LogOut className="h-4 w-4" />
-          </Button>
         </div>
-      </div>
+        <span className="rounded-full bg-white p-2 text-muted shadow-[0_4px_12px_rgba(17,17,17,0.06)]">
+          <Cog className="h-4 w-4" />
+        </span>
+      </button>
+
+      <SettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        userName={user?.name ?? "Unknown user"}
+        userRole={user?.role ?? "guest"}
+        isAdmin={user?.role === "admin"}
+        groups={groups}
+        activeGroupId={activeGroupId}
+        onOpenLibrary={() => {
+          setSettingsOpen(false);
+          setLibraryOpen(true);
+        }}
+        onOpenAdmin={() => {
+          setSettingsOpen(false);
+          setWorkspaceMode("admin");
+        }}
+        onLogout={() => {
+          setSettingsOpen(false);
+          logout();
+        }}
+      />
+
+      <LibraryDialog
+        open={libraryOpen}
+        onOpenChange={setLibraryOpen}
+        groups={groups}
+        activeGroupId={activeGroupId}
+        isAdmin={user?.role === "admin"}
+      />
+
+      <Dialog.Root
+        open={documentsGroupId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeDocumentsDialog();
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" />
+          <Dialog.Content
+            aria-describedby={undefined}
+            className="fixed left-1/2 top-1/2 z-[80] flex h-[min(720px,calc(100vh-2rem))] w-[min(520px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
+            onPointerDownOutside={closeDocumentsDialog}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <Dialog.Title className="font-display text-[1.5rem] font-semibold tracking-[-0.04em] text-ink">
+                  Group PDFs
+                </Dialog.Title>
+                <p className="mt-2 text-sm leading-6 text-muted">
+                  {documentsGroup ? `PDFs available in ${documentsGroup.name}.` : "PDFs used in this group."}
+                </p>
+              </div>
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
+                  aria-label="Close group PDFs dialog"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </Dialog.Close>
+            </div>
+
+            <div className="mt-5 min-h-0 flex-1 overflow-hidden">
+              <div className="mb-3 flex items-center justify-between px-1">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+                  Documents
+                </p>
+                <Badge>{groupDocuments.length} PDFs</Badge>
+              </div>
+              <div className="h-full space-y-2 overflow-y-auto pr-1 scrollbar-thin">
+                {groupDocuments.map((document) => (
+                  <div
+                    key={document.id}
+                    className="rounded-[22px] border border-line bg-black/[0.02] px-4 py-3"
+                  >
+                    <p className="truncate text-sm font-semibold text-ink">{document.filename}</p>
+                    <p className="mt-1 text-xs uppercase tracking-[0.14em] text-muted">
+                      {document.status}
+                    </p>
+                  </div>
+                ))}
+                {!groupDocuments.length ? (
+                  <div className="rounded-[22px] bg-black/[0.02] px-5 py-5 text-sm text-muted">
+                    No PDFs in this group yet
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root
+        open={deleteGroupTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeDeleteGroupDialog();
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" />
+          <Dialog.Content
+            aria-describedby={undefined}
+            className="fixed left-1/2 top-1/2 z-[80] w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
+            onPointerDownOutside={closeDeleteGroupDialog}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <Dialog.Title className="font-display text-[1.5rem] font-semibold tracking-[-0.04em] text-ink">
+                  Delete group
+                </Dialog.Title>
+                <p className="mt-2 text-sm leading-6 text-muted">
+                  Type <span className="font-semibold text-ink">delete</span> to remove{" "}
+                  <span className="font-semibold text-ink">{deleteGroupTarget?.name ?? "this group"}</span>.
+                </p>
+              </div>
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
+                  aria-label="Close delete group dialog"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </Dialog.Close>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              <Input
+                placeholder='Type "delete"'
+                value={deleteGroupText}
+                onChange={(event) => setDeleteGroupText(event.target.value)}
+              />
+              <div className="flex gap-3">
+                <Dialog.Close asChild>
+                  <Button type="button" variant="secondary" className="flex-1">
+                    Cancel
+                  </Button>
+                </Dialog.Close>
+                <Button
+                  type="button"
+                  variant="danger"
+                  className="flex-1"
+                  disabled={deleteGroupText.trim().toLowerCase() !== "delete" || deletingGroup}
+                  onClick={() => void handleDeleteGroup()}
+                >
+                  {deletingGroup ? "Deleting..." : "Delete group"}
+                </Button>
+              </div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root
+        open={createGroupOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeCreateGroupDialog();
+            return;
+          }
+          setCreateGroupOpen(true);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" />
+          <Dialog.Content
+            aria-describedby={undefined}
+            className="fixed left-1/2 top-1/2 z-[80] w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
+            onPointerDownOutside={closeCreateGroupDialog}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <Dialog.Title className="font-display text-[1.5rem] font-semibold tracking-[-0.04em] text-ink">
+                  Create group
+                </Dialog.Title>
+                <p className="mt-2 text-sm leading-6 text-muted">
+                  Chats will be organized inside this group.
+                </p>
+              </div>
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
+                  aria-label="Close create group dialog"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </Dialog.Close>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              <Input
+                placeholder="Group name"
+                value={groupNameDraft}
+                onChange={(event) => setGroupNameDraft(event.target.value)}
+              />
+              <Button
+                type="button"
+                className="w-full"
+                disabled={!groupNameDraft.trim() || creatingGroup}
+                onClick={() => void handleCreateGroup()}
+              >
+                <Plus className="h-4 w-4" />
+                {creatingGroup ? "Creating..." : "Create group"}
+              </Button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 }

@@ -7,7 +7,9 @@ import type {
   Group,
   GroupAssignment,
   PageData,
+  PromptAttachment,
   User,
+  WelcomePayload,
 } from "@/lib/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
@@ -70,10 +72,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  login(email: string, password: string) {
+  login(identifier: string, password: string) {
     return request<AuthTokenResponse>("/auth/login", {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ identifier, password }),
     });
   },
   register(name: string, email: string, password: string, role = "user") {
@@ -87,6 +89,12 @@ export const api = {
   },
   listUsers() {
     return request<User[]>("/users");
+  },
+  createUser(payload: { username: string; password: string; role?: string }) {
+    return request<User>("/users", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   },
   listGroups() {
     return request<Group[]>("/groups");
@@ -193,5 +201,38 @@ export const api = {
   },
   deleteConversation(conversationId: string) {
     return request<void>(`/conversations/${conversationId}`, { method: "DELETE" });
+  },
+  getWelcome(groupId?: string | null) {
+    const suffix = groupId ? `?group_id=${groupId}` : "";
+    return request<WelcomePayload>(`/chat/welcome${suffix}`);
+  },
+  uploadPromptAttachment(file: File): Promise<PromptAttachment> {
+    const token = getStoredToken();
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${API_URL}/chat/attachments`);
+
+      if (token) {
+        xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+      }
+
+      xhr.onerror = () => reject(new Error("Attachment upload failed"));
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(JSON.parse(xhr.responseText) as PromptAttachment);
+          return;
+        }
+        try {
+          const data = JSON.parse(xhr.responseText) as { detail?: string };
+          reject(new Error(data.detail ?? "Attachment upload failed"));
+        } catch {
+          reject(new Error("Attachment upload failed"));
+        }
+      };
+
+      const formData = new FormData();
+      formData.append("file", file);
+      xhr.send(formData);
+    });
   },
 };
