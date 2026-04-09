@@ -18,6 +18,7 @@ COPY start-prod.sh /code/start-prod.sh
 RUN chmod +x /code/start-prod.sh
 
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/code
 EXPOSE 8000
 
 CMD ["/code/start-prod.sh"]
