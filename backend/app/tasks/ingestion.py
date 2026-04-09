@@ -1,8 +1,8 @@
 """
-Ingestion pipeline: PDF → pages → GLM-OCR → figure captioning → chunking → embedding.
+Resumable ingestion pipeline: PDF -> pages -> OCR -> figure captioning -> chunking -> embedding.
 
-This is the most critical system. Each stage updates the document status so the
-frontend can show progress: splitting → glm_ocr → captioning → embedding → ready.
+Large documents are processed as separate Celery stages so retries can resume from
+persisted database state instead of restarting the whole document.
 """
 import base64
 import json
@@ -31,121 +31,130 @@ if "asyncpg" in _sync_url:
 sync_engine = create_engine(_sync_url)
 SyncSession = sessionmaker(sync_engine)
 
+_UNSET = object()
+_PROGRESS_LOG_INTERVAL = 10
+
 
 def _get_openai_client() -> openai.OpenAI:
     return openai.OpenAI(api_key=settings.openai_api_key)
 
 
 _MATH_TOKEN_RE = re.compile(
-    r"(?i)(\b[a-z]{1,4}\s*=|Δ|α|β|γ|λ|μ|η|ρ|π|Σ|√|\bm/s\b|\bpa\b|\bmbar\b|\bbar\b|\bkw\b|\bw\b|\bkg/s\b|\bm³/h\b|\bm3/h\b|\d+\s*(pa|mbar|bar|kw|w|kg/s|m/s|mm|cm|m³/h|m3/h))"
+    r"(?i)(\b[a-z]{1,4}\s*=|Î”|Î±|Î²|Î³|Î»|Î¼|Î·|Ï|Ï€|Î£|âˆš|\bm/s\b|\bpa\b|\bmbar\b|\bbar\b|\bkw\b|\bw\b|\bkg/s\b|\bmÂ³/h\b|\bm3/h\b|\d+\s*(pa|mbar|bar|kw|w|kg/s|m/s|mm|cm|mÂ³/h|m3/h))"
 )
 _TOC_LINE_RE = re.compile(r"\.{2,}\s*\d{1,3}$")
 
 
-def _update_status(db: Session, doc_id: str, status: str, error: str | None = None):
-    doc = db.query(Document).filter(Document.id == uuid.UUID(doc_id)).first()
-    if doc:
-        doc.status = status
-        if error:
-            doc.error_detail = error
-        db.commit()
-
-
-def _reset_document_processing_state(doc_id: str, db: Session):
-    document_uuid = uuid.UUID(doc_id)
-    db.execute(delete(ChunkEmbedding).where(ChunkEmbedding.chunk_id.in_(
-        db.query(Chunk.id).filter(Chunk.document_id == document_uuid).subquery()
-    )))
-    db.execute(delete(Chunk).where(Chunk.document_id == document_uuid))
-    db.execute(delete(Page).where(Page.document_id == document_uuid))
-    db.commit()
-
-
-# ---- Stage 1: Split PDF into page images ----
-
-
-def _split_pdf(doc_id: str, db: Session) -> list[dict]:
-    """Split PDF into page images, store in S3, create Page records."""
+def _get_document(db: Session, doc_id: str) -> Document:
     doc = db.query(Document).filter(Document.id == uuid.UUID(doc_id)).first()
     if not doc:
         raise ValueError(f"Document {doc_id} not found")
+    return doc
 
-    _reset_document_processing_state(doc_id, db)
 
-    key = f"documents/{doc_id}/original.pdf"
-    pdf_bytes = download_file(key)
-
-    pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    page_count = len(pdf_doc)
-    doc.page_count = page_count
+def _set_document_state(
+    db: Session,
+    doc_id: str,
+    *,
+    status: str | None = None,
+    current_stage: str | None | object = _UNSET,
+    progress_current: int | None | object = _UNSET,
+    progress_total: int | None | object = _UNSET,
+    error_detail: str | None | object = _UNSET,
+):
+    doc = _get_document(db, doc_id)
+    if status is not None:
+        doc.status = status
+    if current_stage is not _UNSET:
+        doc.current_stage = current_stage
+    if progress_current is not _UNSET:
+        doc.progress_current = progress_current
+    if progress_total is not _UNSET:
+        doc.progress_total = progress_total
+    if error_detail is not _UNSET:
+        doc.error_detail = error_detail
     db.commit()
-
-    pages = []
-    for page_num in range(page_count):
-        page = pdf_doc[page_num]
-        # Render at 300 DPI for high-quality OCR
-        mat = fitz.Matrix(300 / 72, 300 / 72)
-        pix = page.get_pixmap(matrix=mat)
-        img_bytes = pix.tobytes("png")
-
-        image_url = upload_page_image(uuid.UUID(doc_id), page_num + 1, img_bytes)
-
-        page_record = Page(
-            document_id=uuid.UUID(doc_id),
-            page_number=page_num + 1,
-            image_url=image_url,
-        )
-        db.add(page_record)
-        db.flush()
-
-        text_page = page.get_textpage()
-        extracted_text = page.get_text("text", textpage=text_page)
-        text_dict = page.get_text("dict", textpage=text_page)
-
-        pages.append({
-            "page_id": str(page_record.id),
-            "page_number": page_num + 1,
-            "image_url": image_url,
-            "image_bytes": img_bytes,
-            "embedded_text": extracted_text,
-            "text_dict": text_dict,
-        })
-
-    db.commit()
-    pdf_doc.close()
-    return pages
+    return doc
 
 
-# ---- Stage 2: GLM-OCR processing ----
+def _start_stage(db: Session, doc_id: str, stage: str, total: int | None = None, current: int = 0):
+    _set_document_state(
+        db,
+        doc_id,
+        status=stage,
+        current_stage=stage,
+        progress_current=current,
+        progress_total=total,
+        error_detail=None,
+    )
 
 
-def _run_glm_ocr(pages: list[dict], doc_id: str, db: Session) -> list[dict]:
-    """Extract embedded text first, with OpenAI vision OCR fallback for weak pages."""
-    results = []
+def _update_progress(db: Session, doc_id: str, current: int, total: int | None = None):
+    _set_document_state(
+        db,
+        doc_id,
+        progress_current=current,
+        progress_total=total if total is not None else _UNSET,
+    )
 
-    for page_data in pages:
-        embedded_text = (page_data.get("embedded_text") or "").strip()
-        if _page_is_searchable(embedded_text):
-            extracted = _extract_searchable_page(page_data)
-        else:
-            logger.info(
-                "[%s] Page %s has weak embedded text, using OpenAI vision fallback",
-                doc_id,
-                page_data["page_number"],
-            )
-            extracted = _run_openai_page_ocr(page_data)
 
-        page = db.query(Page).filter(Page.id == uuid.UUID(page_data["page_id"])).first()
-        if page:
-            page.markdown = extracted["markdown"]
-            page.ocr_text = extracted["ocr_text"]
-            page.regions = extracted["regions"]
-            page.ocr_confidence = extracted["ocr_confidence"]
+def _mark_ready(db: Session, doc_id: str):
+    _set_document_state(
+        db,
+        doc_id,
+        status="ready",
+        current_stage=None,
+        progress_current=None,
+        progress_total=None,
+        error_detail=None,
+    )
 
-        results.append({**page_data, **extracted})
 
-    db.commit()
-    return results
+def _mark_failed(db: Session, doc_id: str, error: str):
+    _set_document_state(
+        db,
+        doc_id,
+        status="failed",
+        current_stage=None,
+        error_detail=error,
+    )
+
+
+def _page_image_key(document_id: str, page_number: int) -> str:
+    return f"documents/{document_id}/pages/{page_number}.png"
+
+
+def _download_page_image(document_id: str, page_number: int) -> bytes:
+    return download_file(_page_image_key(document_id, page_number))
+
+
+def _is_page_split_complete(page: Page) -> bool:
+    return bool(page.image_url)
+
+
+def _is_page_ocr_complete(page: Page) -> bool:
+    return bool(page.markdown and page.ocr_text and page.regions)
+
+
+def _is_page_caption_complete(page: Page) -> bool:
+    regions = page.regions or []
+    for region in regions:
+        if region.get("type") == "figure" and not region.get("description"):
+            return False
+    return True
+
+
+def _document_page_rows(db: Session, doc_id: str) -> list[Page]:
+    return (
+        db.query(Page)
+        .filter(Page.document_id == uuid.UUID(doc_id))
+        .order_by(Page.page_number.asc())
+        .all()
+    )
+
+
+def _progress_log(doc_id: str, stage: str, current: int, total: int):
+    logger.info("[%s] %s progress %s/%s", doc_id, stage, current, total)
 
 
 def _parse_glm_regions(result) -> list[dict]:
@@ -188,7 +197,6 @@ def _parse_glm_regions(result) -> list[dict]:
     return regions
 
 
-# GLM-OCR label → our chunk type mapping
 _LABEL_MAP = {
     "text": "text",
     "paragraph_title": "text",
@@ -220,13 +228,6 @@ _LABEL_MAP = {
 
 def _map_glm_label(label: str) -> str:
     return _LABEL_MAP.get(label, "text")
-
-
-def _estimate_confidence(regions: list[dict]) -> float:
-    if not regions:
-        return 0.0
-    non_empty = sum(1 for r in regions if r.get("content"))
-    return min(non_empty / max(len(regions), 1), 1.0)
 
 
 def _clean_line(text: str) -> str:
@@ -265,9 +266,8 @@ def _merge_bboxes(bboxes: list[list[float]]) -> list[float]:
     ]
 
 
-def _extract_searchable_page(page_data: dict) -> dict:
-    text_dict = page_data.get("text_dict", {})
-    markdown = (page_data.get("embedded_text") or "").strip()
+def _extract_searchable_page(embedded_text: str, text_dict: dict) -> dict:
+    markdown = (embedded_text or "").strip()
     regions = []
 
     for block in text_dict.get("blocks", []):
@@ -353,9 +353,9 @@ def _extract_searchable_page(page_data: dict) -> dict:
     }
 
 
-def _run_openai_page_ocr(page_data: dict) -> dict:
+def _run_openai_page_ocr(image_bytes: bytes) -> dict:
     client = _get_openai_client()
-    img_b64 = base64.b64encode(page_data["image_bytes"]).decode()
+    img_b64 = base64.b64encode(image_bytes).decode()
     response = client.chat.completions.create(
         model="gpt-4o",
         max_tokens=1800,
@@ -423,143 +423,90 @@ def _run_openai_page_ocr(page_data: dict) -> dict:
     }
 
 
-def _fallback_ocr(pages: list[dict], doc_id: str, db: Session) -> list[dict]:
-    """Fallback: use PyMuPDF text extraction when GLM-OCR is unavailable."""
-    key = f"documents/{doc_id}/original.pdf"
-    pdf_bytes = download_file(key)
-    pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+def _caption_page_regions(regions: list[dict], image_bytes: bytes, client: openai.OpenAI) -> bool:
+    updated = False
+    img_b64 = None
 
-    results = []
-    for page_data in pages:
-        page_num = page_data["page_number"] - 1
-        page = pdf_doc[page_num]
-        text = page.get_text()
-
-        page_record = db.query(Page).filter(Page.id == uuid.UUID(page_data["page_id"])).first()
-        if page_record:
-            page_record.ocr_text = text
-            page_record.markdown = text
-            page_record.regions = [{"type": "text", "glm_label": "text", "bbox": [0, 0, 0, 0], "content": text}]
-
-        results.append({**page_data, "markdown": text, "ocr_text": text, "regions": [{"type": "text", "content": text}]})
-
-    db.commit()
-    pdf_doc.close()
-    return results
-
-
-# ---- Stage 3: Figure captioning (OpenAI GPT-4o Vision) ----
-
-
-def _caption_figures(pages: list[dict], doc_id: str, db: Session) -> list[dict]:
-    """Send image/chart regions to GPT-4o Vision for text descriptions."""
-    client = _get_openai_client()
-
-    for page_data in pages:
-        regions = page_data.get("regions", [])
-        updated = False
-
-        for region in regions:
-            if region["type"] != "figure":
-                continue
-            if region.get("description"):
-                continue
-
-            try:
-                img_b64 = base64.b64encode(page_data["image_bytes"]).decode()
-
-                response = client.chat.completions.create(
-                    model="gpt-4o",
-                    max_tokens=300,
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/png;base64,{img_b64}"},
-                            },
-                            {
-                                "type": "text",
-                                "text": (
-                                    f"Describe the figure/chart/diagram in the region at bbox {region['bbox']} "
-                                    "on this page. Be concise and technical. Focus on what data or "
-                                    "relationships the figure shows."
-                                ),
-                            },
-                        ],
-                    }],
-                )
-                region["description"] = response.choices[0].message.content
-                updated = True
-            except Exception as e:
-                logger.error(f"Figure captioning failed: {e}")
-                region["description"] = region.get("content", "")
-
-        if updated:
-            page_record = db.query(Page).filter(Page.id == uuid.UUID(page_data["page_id"])).first()
-            if page_record:
-                page_record.regions = regions
-
-    db.commit()
-    return pages
-
-
-# ---- Stage 4: Variable extraction (LLM post-processing for equations) ----
-
-
-def _extract_variables(pages: list[dict], db: Session):
-    """Post-process equations: map LaTeX variables to definitions using surrounding text."""
-    client = _get_openai_client()
-
-    for page_data in pages:
-        regions = page_data.get("regions", [])
-        equations = [r for r in regions if r["type"] == "equation" and r.get("latex")]
-        if not equations:
+    for region in regions:
+        if region.get("type") != "figure" or region.get("description"):
             continue
 
-        text_context = "\n".join(
-            r.get("content", "") for r in regions if r["type"] == "text" and r.get("content")
-        )
-        if not text_context:
-            continue
+        if img_b64 is None:
+            img_b64 = base64.b64encode(image_bytes).decode()
 
-        for eq in equations:
-            try:
-                response = client.chat.completions.create(
-                    model="gpt-4o",
-                    max_tokens=500,
-                    messages=[{
-                        "role": "user",
-                        "content": (
-                            f"Given this equation in LaTeX: {eq['latex']}\n\n"
-                            f"And this surrounding text context:\n{text_context[:2000]}\n\n"
-                            "Extract the variable definitions as a JSON object where keys are "
-                            "variable names and values are their descriptions with units. "
-                            "Return ONLY the JSON object, no other text."
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            max_tokens=300,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Describe the figure/chart/diagram in the region at bbox {region['bbox']} "
+                            "on this page. Be concise and technical. Focus on what data or "
+                            "relationships the figure shows."
                         ),
-                    }],
-                )
-                text = response.choices[0].message.content.strip()
-                if text.startswith("{"):
-                    eq["variables"] = json.loads(text)
-                elif "{" in text:
-                    json_str = text[text.index("{"):text.rindex("}") + 1]
-                    eq["variables"] = json.loads(json_str)
-            except Exception as e:
-                logger.debug(f"Variable extraction failed for equation: {e}")
+                    },
+                ],
+            }],
+        )
+        region["description"] = response.choices[0].message.content
+        updated = True
 
-        page_record = db.query(Page).filter(Page.id == uuid.UUID(page_data["page_id"])).first()
-        if page_record:
-            page_record.regions = regions
-
-    db.commit()
+    return updated
 
 
-# ---- Stage 5: Chunking ----
+def _extract_variables_for_page(regions: list[dict], text_context: str, client: openai.OpenAI) -> bool:
+    updated = False
+    equations = [r for r in regions if r.get("type") == "equation" and r.get("latex")]
+    if not equations or not text_context:
+        return False
+
+    for equation in equations:
+        if equation.get("variables"):
+            continue
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            max_tokens=500,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Given this equation in LaTeX: {equation['latex']}\n\n"
+                    f"And this surrounding text context:\n{text_context[:2000]}\n\n"
+                    "Extract the variable definitions as a JSON object where keys are "
+                    "variable names and values are their descriptions with units. "
+                    "Return ONLY the JSON object, no other text."
+                ),
+            }],
+        )
+        text = (response.choices[0].message.content or "").strip()
+        if text.startswith("{"):
+            equation["variables"] = json.loads(text)
+            updated = True
+        elif "{" in text and "}" in text:
+            json_str = text[text.index("{"):text.rindex("}") + 1]
+            equation["variables"] = json.loads(json_str)
+            updated = True
+
+    return updated
+
+
+def _page_to_chunk_payload(page: Page) -> dict:
+    return {
+        "page_id": str(page.id),
+        "page_number": page.page_number,
+        "ocr_text": page.ocr_text,
+        "markdown": page.markdown,
+        "regions": page.regions or [],
+    }
 
 
 def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
-    """Create structural chunks from page regions."""
     chunks = []
 
     for page_data in pages:
@@ -570,10 +517,10 @@ def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
         recent_text_context: list[str] = []
 
         for region in regions:
-            if region["type"] == "skip":
+            if region.get("type") == "skip":
                 continue
 
-            if region["type"] == "text":
+            if region.get("type") == "text":
                 content = (region.get("content") or "").strip()
                 if not content:
                     continue
@@ -591,7 +538,7 @@ def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
                 recent_text_context = recent_text_context[-2:]
                 continue
 
-            if region["type"] == "equation":
+            if region.get("type") == "equation":
                 context_before = "\n".join(recent_text_context[-2:]) if recent_text_context else ""
                 content = region.get("latex", region.get("content", ""))
                 if context_before:
@@ -609,8 +556,9 @@ def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
                 )
                 db.add(chunk)
                 chunks.append(chunk)
+                continue
 
-            elif region["type"] == "table":
+            if region.get("type") == "table":
                 content = region.get("content_markdown", region.get("content", ""))
                 chunk = Chunk(
                     document_id=uuid.UUID(doc_id),
@@ -622,8 +570,9 @@ def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
                 )
                 db.add(chunk)
                 chunks.append(chunk)
+                continue
 
-            elif region["type"] == "figure":
+            if region.get("type") == "figure":
                 content = region.get("description", region.get("content", ""))
                 caption = region.get("caption", "")
                 if caption:
@@ -640,10 +589,9 @@ def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
                     db.add(chunk)
                     chunks.append(chunk)
 
-        # Full-page chunk as fallback
         page_text = page_data.get("ocr_text", page_data.get("markdown", ""))
         if page_text and page_text.strip():
-            all_bboxes = [r.get("bbox", [0, 0, 0, 0]) for r in regions if r["type"] != "skip"]
+            all_bboxes = [r.get("bbox", [0, 0, 0, 0]) for r in regions if r.get("type") != "skip"]
             chunk = Chunk(
                 document_id=uuid.UUID(doc_id),
                 page_id=uuid.UUID(page_id),
@@ -659,93 +607,244 @@ def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
     return chunks
 
 
-# ---- Stage 6: Generate embeddings ----
-
-
-def _generate_embeddings(chunks: list[Chunk], db: Session):
-    """Generate embeddings for all chunks using OpenAI text-embedding-3-large."""
-    client = _get_openai_client()
-
-    batch_size = 100
-    for i in range(0, len(chunks), batch_size):
-        batch = chunks[i : i + batch_size]
-        texts = [c.content_text[:8000] for c in batch]
-
-        try:
-            response = client.embeddings.create(
-                model=settings.embedding_model,
-                input=texts,
-                dimensions=settings.embedding_dimensions,
-            )
-
-            for j, embedding_data in enumerate(response.data):
-                emb = ChunkEmbedding(
-                    chunk_id=batch[j].id,
-                    embedding=embedding_data.embedding,
-                )
-                db.add(emb)
-
-        except Exception as e:
-            logger.error(f"Embedding generation failed for batch {i}: {e}")
-            raise
-
+def _reset_embeddings_and_chunks(doc_id: str, db: Session):
+    document_uuid = uuid.UUID(doc_id)
+    db.execute(delete(ChunkEmbedding).where(ChunkEmbedding.chunk_id.in_(
+        db.query(Chunk.id).filter(Chunk.document_id == document_uuid).subquery()
+    )))
+    db.execute(delete(Chunk).where(Chunk.document_id == document_uuid))
     db.commit()
 
 
-# ---- Main pipeline task ----
+def _generate_embeddings(chunks: list[Chunk], db: Session, doc_id: str):
+    client = _get_openai_client()
+    total = len(chunks)
+    _update_progress(db, doc_id, 0, total)
+
+    batch_size = 100
+    completed = 0
+    for i in range(0, len(chunks), batch_size):
+        batch = chunks[i : i + batch_size]
+        texts = [c.content_text[:8000] for c in batch]
+        response = client.embeddings.create(
+            model=settings.embedding_model,
+            input=texts,
+            dimensions=settings.embedding_dimensions,
+        )
+
+        for j, embedding_data in enumerate(response.data):
+            emb = ChunkEmbedding(
+                chunk_id=batch[j].id,
+                embedding=embedding_data.embedding,
+            )
+            db.add(emb)
+        db.commit()
+
+        completed += len(batch)
+        _update_progress(db, doc_id, completed, total)
+        if completed == total or completed % _PROGRESS_LOG_INTERVAL == 0:
+            _progress_log(doc_id, "embedding", completed, total)
+
+
+@celery_app.task
+def process_document(doc_id: str):
+    """Entry-point task kept for compatibility with the API."""
+    split_document.delay(doc_id)
 
 
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=60)
-def process_document(self, doc_id: str):
-    """
-    Main ingestion pipeline. Processes a PDF through all stages:
-    splitting → glm_ocr → captioning → embedding → ready
-    """
+def split_document(self, doc_id: str):
+    db = SyncSession()
+    pdf_doc = None
+    try:
+        logger.info("[%s] Stage 1: Splitting PDF into pages", doc_id)
+        doc = _get_document(db, doc_id)
+        key = f"documents/{doc_id}/original.pdf"
+        pdf_bytes = download_file(key)
+
+        pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        page_count = len(pdf_doc)
+        doc.page_count = page_count
+        db.commit()
+
+        existing_pages = {page.page_number: page for page in _document_page_rows(db, doc_id)}
+        completed = sum(1 for page in existing_pages.values() if _is_page_split_complete(page))
+        _start_stage(db, doc_id, "splitting", total=page_count, current=completed)
+
+        for index in range(page_count):
+            page_number = index + 1
+            page_record = existing_pages.get(page_number)
+            if page_record and _is_page_split_complete(page_record):
+                continue
+
+            page = pdf_doc[index]
+            mat = fitz.Matrix(300 / 72, 300 / 72)
+            pix = page.get_pixmap(matrix=mat)
+            img_bytes = pix.tobytes("png")
+            image_url = upload_page_image(uuid.UUID(doc_id), page_number, img_bytes)
+
+            if page_record is None:
+                page_record = Page(
+                    document_id=uuid.UUID(doc_id),
+                    page_number=page_number,
+                    image_url=image_url,
+                )
+                db.add(page_record)
+                existing_pages[page_number] = page_record
+            else:
+                page_record.image_url = image_url
+            db.commit()
+
+            completed += 1
+            _update_progress(db, doc_id, completed, page_count)
+            if completed == page_count or completed % _PROGRESS_LOG_INTERVAL == 0:
+                _progress_log(doc_id, "splitting", completed, page_count)
+
+        logger.info("[%s] Split complete: %s pages", doc_id, page_count)
+        run_ocr_stage.delay(doc_id)
+    except Exception as exc:
+        logger.error("[%s] Split failed: %s", doc_id, exc)
+        _mark_failed(db, doc_id, str(exc))
+        raise self.retry(exc=exc)
+    finally:
+        if pdf_doc is not None:
+            pdf_doc.close()
+        db.close()
+
+
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=60)
+def run_ocr_stage(self, doc_id: str):
+    db = SyncSession()
+    pdf_doc = None
+    try:
+        logger.info("[%s] Stage 2: Extracting text with OCR fallback", doc_id)
+        pages = _document_page_rows(db, doc_id)
+        total = len(pages)
+        if total == 0:
+            split_document.delay(doc_id)
+            return
+
+        completed = sum(1 for page in pages if _is_page_ocr_complete(page))
+        _start_stage(db, doc_id, "glm_ocr", total=total, current=completed)
+
+        pdf_bytes = download_file(f"documents/{doc_id}/original.pdf")
+        pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+        for page in pages:
+            if _is_page_ocr_complete(page):
+                continue
+
+            pdf_page = pdf_doc[page.page_number - 1]
+            text_page = pdf_page.get_textpage()
+            embedded_text = pdf_page.get_text("text", textpage=text_page)
+            text_dict = pdf_page.get_text("dict", textpage=text_page)
+            image_bytes = _download_page_image(doc_id, page.page_number)
+
+            if _page_is_searchable((embedded_text or "").strip()):
+                extracted = _extract_searchable_page(embedded_text, text_dict)
+            else:
+                logger.info(
+                    "[%s] Page %s has weak embedded text, using OpenAI vision fallback",
+                    doc_id,
+                    page.page_number,
+                )
+                extracted = _run_openai_page_ocr(image_bytes)
+
+            page.markdown = extracted["markdown"]
+            page.ocr_text = extracted["ocr_text"]
+            page.regions = extracted["regions"]
+            page.ocr_confidence = extracted["ocr_confidence"]
+            db.commit()
+
+            completed += 1
+            _update_progress(db, doc_id, completed, total)
+            if completed == total or completed % _PROGRESS_LOG_INTERVAL == 0:
+                _progress_log(doc_id, "glm_ocr", completed, total)
+
+        logger.info("[%s] OCR complete", doc_id)
+        caption_document.delay(doc_id)
+    except Exception as exc:
+        logger.error("[%s] OCR failed: %s", doc_id, exc)
+        _mark_failed(db, doc_id, str(exc))
+        raise self.retry(exc=exc)
+    finally:
+        if pdf_doc is not None:
+            pdf_doc.close()
+        db.close()
+
+
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=60)
+def caption_document(self, doc_id: str):
     db = SyncSession()
     try:
-        # Stage 1: Split PDF into pages
-        logger.info(f"[{doc_id}] Stage 1: Splitting PDF into pages")
-        _update_status(db, doc_id, "splitting")
-        pages = _split_pdf(doc_id, db)
-        logger.info(f"[{doc_id}] Split into {len(pages)} pages")
+        logger.info("[%s] Stage 3: Captioning figures and extracting variables", doc_id)
+        pages = _document_page_rows(db, doc_id)
+        total = len(pages)
+        completed = sum(1 for page in pages if _is_page_caption_complete(page))
+        _start_stage(db, doc_id, "captioning", total=total, current=completed)
 
-        # Stage 2: embedded text extraction with OCR fallback
-        logger.info(f"[{doc_id}] Stage 2: Extracting text with OCR fallback")
-        _update_status(db, doc_id, "glm_ocr")
-        pages = _run_glm_ocr(pages, doc_id, db)
+        client = _get_openai_client()
+        for page in pages:
+            if _is_page_caption_complete(page):
+                continue
 
-        # Stage 3: Figure captioning
-        logger.info(f"[{doc_id}] Stage 3: Captioning figures")
-        _update_status(db, doc_id, "captioning")
-        pages = _caption_figures(pages, doc_id, db)
+            regions = list(page.regions or [])
+            needs_image = any(region.get("type") == "figure" and not region.get("description") for region in regions)
+            image_bytes = _download_page_image(doc_id, page.page_number) if needs_image else b""
 
-        # Stage 3b: Variable extraction for equations
-        logger.info(f"[{doc_id}] Stage 3b: Extracting variables from equations")
-        _extract_variables(pages, db)
+            updated = False
+            if needs_image:
+                updated = _caption_page_regions(regions, image_bytes, client) or updated
+            updated = _extract_variables_for_page(regions, page.ocr_text or page.markdown or "", client) or updated
 
-        # Stage 4: Chunking
-        logger.info(f"[{doc_id}] Stage 4: Creating chunks")
-        _update_status(db, doc_id, "embedding")
+            if updated:
+                page.regions = regions
+                db.commit()
 
-        # Free memory
-        for p in pages:
-            p.pop("image_bytes", None)
+            completed += 1
+            _update_progress(db, doc_id, completed, total)
+            if completed == total or completed % _PROGRESS_LOG_INTERVAL == 0:
+                _progress_log(doc_id, "captioning", completed, total)
 
-        chunks = _create_chunks(pages, doc_id, db)
-        logger.info(f"[{doc_id}] Created {len(chunks)} chunks")
+        logger.info("[%s] Captioning complete", doc_id)
+        embed_document.delay(doc_id)
+    except Exception as exc:
+        logger.error("[%s] Captioning failed: %s", doc_id, exc)
+        _mark_failed(db, doc_id, str(exc))
+        raise self.retry(exc=exc)
+    finally:
+        db.close()
 
-        # Stage 5: Embeddings
-        logger.info(f"[{doc_id}] Stage 5: Generating embeddings")
-        _generate_embeddings(chunks, db)
 
-        # Done
-        _update_status(db, doc_id, "ready")
-        logger.info(f"[{doc_id}] Ingestion complete: {len(pages)} pages, {len(chunks)} chunks")
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=60)
+def embed_document(self, doc_id: str):
+    db = SyncSession()
+    try:
+        logger.info("[%s] Stage 4: Creating chunks and generating embeddings", doc_id)
+        pages = _document_page_rows(db, doc_id)
+        if not pages:
+            split_document.delay(doc_id)
+            return
 
-    except Exception as e:
-        logger.error(f"[{doc_id}] Ingestion failed: {e}")
-        _update_status(db, doc_id, "failed", str(e))
-        db.rollback()
-        raise self.retry(exc=e)
+        _start_stage(db, doc_id, "embedding", total=len(pages), current=0)
+        _reset_embeddings_and_chunks(doc_id, db)
+
+        page_payloads = []
+        for index, page in enumerate(pages, start=1):
+            page_payloads.append(_page_to_chunk_payload(page))
+            _update_progress(db, doc_id, index, len(pages))
+            if index == len(pages) or index % _PROGRESS_LOG_INTERVAL == 0:
+                _progress_log(doc_id, "embedding", index, len(pages))
+
+        chunks = _create_chunks(page_payloads, doc_id, db)
+        logger.info("[%s] Created %s chunks", doc_id, len(chunks))
+        _generate_embeddings(chunks, db, doc_id)
+
+        _mark_ready(db, doc_id)
+        logger.info("[%s] Ingestion complete: %s pages, %s chunks", doc_id, len(pages), len(chunks))
+    except Exception as exc:
+        logger.error("[%s] Embedding failed: %s", doc_id, exc)
+        _mark_failed(db, doc_id, str(exc))
+        raise self.retry(exc=exc)
     finally:
         db.close()

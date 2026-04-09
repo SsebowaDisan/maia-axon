@@ -13,6 +13,9 @@ class DocumentResponse(BaseModel):
     file_size_bytes: int | None
     page_count: int | None
     status: str
+    current_stage: str | None
+    progress_current: int | None
+    progress_total: int | None
     error_detail: str | None
     uploaded_by: UUID
     created_at: datetime
@@ -24,6 +27,9 @@ class DocumentResponse(BaseModel):
 class DocumentStatusResponse(BaseModel):
     id: UUID
     status: str
+    current_stage: str | None
+    progress_current: int | None
+    progress_total: int | None
     page_count: int | None
     error_detail: str | None
 

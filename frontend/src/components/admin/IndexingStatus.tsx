@@ -4,7 +4,7 @@ import { AlertTriangle, CheckCircle2, Loader2, RotateCcw, Upload } from "lucide-
 
 import { Button } from "@/components/ui/button";
 import type { Document, DocumentStatusValue } from "@/lib/types";
-import { formatBytes, statusLabel } from "@/lib/utils";
+import { documentProgressLabel, formatBytes, statusLabel } from "@/lib/utils";
 import { useDocumentStore } from "@/stores/documentStore";
 
 const iconByStatus: Record<DocumentStatusValue, React.ComponentType<{ className?: string }>> = {
@@ -31,9 +31,14 @@ export function IndexingStatus({
   const statusOverride = useDocumentStore((state) => state.documentStatuses[document.id]);
 
   const status = statusOverride?.status ?? document.status;
+  const progressCurrent = statusOverride?.progress_current ?? document.progress_current;
+  const progressTotal = statusOverride?.progress_total ?? document.progress_total;
+  const currentStage = statusOverride?.current_stage ?? document.current_stage;
+  const errorDetail = statusOverride?.error_detail ?? document.error_detail;
   const Icon = iconByStatus[status];
   const isProcessing = !["ready", "failed"].includes(status);
   const isPreviewable = status === "ready" && (document.page_count ?? 0) > 0 && !!onOpen;
+  const progressLabel = documentProgressLabel(progressCurrent, progressTotal);
 
   return (
     <div className="rounded-[24px] border border-line bg-panel/80 p-4">
@@ -67,7 +72,12 @@ export function IndexingStatus({
           {statusLabel(status)}
         </div>
       </div>
-      {document.error_detail ? <p className="mt-2 text-xs text-danger">{document.error_detail}</p> : null}
+      {isProcessing && progressLabel ? (
+        <p className="mt-2 text-xs text-muted">
+          {statusLabel((currentStage ?? status) as DocumentStatusValue)} · {progressLabel}
+        </p>
+      ) : null}
+      {errorDetail ? <p className="mt-2 text-xs text-danger">{errorDetail}</p> : null}
       <div className="mt-4 flex items-center gap-2">
         {status === "failed" ? (
           <Button

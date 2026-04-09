@@ -41,6 +41,9 @@ export interface Document {
   file_size_bytes: number | null;
   page_count: number | null;
   status: DocumentStatusValue;
+  current_stage: DocumentStatusValue | null;
+  progress_current: number | null;
+  progress_total: number | null;
   error_detail: string | null;
   uploaded_by: string;
   created_at: string;
@@ -59,6 +62,9 @@ export type DocumentStatusValue =
 export interface DocumentStatus {
   id: string;
   status: DocumentStatusValue;
+  current_stage: DocumentStatusValue | null;
+  progress_current: number | null;
+  progress_total: number | null;
   page_count: number | null;
   error_detail: string | null;
 }

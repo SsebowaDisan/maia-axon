@@ -97,6 +97,9 @@ def _create_document_record(group_id: UUID, filename: str, file_size_bytes: int,
         file_url="",
         file_size_bytes=file_size_bytes,
         status="uploading",
+        current_stage="uploading",
+        progress_current=0,
+        progress_total=None,
         uploaded_by=uploaded_by,
     )
     return doc
@@ -150,6 +153,9 @@ async def upload_document(
     file_url = upload_pdf(doc.id, content)
     doc.file_url = file_url
     doc.status = "splitting"
+    doc.current_stage = "splitting"
+    doc.progress_current = 0
+    doc.progress_total = None
     await db.flush()
     await db.refresh(doc)
 
@@ -227,6 +233,9 @@ async def complete_document_upload(
     doc.file_size_bytes = metadata.get("size") or doc.file_size_bytes
     doc.file_url = get_file_url(f"documents/{document_id}/original.pdf")
     doc.status = "splitting"
+    doc.current_stage = "splitting"
+    doc.progress_current = 0
+    doc.progress_total = None
     doc.error_detail = None
     await db.flush()
     await db.refresh(doc)
@@ -261,7 +270,13 @@ async def get_document_status(
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return DocumentStatusResponse(
-        id=doc.id, status=doc.status, page_count=doc.page_count, error_detail=doc.error_detail
+        id=doc.id,
+        status=doc.status,
+        current_stage=doc.current_stage,
+        progress_current=doc.progress_current,
+        progress_total=doc.progress_total,
+        page_count=doc.page_count,
+        error_detail=doc.error_detail,
     )
 
 
@@ -295,13 +310,22 @@ async def reindex_document(
         raise HTTPException(status_code=404, detail="Document not found")
 
     doc.status = "splitting"
+    doc.current_stage = "splitting"
+    doc.progress_current = 0
+    doc.progress_total = None
     doc.error_detail = None
     await db.flush()
 
     process_document.delay(str(doc.id))
 
     return DocumentStatusResponse(
-        id=doc.id, status=doc.status, page_count=doc.page_count, error_detail=None
+        id=doc.id,
+        status=doc.status,
+        current_stage=doc.current_stage,
+        progress_current=doc.progress_current,
+        progress_total=doc.progress_total,
+        page_count=doc.page_count,
+        error_detail=None,
     )
 
 

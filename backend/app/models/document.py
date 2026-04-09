@@ -20,6 +20,13 @@ DOCUMENT_STATUSES = (
     "failed",
 )
 
+DOCUMENT_ACTIVE_STAGES = (
+    "splitting",
+    "glm_ocr",
+    "captioning",
+    "embedding",
+)
+
 
 class Document(Base):
     __tablename__ = "documents"
@@ -35,6 +42,9 @@ class Document(Base):
     file_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="uploading")
+    current_stage: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    progress_current: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    progress_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     uploaded_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False

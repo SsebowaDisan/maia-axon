@@ -75,6 +75,14 @@ export function statusLabel(status: DocumentStatusValue) {
   }
 }
 
+export function documentProgressLabel(current?: number | null, total?: number | null) {
+  if (!total || total <= 0) {
+    return null;
+  }
+  const safeCurrent = Math.min(current ?? 0, total);
+  return `${safeCurrent}/${total}`;
+}
+
 export function transformCitationLinks(content: string, citations: Citation[]) {
   const toCitationLink = (rawNumber: string) => {
     const index = Number(rawNumber) - 1;
