@@ -63,6 +63,9 @@ export function DocumentUploader({ groupId }: { groupId: string | null }) {
       if (!groupId) {
         return;
       }
+      if (files.length > 0) {
+        setUploadDialogOpen(false);
+      }
       files.forEach((file) => {
         void uploadDocument(groupId, file);
       });
