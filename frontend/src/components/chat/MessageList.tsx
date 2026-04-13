@@ -29,18 +29,52 @@ function buildWelcomeMarkdown(introMarkdown: string) {
 }
 
 export function MessageList({ messages }: { messages: ChatMessage[] }) {
+  const streaming = useChatStore((state) => state.streaming);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const [isPinnedToBottom, setIsPinnedToBottom] = useState(true);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages]);
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+
+    const handleScroll = () => {
+      const nearBottom =
+        container.scrollTop + container.clientHeight >= container.scrollHeight - 72;
+      setIsPinnedToBottom(nearBottom);
+    };
+
+    handleScroll();
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      container.removeEventListener("scroll", handleScroll);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isPinnedToBottom) {
+      return;
+    }
+
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: streaming ? "auto" : "smooth",
+    });
+  }, [isPinnedToBottom, messages, streaming]);
 
   if (!messages.length) {
     return <WelcomeCanvas />;
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1220px] flex-col gap-12 px-2 pb-10 pt-2 md:px-4">
+    <div ref={containerRef} className="mx-auto flex w-full max-w-[1220px] flex-col gap-12 overflow-y-auto px-2 pb-10 pt-2 md:px-4">
       {messages.map((message) => (
         <MessageBubble key={message.id} message={message} />
       ))}

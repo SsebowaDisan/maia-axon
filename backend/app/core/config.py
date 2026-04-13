@@ -41,8 +41,12 @@ class Settings(BaseSettings):
     embedding_dimensions: int = 1536
 
     # Retrieval
-    retrieval_top_k: int = 10
-    rerank_top_k: int = 5
+    retrieval_top_k: int = 80
+    rerank_top_k: int = 12
+    llm_rerank_candidate_k: int = 24
+    neighbor_window_pages: int = 1
+    neighbor_chunks_per_hit: int = 2
+    answer_context_top_k: int = 24
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

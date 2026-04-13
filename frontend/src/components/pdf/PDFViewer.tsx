@@ -10,8 +10,18 @@ import { api } from "@/lib/api";
 import type { PageData } from "@/lib/types";
 import { usePDFViewerStore } from "@/stores/pdfViewerStore";
 
+const INITIAL_PAGE_WINDOW = 4;
+const PAGE_BATCH = 4;
+
 function pageKey(documentId: string, pageNumber: number) {
   return `${documentId}:${pageNumber}`;
+}
+
+function buildInitialWindow(currentPage: number, pageCount: number | null) {
+  const total = Math.max(pageCount ?? currentPage, 1);
+  const start = Math.max(1, currentPage);
+  const end = Math.min(total, Math.max(currentPage, start + INITIAL_PAGE_WINDOW - 1));
+  return { start, end };
 }
 
 export function PDFViewer() {
@@ -24,16 +34,17 @@ export function PDFViewer() {
   const loading = usePDFViewerStore((state) => state.loading);
   const clearHighlights = usePDFViewerStore((state) => state.clearHighlights);
   const [pageCache, setPageCache] = useState<Record<string, PageData>>({});
-  const [visiblePages, setVisiblePages] = useState(0);
+  const [visibleRange, setVisibleRange] = useState({ start: 1, end: 0 });
   const activeDocumentIdRef = useRef<string | null>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const lastScrollTargetRef = useRef<string | null>(null);
 
   const loadPages = useCallback(
-    async (documentId: string, targetPages: number) => {
+    async (documentId: string, startPage: number, endPage: number) => {
       const missingPages: number[] = [];
 
-      for (let pageNumber = 1; pageNumber <= targetPages; pageNumber += 1) {
+      for (let pageNumber = startPage; pageNumber <= endPage; pageNumber += 1) {
         if (!pageCache[pageKey(documentId, pageNumber)]) {
           missingPages.push(pageNumber);
         }
@@ -64,7 +75,7 @@ export function PDFViewer() {
   useEffect(() => {
     if (!currentDocument) {
       setPageCache({});
-      setVisiblePages(0);
+      setVisibleRange({ start: 1, end: 0 });
       activeDocumentIdRef.current = null;
       lastScrollTargetRef.current = null;
       return;
@@ -84,43 +95,43 @@ export function PDFViewer() {
       }));
     }
 
-    setVisiblePages(
-      currentDocument.page_count
-        ? Math.min(Math.max(currentPage, 6), currentDocument.page_count)
-        : Math.max(currentPage, 1),
-    );
+    setVisibleRange(buildInitialWindow(currentPage, currentDocument.page_count));
     lastScrollTargetRef.current = null;
   }, [currentDocument, currentPage, pageData]);
 
   useEffect(() => {
-    if (!currentDocument || visiblePages === 0) {
+    if (!currentDocument || visibleRange.end < visibleRange.start) {
       return;
     }
 
-    void loadPages(currentDocument.id, visiblePages);
-  }, [currentDocument, loadPages, visiblePages]);
+    void loadPages(currentDocument.id, visibleRange.start, visibleRange.end);
+  }, [currentDocument, loadPages, visibleRange]);
 
   const loadedPages = useMemo(() => {
-    if (!currentDocument || visiblePages === 0) {
+    if (!currentDocument || visibleRange.end < visibleRange.start) {
       return [];
     }
 
     const pages: Array<{ pageNumber: number; pageData: PageData | null }> = [];
-    for (let pageNumber = 1; pageNumber <= visiblePages; pageNumber += 1) {
+    for (let pageNumber = visibleRange.start; pageNumber <= visibleRange.end; pageNumber += 1) {
       pages.push({
         pageNumber,
         pageData: pageCache[pageKey(currentDocument.id, pageNumber)] ?? null,
       });
     }
     return pages;
-  }, [currentDocument, pageCache, visiblePages]);
+  }, [currentDocument, pageCache, visibleRange]);
 
   useEffect(() => {
     if (!currentDocument) {
       return;
     }
 
-    const targetKey = `${currentDocument.id}:${currentPage}`;
+    const highlightKey = highlights
+      .map((citation) => citation.id)
+      .sort()
+      .join(",");
+    const targetKey = `${currentDocument.id}:${currentPage}:${highlightKey}`;
     if (lastScrollTargetRef.current === targetKey) {
       return;
     }
@@ -130,9 +141,42 @@ export function PDFViewer() {
       return;
     }
 
-    target.scrollIntoView({ block: "center", behavior: "smooth" });
-    lastScrollTargetRef.current = targetKey;
-  }, [currentDocument, currentPage, loadedPages]);
+    let attempts = 0;
+    const maxAttempts = 24;
+
+    const scrollToEvidence = () => {
+      const pageElement = pageRefs.current[currentPage];
+      if (!pageElement) {
+        return;
+      }
+
+      const highlightAnchor = pageElement.querySelector<HTMLElement>('[data-highlight-anchor="true"]');
+      if (highlightAnchor && scrollContainerRef.current) {
+        const containerRect = scrollContainerRef.current.getBoundingClientRect();
+        const anchorRect = highlightAnchor.getBoundingClientRect();
+        const delta = anchorRect.top - containerRect.top - scrollContainerRef.current.clientHeight / 2;
+        scrollContainerRef.current.scrollTo({
+          top: scrollContainerRef.current.scrollTop + delta,
+          behavior: "smooth",
+        });
+        lastScrollTargetRef.current = targetKey;
+        return;
+      }
+
+      if (attempts === 0) {
+        pageElement.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+
+      attempts += 1;
+      if (attempts < maxAttempts) {
+        window.setTimeout(scrollToEvidence, 80);
+      } else {
+        lastScrollTargetRef.current = targetKey;
+      }
+    };
+
+    scrollToEvidence();
+  }, [currentDocument, currentPage, highlights, loadedPages]);
 
   if (currentWebCitation) {
     return (
@@ -212,6 +256,7 @@ export function PDFViewer() {
         </button>
       </div>
       <div
+        ref={scrollContainerRef}
         className="min-h-0 flex-1 overflow-y-auto p-4 scrollbar-thin"
         onScroll={(event) => {
           if (!currentDocument.page_count) {
@@ -219,8 +264,11 @@ export function PDFViewer() {
           }
           const target = event.currentTarget;
           const nearBottom = target.scrollTop + target.clientHeight >= target.scrollHeight - 320;
-          if (nearBottom && visiblePages < currentDocument.page_count) {
-            setVisiblePages((current) => Math.min(current + 6, currentDocument.page_count ?? current + 6));
+          if (nearBottom && visibleRange.end < currentDocument.page_count) {
+            setVisibleRange((current) => ({
+              start: current.start,
+              end: Math.min(current.end + PAGE_BATCH, currentDocument.page_count ?? current.end + PAGE_BATCH),
+            }));
           }
         }}
       >

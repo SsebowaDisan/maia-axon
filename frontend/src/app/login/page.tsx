@@ -11,17 +11,23 @@ import { useAuthStore } from "@/stores/authStore";
 export default function LoginPage() {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
+  const isHydrated = useAuthStore((state) => state.isHydrated);
   const login = useAuthStore((state) => state.login);
+  const bootstrap = useAuthStore((state) => state.bootstrap);
   const isLoading = useAuthStore((state) => state.isLoading);
   const error = useAuthStore((state) => state.error);
   const [identifier, setIdentifier] = useState("admin");
   const [password, setPassword] = useState("admin");
 
   useEffect(() => {
-    if (user) {
+    void bootstrap();
+  }, [bootstrap]);
+
+  useEffect(() => {
+    if (isHydrated && !isLoading && user) {
       router.replace("/");
     }
-  }, [router, user]);
+  }, [isHydrated, isLoading, router, user]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();

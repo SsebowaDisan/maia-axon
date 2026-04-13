@@ -28,12 +28,14 @@ export const useAuthStore = create<AuthState>()(
       error: null,
       setHydrated: () => set({ isHydrated: true }),
       async bootstrap() {
+        set({ isLoading: true });
+
         if (!get().token) {
-          set({ isHydrated: true });
+          set({ isHydrated: true, isLoading: false });
           return;
         }
 
-        set({ isLoading: true, error: null });
+        set({ error: null });
         try {
           const user = await api.me();
           set({ user, isHydrated: true });
@@ -81,7 +83,9 @@ export const useAuthStore = create<AuthState>()(
       name: "maia-axon-auth",
       partialize: (state) => ({ token: state.token, user: state.user }),
       onRehydrateStorage: () => (state) => {
-        state?.setHydrated();
+        if (!state?.token) {
+          state?.setHydrated();
+        }
       },
     },
   ),

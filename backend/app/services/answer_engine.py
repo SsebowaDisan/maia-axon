@@ -57,7 +57,7 @@ STRUCTURED_RESPONSE_GUIDANCE = (
     "Write mathematical formulas, equations, and expressions as proper LaTeX math using inline $...$ or display $$...$$ notation. "
     "Do not leave equations as raw backslash text or plain prose when they can be formatted as math. "
     "Do not invent document facts or citations. "
-    "Attach inline citations as [N] immediately after the factual sentence or clause they support."
+    "Attach inline citations as numbered references like [1], [2], or [3] immediately after the factual sentence or clause they support."
 )
 
 
@@ -234,6 +234,9 @@ def _build_citations(results: list[RetrievalResult]) -> list[Citation]:
 
 def _normalize_inline_citation_labels(text: str) -> str:
     normalized = text
+    normalized = re.sub(r"\[(?:N|n)\]", "[1]", normalized)
+    normalized = re.sub(r"\((?:N|n)\)", "[1]", normalized)
+    normalized = re.sub(r"\bSource\s+(?:N|n)\b", "[1]", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"\[Source\s+(\d+)\]", r"[\1]", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"\(Source\s+(\d+)\)", r"[\1]", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"(?<!\[)\bSource\s+(\d+)\b", r"[\1]", normalized, flags=re.IGNORECASE)
@@ -276,6 +279,44 @@ def ensure_inline_citation_references(text: str, citations: list[Citation], max_
         return f"{head} {refs}{tail}"
 
     return f"{stripped} {refs}"
+
+
+def _reindex_citation_references(
+    text: str,
+    citations: list[Citation],
+    used_source_indices: list[int] | None,
+) -> tuple[str, list[Citation]]:
+    if not citations:
+        return text, citations
+
+    if not used_source_indices:
+        return text, citations
+
+    ordered_unique = []
+    seen: set[int] = set()
+    for raw_index in used_source_indices:
+        try:
+            index = int(raw_index)
+        except Exception:
+            continue
+        if index < 1 or index > len(citations) or index in seen:
+            continue
+        seen.add(index)
+        ordered_unique.append(index)
+
+    if not ordered_unique:
+        return text, citations
+
+    index_map = {old_index: new_index for new_index, old_index in enumerate(ordered_unique, start=1)}
+    remapped_text = text
+    for old_index, new_index in sorted(index_map.items(), reverse=True):
+        remapped_text = re.sub(rf"\[Source\s+{old_index}\]", f"[{new_index}]", remapped_text, flags=re.IGNORECASE)
+        remapped_text = re.sub(rf"\(Source\s+{old_index}\)", f"[{new_index}]", remapped_text, flags=re.IGNORECASE)
+        remapped_text = re.sub(rf"(?<!\[)\bSource\s+{old_index}\b", f"[{new_index}]", remapped_text, flags=re.IGNORECASE)
+        remapped_text = re.sub(rf"\[{old_index}\]", f"[{new_index}]", remapped_text)
+
+    remapped_citations = [citations[old_index - 1] for old_index in ordered_unique]
+    return remapped_text, remapped_citations
 
 
 def _sanitize_conversation_title(title: str, fallback_query: str) -> str:
@@ -500,6 +541,67 @@ def _format_sources_for_prompt(results: list[RetrievalResult]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _verify_grounded_answer(
+    *,
+    query: str,
+    answer_text: str,
+    sources: list[RetrievalResult],
+    search_mode: str,
+) -> tuple[list[int], list[str]]:
+    if not sources or not answer_text.strip():
+        return [], []
+
+    client = _get_client()
+    verification_sources = _format_sources_for_prompt(sources)
+    mode_policy = (
+        "In Library mode, keep only claims that are directly supported by the provided PDF sources."
+        if search_mode == "library"
+        else "In Deep Search mode, keep only claims that are directly supported by the provided PDF or web sources."
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=500,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a grounding verifier. "
+                        f"{mode_policy} "
+                        "Return valid JSON with keys verified_sources and unsupported_claims. "
+                        "verified_sources must be an array of source numbers that truly support the answer text. "
+                        "unsupported_claims must be an array of short claim summaries that are not adequately supported. "
+                        "Be strict. Do not include weakly related sources."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"QUESTION:\n{query}\n\n"
+                        f"ANSWER:\n{answer_text}\n\n"
+                        f"SOURCES:\n{verification_sources}"
+                    ),
+                },
+            ],
+        )
+        payload = json.loads(response.choices[0].message.content or "{}")
+        verified_sources = [
+            int(item)
+            for item in payload.get("verified_sources", [])
+            if str(item).strip().isdigit()
+        ]
+        unsupported_claims = [
+            str(item).strip()
+            for item in payload.get("unsupported_claims", [])
+            if str(item).strip()
+        ]
+        return verified_sources, unsupported_claims
+    except Exception:
+        return [], []
+
+
 # ---- Intent Classification ----
 
 
@@ -707,12 +809,23 @@ def qa_agent(
     query: str,
     sources: list[RetrievalResult],
     conversation_history: list[dict],
+    search_mode: str = "library",
 ) -> AnswerResponse:
     """Answer document Q&A questions with citations."""
     client = _get_client()
     language_instruction = language_instruction_for_query(query)
-    citations = _build_citations(sources)
+    all_citations = _build_citations(sources)
     sources_text = _format_sources_for_prompt(sources)
+    library_user_rule = (
+        "2. In Library mode, answer only from the provided PDF sources. "
+        "If the sources are insufficient, say that you cannot find enough support in the library and do not fill gaps from general knowledge.\n"
+    )
+    non_library_user_rule = "2. If you use knowledge not from the sources, clearly mark it as 'Based on general knowledge:'.\n"
+    library_system_rule = (
+        "Library mode is strict: never answer from general knowledge, prior knowledge, or the web when the user is in library mode. "
+        "If the uploaded PDFs do not support a claim, say so directly and ask the user to upload or select a more relevant document. "
+    )
+    non_library_system_rule = "When you add your own knowledge, clearly separate it. "
 
     messages = []
     # Add conversation history for context
@@ -721,55 +834,113 @@ def qa_agent(
 
     messages.append({
         "role": "user",
-            "content": (
-                f"Answer the following question using the provided sources.\n\n"
-                f"SOURCES:\n{sources_text}\n\n"
-                f"QUESTION: {query}\n\n"
-                "RULES:\n"
-                f"0. {language_instruction}\n"
-                "1. Ground your answer in the sources. Cite inline as [N].\n"
-                "2. If you use knowledge not from the sources, clearly mark it as 'Based on general knowledge:'.\n"
+        "content": (
+            f"Answer the following question using the provided sources.\n\n"
+            f"SOURCES:\n{sources_text}\n\n"
+            f"QUESTION: {query}\n\n"
+            "RULES:\n"
+            f"0. {language_instruction}\n"
+            "1. Ground your answer in the sources. Cite inline as numbered references like [1], [2], or [3].\n"
+            f"{library_user_rule if search_mode == 'library' else non_library_user_rule}"
             "3. If multiple sources give different information, present both and note the difference.\n"
             "4. If a source has LOW OCR CONFIDENCE, warn the user to verify visually.\n"
             "5. Be thorough and practically useful, not minimal.\n"
             "6. Explain ideas, not just labels. For each major point, add concrete detail, mechanism, implication, or example.\n"
             "7. If the topic supports it, add a short worked example, quick estimate, unit check, or mini-calculation.\n"
             "8. Unless the user asks for a short answer, prefer a fuller explanation over a terse list.\n"
-            f"9. {STRUCTURED_RESPONSE_GUIDANCE}"
+            "9. Only cite a source section if that exact retrieved section supports the sentence.\n"
+            "10. Do not cite unused sources. Do not guess where support came from.\n"
+            f"11. {STRUCTURED_RESPONSE_GUIDANCE}"
         ),
     })
 
     messages.insert(0, {
         "role": "system",
         "content": (
-                "You are Maia Axon, a technical document assistant. You answer questions "
-                "using uploaded PDFs as the primary source of truth. Always cite your sources. "
-                f"{language_instruction} "
-                "When information comes from the documents, use inline [N] citations. "
-                "When you add your own knowledge, clearly separate it. "
-                "Always sound like a mathematician, scientist, and engineer: rigorous, exact, and technically grounded. "
-                "Look for chances to make the answer more useful with a compact example, quick calculation, "
-                "or engineering sanity check when the material supports it. "
-                f"{STRUCTURED_RESPONSE_GUIDANCE}"
-            ),
+            "You are Maia Axon, a technical document assistant. You answer questions "
+            "using uploaded PDFs as the primary source of truth. Always cite your sources. "
+            f"{language_instruction} "
+            "When information comes from the documents, use inline numbered citations like [1], [2], or [3]. "
+            f"{library_system_rule if search_mode == 'library' else non_library_system_rule}"
+            "Always sound like a mathematician, scientist, and engineer: rigorous, exact, and technically grounded. "
+            "Look for chances to make the answer more useful with a compact example, quick calculation, "
+            "or engineering sanity check when the material supports it. "
+            "You must be able to account for every citation you output. "
+            f"{STRUCTURED_RESPONSE_GUIDANCE}"
+        ),
     })
 
     response = client.chat.completions.create(
         model="gpt-4o",
         max_tokens=4096,
-        messages=messages,
+        response_format={"type": "json_object"},
+        messages=messages + [
+            {
+                "role": "assistant",
+                "content": (
+                    "Return valid JSON with keys answer_markdown, used_sources, and unsupported_claims. "
+                    "answer_markdown must contain the final user-visible answer in Markdown. "
+                    "used_sources must be an array of source numbers actually used in the answer, such as [1, 3]. "
+                    "unsupported_claims must list any parts of the user's request that were not fully supported by the sources. "
+                    "Do not include a source number unless the answer really used that source."
+                ),
+            }
+        ],
     )
 
-    answer_text = response.choices[0].message.content
+    raw_content = response.choices[0].message.content or ""
+    try:
+        payload = json.loads(raw_content)
+        answer_text = str(payload.get("answer_markdown", "") or "").strip()
+        used_sources = payload.get("used_sources", [])
+        unsupported_claims = [
+            str(item).strip()
+            for item in payload.get("unsupported_claims", [])
+            if str(item).strip()
+        ]
+    except Exception:
+        answer_text = raw_content.strip()
+        used_sources = []
+        unsupported_claims = []
+
+    answer_text, citations = _reindex_citation_references(answer_text, all_citations, used_sources)
+    verified_sources, verifier_unsupported_claims = _verify_grounded_answer(
+        query=query,
+        answer_text=answer_text,
+        sources=[
+            sources[index - 1]
+            for index in used_sources
+            if isinstance(index, int) and 1 <= index <= len(sources)
+        ] or sources,
+        search_mode=search_mode,
+    )
+    if verified_sources:
+        answer_text, citations = _reindex_citation_references(answer_text, citations, verified_sources)
+    unsupported_claims.extend(
+        claim for claim in verifier_unsupported_claims if claim not in unsupported_claims
+    )
+    answer_text = ensure_inline_citation_references(answer_text, citations)
 
     # Check for OCR warnings
     warnings = []
-    for r in sources:
-        if r.ocr_confidence and r.ocr_confidence < 0.7:
+    for citation in citations:
+        matching_source = next(
+            (
+                source
+                for source in sources
+                if source.document_id == citation.document_id and source.page_number == citation.page
+            ),
+            None,
+        )
+        if matching_source and matching_source.ocr_confidence and matching_source.ocr_confidence < 0.7:
             warnings.append(
-                f"Source from {r.document_name} page {r.page_number} has low OCR confidence "
-                f"({r.ocr_confidence:.0%}) — verify the content visually."
+                f"Source from {matching_source.document_name} page {matching_source.page_number} has low OCR confidence "
+                f"({matching_source.ocr_confidence:.0%}) — verify the content visually."
             )
+    if unsupported_claims:
+        warnings.append(
+            "Some parts of the answer could not be fully supported from the selected sources."
+        )
 
     return AnswerResponse(
         text=answer_text,
@@ -810,8 +981,8 @@ def calculation_agent(
                     "5. If any required value is missing, say MISSING: <variable name>\n"
                     "6. Write Python code to perform the calculation\n\n"
                     "Respond in this JSON format:\n"
-                    '{"formulas": [{"source": "[N]", "latex": "...", "description": "..."}],\n'
-                    ' "variables": [{"name": "...", "value": ..., "unit": "...", "source": "[N] or user"}],\n'
+                    '{"formulas": [{"source": "[1]", "latex": "...", "description": "..."}],\n'
+                    ' "variables": [{"name": "...", "value": ..., "unit": "...", "source": "[1] or user"}],\n'
                     ' "missing_variables": ["var1", "var2"],\n'
                     ' "python_code": "# calculation code\\nresult = ...",\n'
                     ' "multiple_methods": false,\n'
@@ -1012,7 +1183,7 @@ def calculation_agent(
                 f"Given this calculation setup:\n{json.dumps(setup, indent=2)}\n\n"
                 f"And this result: {result_text}\n\n"
                 "Write a clear, step-by-step explanation of the calculation. "
-                "Reference [N] for any formula or value from the documents. "
+                "Reference numbered citations like [1] for any formula or value from the documents. "
                 "Show: formula -> variable definitions -> substitution -> result. "
                 "Then add a short interpretation of what the result means in practice, and if useful include "
                 "one quick comparison, sensitivity note, or sanity check. "
@@ -1211,7 +1382,7 @@ async def generate_answer(
     elif intent == "calculation":
         answer = calculation_agent(query, sources, conversation_history)
     else:
-        answer = qa_agent(query, sources, conversation_history)
+        answer = qa_agent(query, sources, conversation_history, search_mode=search_mode)
 
     # Step 3: Build mindmap (if not a clarification)
     if not answer.needs_clarification:

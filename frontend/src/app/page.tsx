@@ -31,16 +31,31 @@ export default function HomePage() {
     if (!isHydrated) {
       return;
     }
+    if (isLoading) {
+      return;
+    }
     if (!user) {
       router.replace("/login");
       return;
     }
     void fetchGroups();
     void fetchConversations();
-  }, [fetchConversations, fetchGroups, isHydrated, router, user]);
+  }, [fetchConversations, fetchGroups, isHydrated, isLoading, router, user]);
 
-  if (!isHydrated || isLoading || !user) {
-    return null;
+  if (!isHydrated || isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg px-6 py-10 text-sm text-muted">
+        Loading Maia...
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg px-6 py-10 text-sm text-muted">
+        Redirecting to login...
+      </div>
+    );
   }
 
   return <AppShell />;

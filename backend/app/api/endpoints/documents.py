@@ -1,5 +1,6 @@
 import fitz
 from uuid import UUID
+from functools import lru_cache
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response
@@ -45,18 +46,28 @@ def _with_public_image_url(page: Page) -> Page:
     return page
 
 
-def _get_pdf_page_dimensions(document_id: UUID, page_number: int) -> tuple[float | None, float | None]:
+@lru_cache(maxsize=64)
+def _get_document_page_dimensions(document_id: str) -> tuple[tuple[float, float], ...]:
     try:
         pdf_key = f"documents/{document_id}/original.pdf"
         pdf_bytes = download_file(pdf_key)
         pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         try:
-            pdf_page = pdf_doc[page_number - 1]
-            return float(pdf_page.rect.width), float(pdf_page.rect.height)
+            return tuple(
+                (float(pdf_page.rect.width), float(pdf_page.rect.height))
+                for pdf_page in pdf_doc
+            )
         finally:
             pdf_doc.close()
     except Exception:
-        return None, None
+        return ()
+
+
+def _get_pdf_page_dimensions(document_id: UUID, page_number: int) -> tuple[float | None, float | None]:
+    dimensions = _get_document_page_dimensions(str(document_id))
+    if 0 < page_number <= len(dimensions):
+        return dimensions[page_number - 1]
+    return None, None
 
 
 async def _check_group_access(group_id: UUID, user: User, db: AsyncSession) -> Group:

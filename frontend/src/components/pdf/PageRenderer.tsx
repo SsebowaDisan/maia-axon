@@ -8,6 +8,7 @@ import { getStoredToken } from "@/lib/api";
 import type { Citation, PageData } from "@/lib/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
+const imageBlobUrlCache = new Map<string, string>();
 
 export function PageRenderer({
   page,
@@ -20,16 +21,48 @@ export function PageRenderer({
   highlights: Citation[];
   scrollMode?: "contained" | "natural";
 }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
   const [renderedSize, setRenderedSize] = useState({ width: 0, height: 0 });
   const [imageSrc, setImageSrc] = useState(page.image_url);
+  const [shouldLoadImage, setShouldLoadImage] = useState(false);
   const coordinateWidth = page.page_width || naturalSize.width;
   const coordinateHeight = page.page_height || naturalSize.height;
 
   useEffect(() => {
+    const element = containerRef.current;
+    if (!element) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setShouldLoadImage(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "900px 0px" },
+    );
+
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [page.document_id, page.page_number]);
+
+  useEffect(() => {
+    if (!shouldLoadImage) {
+      return;
+    }
+
+    const cacheKey = `${page.document_id}:${page.page_number}`;
+    const cachedBlobUrl = imageBlobUrlCache.get(cacheKey);
+    if (cachedBlobUrl) {
+      setImageSrc(cachedBlobUrl);
+      return;
+    }
+
     let cancelled = false;
-    let objectUrl: string | null = null;
 
     async function loadImage() {
       const token = getStoredToken();
@@ -54,7 +87,8 @@ export function PageRenderer({
       }
 
       const blob = await response.blob();
-      objectUrl = URL.createObjectURL(blob);
+      const objectUrl = URL.createObjectURL(blob);
+      imageBlobUrlCache.set(cacheKey, objectUrl);
       if (!cancelled) {
         setImageSrc(objectUrl);
       }
@@ -64,11 +98,8 @@ export function PageRenderer({
 
     return () => {
       cancelled = true;
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
     };
-  }, [page.document_id, page.image_url, page.page_number]);
+  }, [page.document_id, page.image_url, page.page_number, shouldLoadImage]);
 
   useEffect(() => {
     const image = imageRef.current;
@@ -97,6 +128,7 @@ export function PageRenderer({
 
   return (
     <div
+      ref={containerRef}
       className={`rounded-[32px] border border-black/[0.05] bg-[linear-gradient(180deg,rgba(251,251,250,0.96),rgba(243,241,236,0.96))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:bg-[#1c2732] ${
         scrollMode === "contained" ? "overflow-y-auto overflow-x-hidden scrollbar-thin" : "overflow-hidden"
       }`}
@@ -111,6 +143,8 @@ export function PageRenderer({
             src={imageSrc}
             alt={`Page ${page.page_number}`}
             className="block h-auto w-full"
+            loading="lazy"
+            decoding="async"
             onLoad={(event) => {
               setNaturalSize({
                 width: event.currentTarget.naturalWidth,

@@ -35,6 +35,24 @@ export function setStoredToken(token: string | null) {
   window.localStorage.setItem(TOKEN_KEY, token);
 }
 
+export async function prefetchAuthorized(path: string) {
+  const token = getStoredToken();
+  if (!token) {
+    return;
+  }
+
+  try {
+    await fetch(`${API_URL}${path}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      cache: "force-cache",
+    });
+  } catch {
+    // Best effort prefetch only.
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getStoredToken();
   const headers = new Headers(init?.headers);
@@ -53,6 +71,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
+    if (response.status === 401) {
+      setStoredToken(null);
+    }
     const fallback = `Request failed with status ${response.status}`;
     try {
       const data = (await response.json()) as { detail?: string };

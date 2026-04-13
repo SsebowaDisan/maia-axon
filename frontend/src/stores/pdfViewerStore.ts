@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 
-import { api } from "@/lib/api";
+import { api, prefetchAuthorized } from "@/lib/api";
 import type { Citation, Document, PageData } from "@/lib/types";
 
 interface PDFViewerState {
@@ -14,6 +14,7 @@ interface PDFViewerState {
   pageCache: Record<string, PageData>;
   pageData: PageData | null;
   loading: boolean;
+  prefetchPages: (document: Document, pageNumbers: number[]) => Promise<void>;
   openCitation: (citation: Citation, document?: Document | null) => Promise<void>;
   loadPage: (document: Document, pageNumber: number, highlightCitations?: Citation[]) => Promise<void>;
   nextPage: () => Promise<void>;
@@ -37,6 +38,37 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
   pageCache: {},
   pageData: null,
   loading: false,
+  async prefetchPages(document, pageNumbers) {
+    const uniquePageNumbers = [...new Set(pageNumbers)]
+      .filter((pageNumber) => pageNumber >= 1 && (!document.page_count || pageNumber <= document.page_count));
+
+    const missingPages = uniquePageNumbers.filter((pageNumber) => !get().pageCache[pageKey(document.id, pageNumber)]);
+    if (!missingPages.length) {
+      return;
+    }
+
+    const pageResults = await Promise.all(
+      missingPages.map(async (pageNumber) => ({
+        pageNumber,
+        pageData: await api.getPage(document.id, pageNumber),
+      })),
+    );
+
+    set((state) => ({
+      pageCache: {
+        ...state.pageCache,
+        ...Object.fromEntries(
+          pageResults.map(({ pageNumber, pageData }) => [pageKey(document.id, pageNumber), pageData]),
+        ),
+      },
+    }));
+
+    void Promise.all(
+      missingPages.map((pageNumber) =>
+        prefetchAuthorized(`/documents/${document.id}/pages/${pageNumber}/image`),
+      ),
+    );
+  },
   async openCitation(citation, document) {
     if (citation.source_type === "web") {
       set({
@@ -73,6 +105,8 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
         updated_at: "",
       } satisfies Document);
 
+    const prefetchWindow = [citation.page - 1, citation.page, citation.page + 1];
+    void get().prefetchPages(fallbackDocument, prefetchWindow);
     await get().loadPage(fallbackDocument, citation.page, [citation]);
   },
   async loadPage(document, pageNumber, highlightCitations = []) {

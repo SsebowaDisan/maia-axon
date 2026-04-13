@@ -16,6 +16,7 @@ import { useConversationStore } from "@/stores/conversationStore";
 import { useDocumentStore } from "@/stores/documentStore";
 import { useGroupStore } from "@/stores/groupStore";
 import { useMindmapStore } from "@/stores/mindmapStore";
+import { usePDFViewerStore } from "@/stores/pdfViewerStore";
 
 function makeMessage(
   partial: Partial<ChatMessage> & Pick<ChatMessage, "role" | "content" | "searchMode">,
@@ -84,6 +85,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return;
     }
 
+    let tokenBuffer = "";
+    let flushTimer: number | null = null;
+
+    const flushTokenBuffer = () => {
+      if (!tokenBuffer) {
+        return;
+      }
+
+      const pending = tokenBuffer;
+      tokenBuffer = "";
+      if (flushTimer) {
+        window.clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+
+      set((state) => {
+        const index = lastAssistantIndex(state.messages);
+        if (index === -1) {
+          return state;
+        }
+        const next = [...state.messages];
+        next[index] = {
+          ...next[index],
+          content: `${next[index].content}${pending}`,
+          isStreaming: true,
+        };
+        return { ...state, messages: next };
+      });
+    };
+
     chatSocket.subscribe((event) => {
       const updateAssistant = (updater: (message: ChatMessage) => ChatMessage) => {
         set((state) => {
@@ -99,27 +130,55 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       switch (event.type) {
         case "status":
+          flushTokenBuffer();
           updateAssistant((message) => ({ ...message, status: event.status, isStreaming: true }));
           set({ streaming: true });
           break;
         case "token":
-          updateAssistant((message) => ({
-            ...message,
-            content: `${message.content}${event.content}`,
-            isStreaming: true,
-          }));
+          tokenBuffer += event.content;
+          if (!flushTimer) {
+            flushTimer = window.setTimeout(() => {
+              flushTokenBuffer();
+            }, 48);
+          }
           break;
         case "citations":
+          flushTokenBuffer();
           updateAssistant((message) => ({ ...message, citations: event.data }));
+          {
+            const pdfCitations = event.data.filter(
+              (citation) => citation.source_type === "pdf" && citation.document_id,
+            );
+            const { documentsByGroup } = useDocumentStore.getState();
+            const grouped = new Map<string, number[]>();
+            for (const citation of pdfCitations) {
+              if (!citation.document_id) {
+                continue;
+              }
+              const pages = grouped.get(citation.document_id) ?? [];
+              pages.push(citation.page - 1, citation.page, citation.page + 1);
+              grouped.set(citation.document_id, pages);
+            }
+            const allDocuments = Object.values(documentsByGroup).flat();
+            for (const [documentId, pageNumbers] of grouped) {
+              const document = allDocuments.find((item) => item.id === documentId);
+              if (document) {
+                void usePDFViewerStore.getState().prefetchPages(document, pageNumbers);
+              }
+            }
+          }
           break;
         case "mindmap":
+          flushTokenBuffer();
           updateAssistant((message) => ({ ...message, mindmap: event.data }));
           useMindmapStore.getState().setMindmapData(event.data);
           break;
         case "warnings":
+          flushTokenBuffer();
           updateAssistant((message) => ({ ...message, warnings: event.data }));
           break;
         case "done":
+          flushTokenBuffer();
           updateAssistant((message) => ({
             ...message,
             isStreaming: false,
@@ -131,6 +190,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           set({ streaming: false });
           break;
         case "error":
+          flushTokenBuffer();
           updateAssistant((message) => ({
             ...message,
             content: event.message,
@@ -144,6 +204,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
 
     chatSocket.onError((error) => {
+      flushTokenBuffer();
       set({ streaming: false, connectionError: error.message });
     });
 

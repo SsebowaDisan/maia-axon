@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from uuid import UUID
 
 import openai
-from sqlalchemy import Integer, func, select, text
+from sqlalchemy import Integer, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -26,6 +26,72 @@ STOPWORDS = {
     "it", "of", "on", "or", "that", "the", "this", "to", "what", "when", "where", "which",
     "who", "why", "with", "without", "you", "your",
 }
+
+
+def _is_toc_like_text(text: str) -> bool:
+    lowered = (text or "").lower()
+    if not lowered:
+        return False
+    if "table of contents" in lowered or lowered.startswith("contents") or lowered.startswith("sommaire"):
+        return True
+    toc_line_count = len(re.findall(r"[A-Za-z][^\n]{0,120}[.\u2026]{4,}\s*\d{1,3}", text or ""))
+    return toc_line_count >= 3
+
+
+def _is_index_like_text(text: str) -> bool:
+    lowered = (text or "").lower()
+    if not lowered:
+        return False
+    if lowered.strip().startswith("index"):
+        return True
+    return len(re.findall(r"[A-Za-z][A-Za-z0-9'()/\- ]{2,},\s*\d{1,3}(?:-\d{1,3})?", text or "")) >= 6
+
+
+def _is_structural_reference_text(text: str) -> bool:
+    return _is_toc_like_text(text) or _is_index_like_text(text)
+
+
+def _is_front_matter_like_text(text: str) -> bool:
+    lowered = (text or "").lower()
+    if not lowered:
+        return False
+
+    strong_markers = (
+        "all rights reserved",
+        "copyright",
+        "library of congress",
+        "isbn",
+        "society of manufacturing engineers",
+        "association for finishing processes",
+        "about afp/sme",
+        "about afp",
+        "about sme",
+        "publisher assumes no responsibility",
+        "without permission in writing",
+        "preface",
+        "foreword",
+        "dedication",
+        "acknowledg",
+    )
+    return any(marker in lowered for marker in strong_markers)
+
+
+def _query_targets_front_matter(query: str) -> bool:
+    lowered = query.lower()
+    markers = (
+        "preface",
+        "foreword",
+        "copyright",
+        "isbn",
+        "publisher",
+        "author",
+        "about afp",
+        "afp/sme",
+        "sme",
+        "society of manufacturing engineers",
+        "association for finishing processes",
+    )
+    return any(marker in lowered for marker in markers)
 
 @dataclass
 class RetrievalResult:
@@ -71,6 +137,34 @@ def _wants_table_of_contents(query: str) -> bool:
 def _wants_index_listing(query: str) -> bool:
     lowered = query.lower()
     return bool(re.search(r"\b(book )?index\b", lowered)) or "show me the index" in lowered
+
+
+def _wants_document_overview(query: str) -> bool:
+    lowered = query.lower()
+    overview_markers = (
+        "what does this pdf cover",
+        "what does the pdf cover",
+        "what does this document cover",
+        "what does the document cover",
+        "what does this book cover",
+        "what does the book cover",
+        "document overview",
+        "pdf overview",
+        "book overview",
+        "overview of this pdf",
+        "overview of the pdf",
+        "overview of this book",
+        "main topics",
+        "key topics",
+        "what topics",
+        "themes of",
+        "structure of",
+        "summarize this book",
+        "summarise this book",
+        "summarize the book",
+        "summarise the book",
+    )
+    return any(marker in lowered for marker in overview_markers)
 
 
 def _fallback_topic_request(query: str) -> int | None:
@@ -126,6 +220,9 @@ def _fallback_structural_query_plan(query: str) -> StructuralQueryPlan:
     if _wants_index_listing(query):
         return StructuralQueryPlan(route="index_listing")
 
+    if _wants_document_overview(query):
+        return StructuralQueryPlan(route="document_overview")
+
     topic_index = _fallback_topic_request(query)
     if topic_index is not None:
         return StructuralQueryPlan(route="topic_outline", topic_index=topic_index)
@@ -167,6 +264,8 @@ def _plan_structural_query_with_llm(query: str) -> StructuralQueryPlan:
         payload = json.loads(response.choices[0].message.content or "{}")
         route = str(payload.get("route", "generic")).strip().lower()
         if route not in {"generic", "document_overview", "topic_outline", "page_target", "formula_lookup", "figure_lookup", "table_of_contents", "index_listing"}:
+            route = "generic"
+        if route == "document_overview" and not _wants_document_overview(query):
             route = "generic"
         topic_index = int(payload.get("topic_index", 0) or 0)
         page_number = int(payload.get("page_number", 0) or 0)
@@ -607,20 +706,15 @@ async def _document_overview_search(
     results: list[RetrievalResult] = []
     for doc in docs:
         doc_rows = [row for row in rows if row.document_id == doc.id]
-        toc_rows = [
-            row for row in doc_rows
-            if _page_number_from_metadata(row.metadata_) <= 20
-            and ("sommaire" in row.content_text.lower() or "contents" in row.content_text.lower())
-        ]
         intro_rows = [
             row for row in doc_rows
             if 7 <= _page_number_from_metadata(row.metadata_) <= 15
             and len((row.content_text or "").strip()) > 180
+            and not _is_structural_reference_text(row.content_text or "")
+            and not _is_front_matter_like_text(row.content_text or "")
         ]
 
         selected_rows = []
-        if toc_rows:
-            selected_rows.extend(toc_rows[:1])
         selected_rows.extend(intro_rows[:6])
 
         seen = set()
@@ -1016,6 +1110,235 @@ def _deep_search_text(result: RetrievalResult) -> str:
     return " ".join(part for part in parts if part)
 
 
+def _library_candidate_score(query: str, result: RetrievalResult, rank: int) -> tuple[float, float]:
+    candidate_text = _deep_search_text(result)
+    overlap = _query_overlap_ratio(query, candidate_text)
+    rank_bonus = 1.0 / (rank + 1)
+    semantic_score = max(min(result.relevance_score, 1.0), 0.0)
+    score = overlap * 0.62 + rank_bonus * 0.18 + semantic_score * 0.12
+    score += _technical_term_bonus(query, candidate_text)
+
+    if result.chunk_type in {"section", "equation", "table", "figure"}:
+        score += 0.05
+    if result.chunk_type == "page":
+        score -= 0.03
+    if _is_structural_reference_text(result.content):
+        score -= 0.45
+    if _is_front_matter_like_text(result.content):
+        score -= 0.4
+    return score, overlap
+
+
+def _rerank_library_results(
+    query: str,
+    results: list[RetrievalResult],
+    top_k: int,
+) -> list[RetrievalResult]:
+    ranked_entries: list[tuple[float, float, int, RetrievalResult]] = []
+    for rank, result in enumerate(results):
+        score, overlap = _library_candidate_score(query, result, rank)
+        ranked_entries.append((score, overlap, rank, result))
+
+    ranked_entries.sort(key=lambda item: (item[0], item[1], -item[2]), reverse=True)
+    return [result for _, _, _, result in ranked_entries[:top_k]]
+
+
+def _candidate_excerpt(result: RetrievalResult, limit: int = 900) -> str:
+    text = (result.content or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}..."
+
+
+def _llm_rerank_library_results(
+    query: str,
+    candidates: list[RetrievalResult],
+    top_k: int,
+) -> list[RetrievalResult]:
+    if not candidates:
+        return []
+
+    client = _get_openai_client()
+    candidate_payload = []
+    for index, candidate in enumerate(candidates, start=1):
+        candidate_payload.append(
+            {
+                "source_number": index,
+                "document_name": candidate.document_name,
+                "page_number": candidate.page_number,
+                "chunk_type": candidate.chunk_type,
+                "content": _candidate_excerpt(candidate),
+            }
+        )
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=1200,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a strict technical retrieval reranker for PDF chunks. "
+                        "Choose the chunks that most directly and precisely answer the user's question. "
+                        "Prefer chunks with direct technical support over tangential mentions. "
+                        "Heavily penalize prefaces, introductions, organization/about pages, and generic background if a more direct section exists. "
+                        "Return valid JSON with a single key ranked_sources, which must be an ordered array of source numbers."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "query": query,
+                            "top_k": top_k,
+                            "candidates": candidate_payload,
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+        )
+        payload = json.loads(response.choices[0].message.content or "{}")
+        ranked_sources = payload.get("ranked_sources", [])
+        ordered = []
+        seen: set[int] = set()
+        for item in ranked_sources:
+            try:
+                index = int(item)
+            except Exception:
+                continue
+            if 1 <= index <= len(candidates) and index not in seen:
+                seen.add(index)
+                ordered.append(candidates[index - 1])
+            if len(ordered) >= top_k:
+                break
+        if ordered:
+            return ordered
+    except Exception as exc:
+        logger.warning("LLM reranker fallback triggered: %s", exc)
+
+    return candidates[:top_k]
+
+
+async def _expand_with_neighbor_chunks(
+    db: AsyncSession,
+    seed_results: list[RetrievalResult],
+    group_id: UUID,
+    document_ids: list[UUID] | None,
+    query: str,
+) -> list[RetrievalResult]:
+    if not seed_results:
+        return []
+
+    page_ranges: dict[UUID, set[int]] = {}
+    for result in seed_results:
+        if result.source_type != "pdf" or not result.document_id or result.page_number <= 0:
+            continue
+        page_ranges.setdefault(result.document_id, set()).update(
+            range(
+                max(1, result.page_number - settings.neighbor_window_pages),
+                result.page_number + settings.neighbor_window_pages + 1,
+            )
+        )
+
+    if not page_ranges:
+        return seed_results
+
+    conditions = []
+    for document_id, pages in page_ranges.items():
+        if not pages:
+            continue
+        conditions.append(
+            (Chunk.document_id == document_id)
+            & (Chunk.metadata_["page_number"].astext.cast(Integer).in_(sorted(pages)))
+        )
+
+    if not conditions:
+        return seed_results
+
+    stmt = (
+        select(
+            Chunk.id,
+            Chunk.document_id,
+            Chunk.page_id,
+            Chunk.chunk_type,
+            Chunk.content_text,
+            Chunk.latex,
+            Chunk.variables,
+            Chunk.bbox_references,
+            Chunk.metadata_,
+            Document.filename,
+            Page.ocr_confidence,
+        )
+        .join(Document, Document.id == Chunk.document_id)
+        .join(Page, Page.id == Chunk.page_id)
+        .where(Document.group_id == group_id, Document.status == "ready", or_(*conditions))
+        .order_by(
+            Document.filename.asc(),
+            Chunk.metadata_["page_number"].astext.cast(Integer).asc(),
+            Chunk.created_at.asc(),
+        )
+    )
+
+    if document_ids:
+        stmt = stmt.where(Chunk.document_id.in_(document_ids))
+
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    seen_chunk_ids = {seed.chunk_id for seed in seed_results if seed.chunk_id}
+    expanded_results = list(seed_results)
+    neighbors_added_per_seed: dict[tuple[UUID, int], int] = {}
+
+    for row in rows:
+        row_page = _page_number_from_metadata(row.metadata_)
+        doc_id = row.document_id
+        if row.id in seen_chunk_ids:
+            continue
+        if _is_structural_reference_text(row.content_text or ""):
+            continue
+        if _is_front_matter_like_text(row.content_text or "") and not _query_targets_front_matter(query):
+            continue
+
+        matching_seed_key = None
+        for seed in seed_results:
+            if seed.document_id == doc_id and abs(seed.page_number - row_page) <= settings.neighbor_window_pages:
+                matching_seed_key = (doc_id, seed.page_number)
+                break
+        if matching_seed_key is None:
+            continue
+
+        if neighbors_added_per_seed.get(matching_seed_key, 0) >= settings.neighbor_chunks_per_hit:
+            continue
+
+        score = 0.72 + _query_overlap_ratio(query, row.content_text or "") * 0.18
+        if row.chunk_type in {"section", "equation", "table", "figure"}:
+            score += 0.05
+
+        expanded_results.append(
+            RetrievalResult(
+                source_type="pdf",
+                chunk_id=row.id,
+                document_id=doc_id,
+                document_name=row.filename,
+                page_number=row_page,
+                chunk_type=row.chunk_type,
+                content=row.content_text,
+                latex=row.latex,
+                variables=row.variables,
+                bbox_references=row.bbox_references,
+                relevance_score=min(score, 0.94),
+                ocr_confidence=row.ocr_confidence,
+            )
+        )
+        seen_chunk_ids.add(row.id)
+        neighbors_added_per_seed[matching_seed_key] = neighbors_added_per_seed.get(matching_seed_key, 0) + 1
+
+    return _rerank_library_results(query, expanded_results, settings.answer_context_top_k)
+
+
 def _rerank_deep_search_results(
     query: str,
     pdf_results: list[RetrievalResult],
@@ -1118,10 +1441,22 @@ async def library_search(
     # Fuse results
     merged = _reciprocal_rank_fusion(vector_results, keyword_results)
 
-    # Take top K
-    top_results = merged[: settings.rerank_top_k]
+    if plan.route == "generic":
+        filtered_merged = [
+            result for result in merged
+            if not _is_structural_reference_text(str(result.get("content", "") or ""))
+        ]
+        if filtered_merged:
+            merged = filtered_merged
+        if not _query_targets_front_matter(query):
+            filtered_front_matter = [
+                result for result in merged
+                if not _is_front_matter_like_text(str(result.get("content", "") or ""))
+            ]
+            if filtered_front_matter:
+                merged = filtered_front_matter
 
-    results = [
+    base_results = [
         RetrievalResult(
             source_type="pdf",
             chunk_id=UUID(r["chunk_id"]) if isinstance(r["chunk_id"], str) else r["chunk_id"],
@@ -1136,10 +1471,28 @@ async def library_search(
             relevance_score=r["score"],
             ocr_confidence=r.get("ocr_confidence"),
         )
-        for r in top_results
+        for r in merged
     ]
 
-    return RetrievalResponse(results=results, query_embedding=query_embedding)
+    heuristic_reranked = _rerank_library_results(
+        query,
+        base_results,
+        settings.llm_rerank_candidate_k,
+    )
+    reranked_results = _llm_rerank_library_results(
+        query,
+        heuristic_reranked,
+        settings.rerank_top_k,
+    )
+    expanded_results = await _expand_with_neighbor_chunks(
+        db,
+        reranked_results,
+        group_id,
+        document_ids,
+        query,
+    )
+
+    return RetrievalResponse(results=expanded_results, query_embedding=query_embedding)
 
 
 async def deep_search(
