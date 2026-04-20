@@ -17,6 +17,7 @@ import { useDocumentStore } from "@/stores/documentStore";
 import { useGroupStore } from "@/stores/groupStore";
 import { useMindmapStore } from "@/stores/mindmapStore";
 import { usePDFViewerStore } from "@/stores/pdfViewerStore";
+import { useProjectStore } from "@/stores/projectStore";
 
 function makeMessage(
   partial: Partial<ChatMessage> & Pick<ChatMessage, "role" | "content" | "searchMode">,
@@ -263,20 +264,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const { mode, promptAttachments } = get();
     const token = useAuthStore.getState().token;
     const groupState = useGroupStore.getState();
+    const projectState = useProjectStore.getState();
     const conversationState = useConversationStore.getState();
     const groupId =
       mode === "standard"
         ? groupState.activeGroupId ?? groupState.groups[0]?.id ?? null
         : groupState.activeGroupId;
     const documentIds = useDocumentStore.getState().selectedDocumentIds;
-    const activeConversationGroupId =
-      conversationState.activeConversation?.group_id ??
+    const activeConversationProjectId =
+      conversationState.activeConversation?.project_id ??
       conversationState.conversations.find(
         (conversation) => conversation.id === conversationState.activeConversationId,
-      )?.group_id ??
+      )?.project_id ??
       null;
     const conversationId =
-      conversationState.activeConversationId && activeConversationGroupId === groupId
+      conversationState.activeConversationId && activeConversationProjectId === projectState.activeProjectId
         ? conversationState.activeConversationId
         : null;
 
@@ -313,6 +315,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     const payload: ChatQueryPayload = {
       type: "query",
+      project_id: projectState.activeProjectId,
       group_id: groupId,
       document_ids: documentIds,
       attachment_ids: promptAttachments.map((attachment) => attachment.id),

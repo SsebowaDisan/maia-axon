@@ -26,6 +26,7 @@ class User(Base):
     group_assignments = relationship(
         "GroupAssignment", back_populates="user", foreign_keys="GroupAssignment.user_id"
     )
+    projects = relationship("Project", back_populates="user", cascade="all, delete-orphan")
     conversations = relationship("Conversation", back_populates="user")
 
     @property

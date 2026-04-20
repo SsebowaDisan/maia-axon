@@ -167,7 +167,7 @@ export function UserAssignment({ groupId }: { groupId: string }) {
         description={
           <>
             Type <span className="font-semibold text-ink">delete</span> to remove{" "}
-            <span className="font-semibold text-ink">{removeTarget?.name ?? "this user"}</span> from the project.
+            <span className="font-semibold text-ink">{removeTarget?.name ?? "this user"}</span> from the group.
           </>
         }
         confirmLabel="Remove user"

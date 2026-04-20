@@ -32,13 +32,14 @@ import { UserAssignment } from "@/components/admin/UserAssignment";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { ChatMessage, ConversationSummary, Group, MessageResponse } from "@/lib/types";
+import type { ChatMessage, ConversationSummary, Group, MessageResponse, Project } from "@/lib/types";
 import { formatRelativeTime, titleFromMessage } from "@/lib/utils";
 import { useAuthStore } from "@/stores/authStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useConversationStore } from "@/stores/conversationStore";
 import { useDocumentStore } from "@/stores/documentStore";
 import { useGroupStore } from "@/stores/groupStore";
+import { useProjectStore } from "@/stores/projectStore";
 
 type WorkspaceMode = "admin" | null;
 
@@ -95,7 +96,7 @@ function AdminWorkspaceView() {
           <UserAssignment groupId={selectedGroupId} />
         ) : (
           <div className="rounded-[26px] border border-dashed border-line p-6 text-center text-sm text-muted">
-            Create a project in Library first, then assign people to it.
+            Create a group in Library first, then assign people to it.
           </div>
         )}
       </div>
@@ -179,7 +180,7 @@ function LibraryDialog({
                   Library
                 </Dialog.Title>
                 <p className="mt-1 text-sm text-muted">
-                  Upload PDFs, create projects, and prepare documents for RAG.
+                  Upload PDFs, create groups, and prepare documents for RAG.
                 </p>
               </div>
             </div>
@@ -199,7 +200,7 @@ function LibraryDialog({
               <div className="mb-4 grid grid-cols-2 gap-3">
                 <div className="rounded-[24px] bg-black px-4 py-4 text-white">
                   <p className="text-2xl font-semibold tracking-[-0.04em]">{groups.length}</p>
-                  <p className="mt-1 text-xs uppercase tracking-[0.16em] text-white/65">Projects</p>
+                  <p className="mt-1 text-xs uppercase tracking-[0.16em] text-white/65">Groups</p>
                 </div>
                 <div className="rounded-[24px] bg-black/[0.04] px-4 py-4">
                   <p className="text-2xl font-semibold tracking-[-0.04em] text-ink">{documentCount}</p>
@@ -220,12 +221,12 @@ function LibraryDialog({
                       RAG Intake
                     </p>
                     <p className="mt-2 text-[1.625rem] font-semibold tracking-[-0.04em] text-ink">
-                      {selectedGroup?.name ?? "Choose a project"}
+                      {selectedGroup?.name ?? "Choose a group"}
                     </p>
                     <p className="mt-2 max-w-xl text-sm leading-6 text-muted">
                       {selectedGroup
-                        ? "Add PDFs to this project and the system will index them so they are ready for retrieval and grounded answers."
-                        : "Select a project first. PDF upload stays disabled until a project is selected."}
+                        ? "Add PDFs to this group and the system will index them so they are ready for retrieval and grounded answers."
+                        : "Select a group first. PDF upload stays disabled until a group is selected."}
                     </p>
                   </div>
                   {selectedGroup ? (
@@ -320,7 +321,7 @@ function SettingsDialog({
               Choose workspace
             </p>
             <p className="mt-2 text-sm leading-6 text-muted">
-              Open the library to manage projects and PDFs, or open admin to manage users and access.
+              Open the library to manage groups and PDFs, or open admin to manage users and access.
             </p>
           </div>
 
@@ -339,15 +340,15 @@ function SettingsDialog({
                     <div>
                       <p className="text-base font-semibold">Library</p>
                       <p className="mt-1 text-sm text-white/70">
-                        Projects, PDFs, and document organization.
+                        Groups, PDFs, and document organization.
                       </p>
                     </div>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <Badge className="bg-white/10 text-white">{groups.length} projects</Badge>
+                    <Badge className="bg-white/10 text-white">{groups.length} groups</Badge>
                     <Badge className="bg-white/10 text-white">{documentCount} PDFs</Badge>
                     <Badge className="bg-white/10 text-white">
-                      {activeGroup?.name ?? "No active project"}
+                      {activeGroup?.name ?? "No active group"}
                     </Badge>
                   </div>
                 </div>
@@ -370,7 +371,7 @@ function SettingsDialog({
                       <div>
                         <p className="text-base font-semibold">Admin</p>
                         <p className="mt-1 text-sm text-muted">
-                          Create users and assign project access.
+                          Create users and assign group access.
                         </p>
                       </div>
                     </div>
@@ -414,12 +415,14 @@ export function SidebarHistory() {
   const deleteConversation = useConversationStore((state) => state.deleteConversation);
   const startNewConversation = useConversationStore((state) => state.startNewConversation);
   const fetchConversations = useConversationStore((state) => state.fetchConversations);
+  const projects = useProjectStore((state) => state.projects);
+  const activeProjectId = useProjectStore((state) => state.activeProjectId);
+  const createProject = useProjectStore((state) => state.createProject);
+  const deleteProject = useProjectStore((state) => state.deleteProject);
+  const setActiveProject = useProjectStore((state) => state.setActiveProject);
   const groups = useGroupStore((state) => state.groups);
   const activeGroupId = useGroupStore((state) => state.activeGroupId);
-  const createGroup = useGroupStore((state) => state.createGroup);
-  const deleteGroup = useGroupStore((state) => state.deleteGroup);
   const setActiveGroup = useGroupStore((state) => state.setActiveGroup);
-  const documentsByGroup = useDocumentStore((state) => state.documentsByGroup);
   const fetchDocuments = useDocumentStore((state) => state.fetchDocuments);
   const clearSelection = useDocumentStore((state) => state.clearSelection);
   const hydrateMessages = useChatStore((state) => state.hydrateMessages);
@@ -428,15 +431,14 @@ export function SidebarHistory() {
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
-  const [createGroupOpen, setCreateGroupOpen] = useState(false);
-  const [groupNameDraft, setGroupNameDraft] = useState("");
-  const [creatingGroup, setCreatingGroup] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
-  const [documentsGroupId, setDocumentsGroupId] = useState<string | null>(null);
-  const [deleteGroupTarget, setDeleteGroupTarget] = useState<Group | null>(null);
-  const [deleteGroupText, setDeleteGroupText] = useState("");
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [projectNameDraft, setProjectNameDraft] = useState("");
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
+  const [deleteProjectTarget, setDeleteProjectTarget] = useState<Project | null>(null);
+  const [deleteProjectText, setDeleteProjectText] = useState("");
   const [deleteConversationTarget, setDeleteConversationTarget] = useState<ConversationSummary | null>(null);
-  const [deletingGroup, setDeletingGroup] = useState(false);
+  const [deletingProject, setDeletingProject] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
 
   useEffect(() => {
@@ -447,7 +449,7 @@ export function SidebarHistory() {
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        setCreateGroupOpen(true);
+        setCreateProjectOpen(true);
       }
     };
 
@@ -462,19 +464,20 @@ export function SidebarHistory() {
   }, [searchOpen]);
 
   useEffect(() => {
-    setExpandedGroups((current) => {
+    setExpandedProjects((current) => {
       const next = { ...current };
       let changed = false;
 
-      for (const group of groups) {
-        if (!(group.id in next)) {
-          next[group.id] = group.id === activeGroupId || (!activeGroupId && groups[0]?.id === group.id);
+      for (const project of projects) {
+        if (!(project.id in next)) {
+          next[project.id] =
+            project.id === activeProjectId || (!activeProjectId && projects[0]?.id === project.id);
           changed = true;
         }
       }
 
       for (const key of Object.keys(next)) {
-        if (!groups.some((group) => group.id === key)) {
+        if (!projects.some((project) => project.id === key)) {
           delete next[key];
           changed = true;
         }
@@ -482,7 +485,7 @@ export function SidebarHistory() {
 
       return changed ? next : current;
     });
-  }, [activeGroupId, groups]);
+  }, [activeProjectId, projects]);
 
   const filteredConversations = useMemo(() => {
     const needle = searchTerm.toLowerCase();
@@ -494,129 +497,113 @@ export function SidebarHistory() {
   const grouped = useMemo(() => {
     const groupedById = filteredConversations.reduce<Record<string, typeof filteredConversations>>(
       (acc, conversation) => {
-        acc[conversation.group_id] ??= [];
-        acc[conversation.group_id].push(conversation);
+        const key = conversation.project_id ?? "unassigned";
+        acc[key] ??= [];
+        acc[key].push(conversation);
         return acc;
       },
       {},
     );
 
-    const sections = groups.map((group) => ({
-      id: group.id,
-      label: group.name,
-      items: groupedById[group.id] ?? [],
+    const sections = projects.map((project) => ({
+      id: project.id,
+      label: project.name,
+      items: groupedById[project.id] ?? [],
     }));
 
-    const knownGroupIds = new Set(groups.map((group) => group.id));
-    const otherItems = filteredConversations.filter((conversation) => !knownGroupIds.has(conversation.group_id));
+    const otherItems = groupedById.unassigned ?? [];
 
     if (otherItems.length) {
       sections.push({
-        id: "other",
-        label: "Other",
+        id: "unassigned",
+        label: "Unassigned",
         items: otherItems,
       });
     }
 
     return sections;
-  }, [filteredConversations, groups]);
+  }, [filteredConversations, projects]);
 
-  const documentsGroup = useMemo(
-    () => groups.find((group) => group.id === documentsGroupId) ?? null,
-    [documentsGroupId, groups],
-  );
-  const groupDocuments = useMemo(
-    () => (documentsGroupId ? documentsByGroup[documentsGroupId] ?? [] : []),
-    [documentsByGroup, documentsGroupId],
-  );
-
-  function closeDocumentsDialog() {
-    setDocumentsGroupId(null);
+  function closeDeleteProjectDialog() {
+    setDeleteProjectTarget(null);
+    setDeleteProjectText("");
   }
 
-  function closeDeleteGroupDialog() {
-    setDeleteGroupTarget(null);
-    setDeleteGroupText("");
+  function closeCreateProjectDialog() {
+    setCreateProjectOpen(false);
+    setProjectNameDraft("");
   }
 
-  function closeCreateGroupDialog() {
-    setCreateGroupOpen(false);
-    setGroupNameDraft("");
-  }
-
-  async function handleSelectConversation(conversationId: string, groupId: string) {
-    setActiveGroup(groupId);
-    clearSelection();
-    await fetchDocuments(groupId);
+  async function handleSelectConversation(
+    conversationId: string,
+    projectId: string | null,
+    groupId: string | null,
+  ) {
+    setActiveProject(projectId);
+    if (groupId) {
+      setActiveGroup(groupId);
+      clearSelection();
+      await fetchDocuments(groupId);
+    }
     const detail = await loadConversation(conversationId);
     hydrateMessages(detail.messages.map(mapMessage));
   }
 
-  function toggleGroupSection(groupId: string) {
-    setExpandedGroups((current) => ({
+  function toggleProjectSection(projectId: string) {
+    setExpandedProjects((current) => ({
       ...current,
-      [groupId]: !current[groupId],
+      [projectId]: !current[projectId],
     }));
   }
 
-  async function handleCreateGroup() {
-    const name = groupNameDraft.trim();
+  async function handleCreateProject() {
+    const name = projectNameDraft.trim();
     if (!name) {
       return;
     }
 
-    setCreatingGroup(true);
+    setCreatingProject(true);
     try {
-      const group = await createGroup({ name });
-      setActiveGroup(group.id);
-      clearSelection();
+      const project = await createProject({ name });
+      setActiveProject(project.id);
       clearChat();
       startNewConversation();
-      setGroupNameDraft("");
-      setCreateGroupOpen(false);
-      await fetchDocuments(group.id);
+      setProjectNameDraft("");
+      setCreateProjectOpen(false);
       await fetchConversations();
     } finally {
-      setCreatingGroup(false);
+      setCreatingProject(false);
     }
   }
 
-  async function handleStartChat(groupId: string) {
-    setExpandedGroups((current) => ({
+  async function handleStartChat(projectId: string) {
+    setExpandedProjects((current) => ({
       ...current,
-      [groupId]: true,
+      [projectId]: true,
     }));
-    setActiveGroup(groupId);
-    clearSelection();
+    setActiveProject(projectId);
     clearChat();
     startNewConversation();
-    await fetchDocuments(groupId);
     await fetchConversations();
   }
 
-  async function handleOpenDocuments(groupId: string) {
-    setDocumentsGroupId(groupId);
-    await fetchDocuments(groupId);
-  }
-
-  async function handleDeleteGroup() {
-    if (!deleteGroupTarget || deleteGroupText.trim().toLowerCase() !== "delete") {
+  async function handleDeleteProject() {
+    if (!deleteProjectTarget || deleteProjectText.trim().toLowerCase() !== "delete") {
       return;
     }
 
-    setDeletingGroup(true);
+    setDeletingProject(true);
     try {
-      await deleteGroup(deleteGroupTarget.id);
-      if (activeGroupId === deleteGroupTarget.id) {
-        clearSelection();
+      await deleteProject(deleteProjectTarget.id);
+      if (activeProjectId === deleteProjectTarget.id) {
         clearChat();
         startNewConversation();
       }
-      setDeleteGroupTarget(null);
-      setDeleteGroupText("");
+      setDeleteProjectTarget(null);
+      setDeleteProjectText("");
       await fetchConversations();
     } finally {
-      setDeletingGroup(false);
+      setDeletingProject(false);
     }
   }
 
@@ -650,9 +637,9 @@ export function SidebarHistory() {
                 type="button"
                 variant="secondary"
                 size="icon"
-                onClick={() => setCreateGroupOpen(true)}
-                title="Create group"
-                aria-label="Create group"
+                onClick={() => setCreateProjectOpen(true)}
+                title="Create project"
+                aria-label="Create project"
               >
                 <Plus className="h-4 w-4" />
               </Button>
@@ -701,10 +688,10 @@ export function SidebarHistory() {
                   <button
                     type="button"
                     className="flex min-w-0 items-center gap-2 text-left"
-                    onClick={() => toggleGroupSection(section.id)}
+                    onClick={() => toggleProjectSection(section.id)}
                   >
                     <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-muted">
-                      {expandedGroups[section.id] ? (
+                      {expandedProjects[section.id] ? (
                         <FolderOpen className="h-4 w-4 stroke-[1.8]" />
                       ) : (
                         <Folder className="h-4 w-4 stroke-[1.8]" />
@@ -714,7 +701,7 @@ export function SidebarHistory() {
                       {section.label}
                     </p>
                   </button>
-                  {section.id !== "other" ? (
+                  {section.id !== "unassigned" ? (
                     <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                       <Button
                         type="button"
@@ -732,33 +719,20 @@ export function SidebarHistory() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8"
-                        title="Group PDFs"
-                        aria-label={`View PDFs in ${section.label}`}
-                        onClick={() => void handleOpenDocuments(section.id)}
+                        title="Delete project"
+                        aria-label={`Delete ${section.label}`}
+                        onClick={() => {
+                          const target = projects.find((project) => project.id === section.id) ?? null;
+                          setDeleteProjectTarget(target);
+                          setDeleteProjectText("");
+                        }}
                       >
-                        <FileText className="h-3.5 w-3.5" />
+                        <Trash2 className="h-3.5 w-3.5" />
                       </Button>
-                      {user?.role === "admin" ? (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          title="Delete group"
-                          aria-label={`Delete ${section.label}`}
-                          onClick={() => {
-                            const target = groups.find((group) => group.id === section.id) ?? null;
-                            setDeleteGroupTarget(target);
-                            setDeleteGroupText("");
-                          }}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      ) : null}
                     </div>
                   ) : null}
                 </div>
-                {expandedGroups[section.id] ? <div className="space-y-2">
+                {expandedProjects[section.id] ? <div className="space-y-2">
                   {section.items.map((conversation) => (
                     <div
                       key={conversation.id}
@@ -785,7 +759,11 @@ export function SidebarHistory() {
                           type="button"
                           className="min-w-0 flex-1 text-left"
                           onClick={() =>
-                            void handleSelectConversation(conversation.id, conversation.group_id)
+                            void handleSelectConversation(
+                              conversation.id,
+                              conversation.project_id,
+                              conversation.group_id,
+                            )
                           }
                         >
                           <p className="truncate text-sm font-semibold text-ink">
@@ -814,16 +792,16 @@ export function SidebarHistory() {
                   ))}
                   {!section.items.length ? (
                     <div className="rounded-[22px] bg-black/[0.02] px-5 py-5 text-sm text-muted">
-                      No chats in this group yet
+                      No chats in this project yet
                     </div>
                   ) : null}
                 </div> : null}
               </div>
             ))}
-            {!groups.length ? (
+            {!projects.length ? (
               <div className="rounded-[22px] bg-black/[0.02] px-6 py-7 text-center text-sm text-muted">
                 <MessageSquareMore className="mx-auto mb-3 h-5 w-5 text-muted/80" />
-                No groups yet
+                No projects yet
               </div>
             ) : null}
           </div>
@@ -883,75 +861,10 @@ export function SidebarHistory() {
       />
 
       <Dialog.Root
-        open={documentsGroupId !== null}
+        open={deleteProjectTarget !== null}
         onOpenChange={(open) => {
           if (!open) {
-            closeDocumentsDialog();
-          }
-        }}
-      >
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" />
-          <Dialog.Content
-            aria-describedby={undefined}
-            className="fixed left-1/2 top-1/2 z-[80] flex h-[min(720px,calc(100vh-2rem))] w-[min(520px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
-            onPointerDownOutside={closeDocumentsDialog}
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <Dialog.Title className="font-display text-[1.5rem] font-semibold tracking-[-0.04em] text-ink">
-                  Group PDFs
-                </Dialog.Title>
-                <p className="mt-2 text-sm leading-6 text-muted">
-                  {documentsGroup ? `PDFs available in ${documentsGroup.name}.` : "PDFs used in this group."}
-                </p>
-              </div>
-              <Dialog.Close asChild>
-                <button
-                  type="button"
-                  className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
-                  aria-label="Close group PDFs dialog"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </Dialog.Close>
-            </div>
-
-            <div className="mt-5 min-h-0 flex-1 overflow-hidden">
-              <div className="mb-3 flex items-center justify-between px-1">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-                  Documents
-                </p>
-                <Badge>{groupDocuments.length} PDFs</Badge>
-              </div>
-              <div className="h-full space-y-2 overflow-y-auto pr-1 scrollbar-thin">
-                {groupDocuments.map((document) => (
-                  <div
-                    key={document.id}
-                    className="rounded-[22px] border border-line bg-black/[0.02] px-4 py-3"
-                  >
-                    <p className="truncate text-sm font-semibold text-ink">{document.filename}</p>
-                    <p className="mt-1 text-xs uppercase tracking-[0.14em] text-muted">
-                      {document.status}
-                    </p>
-                  </div>
-                ))}
-                {!groupDocuments.length ? (
-                  <div className="rounded-[22px] bg-black/[0.02] px-5 py-5 text-sm text-muted">
-                    No PDFs in this group yet
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-
-      <Dialog.Root
-        open={deleteGroupTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            closeDeleteGroupDialog();
+            closeDeleteProjectDialog();
           }
         }}
       >
@@ -960,23 +873,23 @@ export function SidebarHistory() {
           <Dialog.Content
             aria-describedby={undefined}
             className="fixed left-1/2 top-1/2 z-[80] w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
-            onPointerDownOutside={closeDeleteGroupDialog}
+            onPointerDownOutside={closeDeleteProjectDialog}
           >
             <div className="flex items-start justify-between gap-4">
               <div>
                 <Dialog.Title className="font-display text-[1.5rem] font-semibold tracking-[-0.04em] text-ink">
-                  Delete group
+                  Delete project
                 </Dialog.Title>
                 <p className="mt-2 text-sm leading-6 text-muted">
                   Type <span className="font-semibold text-ink">delete</span> to remove{" "}
-                  <span className="font-semibold text-ink">{deleteGroupTarget?.name ?? "this group"}</span>.
+                  <span className="font-semibold text-ink">{deleteProjectTarget?.name ?? "this project"}</span>.
                 </p>
               </div>
               <Dialog.Close asChild>
                 <button
                   type="button"
                   className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
-                  aria-label="Close delete group dialog"
+                  aria-label="Close delete project dialog"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -986,8 +899,8 @@ export function SidebarHistory() {
             <div className="mt-5 space-y-3">
               <Input
                 placeholder='Type "delete"'
-                value={deleteGroupText}
-                onChange={(event) => setDeleteGroupText(event.target.value)}
+                value={deleteProjectText}
+                onChange={(event) => setDeleteProjectText(event.target.value)}
               />
               <div className="flex gap-3">
                 <Dialog.Close asChild>
@@ -999,10 +912,10 @@ export function SidebarHistory() {
                   type="button"
                   variant="danger"
                   className="flex-1"
-                  disabled={deleteGroupText.trim().toLowerCase() !== "delete" || deletingGroup}
-                  onClick={() => void handleDeleteGroup()}
+                  disabled={deleteProjectText.trim().toLowerCase() !== "delete" || deletingProject}
+                  onClick={() => void handleDeleteProject()}
                 >
-                  {deletingGroup ? "Deleting..." : "Delete group"}
+                  {deletingProject ? "Deleting..." : "Delete project"}
                 </Button>
               </div>
             </div>
@@ -1038,13 +951,13 @@ export function SidebarHistory() {
       />
 
       <Dialog.Root
-        open={createGroupOpen}
+        open={createProjectOpen}
         onOpenChange={(open) => {
           if (!open) {
-            closeCreateGroupDialog();
+            closeCreateProjectDialog();
             return;
           }
-          setCreateGroupOpen(true);
+          setCreateProjectOpen(true);
         }}
       >
         <Dialog.Portal>
@@ -1052,22 +965,22 @@ export function SidebarHistory() {
           <Dialog.Content
             aria-describedby={undefined}
             className="fixed left-1/2 top-1/2 z-[80] w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
-            onPointerDownOutside={closeCreateGroupDialog}
+            onPointerDownOutside={closeCreateProjectDialog}
           >
             <div className="flex items-start justify-between gap-4">
               <div>
                 <Dialog.Title className="font-display text-[1.5rem] font-semibold tracking-[-0.04em] text-ink">
-                  Create group
+                  Create project
                 </Dialog.Title>
                 <p className="mt-2 text-sm leading-6 text-muted">
-                  Chats will be organized inside this group.
+                  Chats will be organized inside this project.
                 </p>
               </div>
               <Dialog.Close asChild>
                 <button
                   type="button"
                   className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
-                  aria-label="Close create group dialog"
+                  aria-label="Close create project dialog"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -1076,18 +989,18 @@ export function SidebarHistory() {
 
             <div className="mt-5 space-y-3">
               <Input
-                placeholder="Group name"
-                value={groupNameDraft}
-                onChange={(event) => setGroupNameDraft(event.target.value)}
+                placeholder="Project name"
+                value={projectNameDraft}
+                onChange={(event) => setProjectNameDraft(event.target.value)}
               />
               <Button
                 type="button"
                 className="w-full"
-                disabled={!groupNameDraft.trim() || creatingGroup}
-                onClick={() => void handleCreateGroup()}
+                disabled={!projectNameDraft.trim() || creatingProject}
+                onClick={() => void handleCreateProject()}
               >
                 <Plus className="h-4 w-4" />
-                {creatingGroup ? "Creating..." : "Create group"}
+                {creatingProject ? "Creating..." : "Create project"}
               </Button>
             </div>
           </Dialog.Content>

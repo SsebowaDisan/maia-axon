@@ -17,8 +17,11 @@ class Conversation(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
-    group_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("groups.id", ondelete="CASCADE"), nullable=False, index=True
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("groups.id", ondelete="SET NULL"), nullable=True, index=True
     )
     title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     title_icon: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -31,6 +34,7 @@ class Conversation(Base):
 
     # Relationships
     user = relationship("User", back_populates="conversations")
+    project = relationship("Project", back_populates="conversations")
     group = relationship("Group", back_populates="conversations")
     messages = relationship(
         "Message", back_populates="conversation", cascade="all, delete-orphan",

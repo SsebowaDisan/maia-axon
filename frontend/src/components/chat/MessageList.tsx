@@ -17,11 +17,11 @@ const FALLBACK_WELCOME: WelcomePayload = {
 
 const ONBOARDING_MARKDOWN = [
   "### How to use Maia",
-  "- Type `#` in the composer to choose a project or document workspace.",
-  "- Type `@` after selecting a project to target one or more specific PDFs.",
-  "- Open **Library**, choose the correct project, and use **Upload PDFs** to add new files.",
+  "- Type `#` in the composer to choose a group or document workspace.",
+  "- Type `@` after selecting a group to target one or more specific PDFs.",
+  "- Open **Library**, choose the correct group, and use **Upload PDFs** to add new files.",
   "- Wait until a document shows **Ready** in the Library before asking grounded questions about it.",
-  "- Ask in plain language. Maia will use the selected project documents and cite pages when available.",
+  "- Ask in plain language. Maia will use the selected group documents and cite pages when available.",
 ].join("\n");
 
 function buildWelcomeMarkdown(introMarkdown: string) {

@@ -234,7 +234,7 @@ export function Composer() {
       : "Select a group with # to start"
     : fallbackGroup
       ? "Ask anything..."
-      : "No project available yet";
+      : "No group available yet";
   const resolvedPlaceholder = welcomeStreaming
     ? "Please wait while Maia finishes the workspace briefing..."
     : placeholder;

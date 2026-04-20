@@ -79,8 +79,8 @@ export function GroupManager({
             <Plus className="h-5 w-5" />
           </span>
           <div>
-            <p className="text-sm font-semibold text-ink">Create project</p>
-            <p className="mt-1 text-xs text-muted">Add a new project for PDF upload and RAG.</p>
+            <p className="text-sm font-semibold text-ink">Create group</p>
+            <p className="mt-1 text-xs text-muted">Add a new group for PDF upload and RAG.</p>
           </div>
         </button>
 
@@ -165,19 +165,19 @@ export function GroupManager({
             <div className="flex items-start justify-between gap-4">
               <div>
                 <Dialog.Title className="font-display text-[1.5rem] font-semibold tracking-[-0.04em] text-ink">
-                  {editing ? "Edit project" : "Create project"}
+                  {editing ? "Edit group" : "Create group"}
                 </Dialog.Title>
                 <p className="mt-2 text-sm leading-6 text-muted">
                   {editing
-                    ? "Update the project name and description."
-                    : "Add a project name and description before uploading PDFs for RAG."}
+                    ? "Update the group name and description."
+                    : "Add a group name and description before uploading PDFs for RAG."}
                 </p>
               </div>
               <Dialog.Close asChild>
                 <button
                   type="button"
                   className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
-                  aria-label="Close project dialog"
+                  aria-label="Close group dialog"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -186,7 +186,7 @@ export function GroupManager({
 
             <div className="mt-5 space-y-3">
               <Input
-                placeholder="Project name"
+                placeholder="Group name"
                 value={draft.name}
                 onChange={(event) => setDraft((state) => ({ ...state, name: event.target.value }))}
               />
@@ -199,7 +199,7 @@ export function GroupManager({
               />
               <Button type="button" className="w-full" onClick={() => void handleSubmit()}>
                 <Plus className="h-4 w-4" />
-                {editing ? "Save project" : "Create project"}
+                {editing ? "Save group" : "Create group"}
               </Button>
             </div>
           </Dialog.Content>
@@ -228,11 +228,11 @@ export function GroupManager({
             <div className="flex items-start justify-between gap-4">
               <div>
                 <Dialog.Title className="font-display text-[1.5rem] font-semibold tracking-[-0.04em] text-ink">
-                  Delete project
+                  Delete group
                 </Dialog.Title>
                 <p className="mt-2 text-sm leading-6 text-muted">
                   Type <span className="font-semibold text-ink">delete</span> to remove{" "}
-                  <span className="font-semibold text-ink">{deleteTarget?.name ?? "this project"}</span>.
+                  <span className="font-semibold text-ink">{deleteTarget?.name ?? "this group"}</span>.
                 </p>
               </div>
               <Dialog.Close asChild>
@@ -265,7 +265,7 @@ export function GroupManager({
                   disabled={deleteText.trim().toLowerCase() !== "delete" || isDeleting}
                   onClick={() => void handleDeleteProject()}
                 >
-                  {isDeleting ? "Deleting..." : "Delete project"}
+                  {isDeleting ? "Deleting..." : "Delete group"}
                 </Button>
               </div>
             </div>

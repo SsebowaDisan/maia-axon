@@ -29,7 +29,6 @@ class Group(Base):
     conversations = relationship(
         "Conversation",
         back_populates="group",
-        cascade="all, delete-orphan",
     )
 
 

@@ -11,7 +11,7 @@ interface ConversationState {
   activeConversation: ConversationDetail | null;
   searchTerm: string;
   loading: boolean;
-  fetchConversations: (groupId?: string | null) => Promise<void>;
+  fetchConversations: (projectId?: string | null) => Promise<void>;
   loadConversation: (conversationId: string) => Promise<ConversationDetail>;
   setActiveConversationId: (conversationId: string | null) => void;
   setSearchTerm: (value: string) => void;
@@ -25,10 +25,10 @@ export const useConversationStore = create<ConversationState>((set) => ({
   activeConversation: null,
   searchTerm: "",
   loading: false,
-  async fetchConversations(groupId) {
+  async fetchConversations(projectId) {
     set({ loading: true });
     try {
-      const conversations = await api.listConversations(groupId);
+      const conversations = await api.listConversations(projectId);
       set({ conversations });
     } finally {
       set({ loading: false });

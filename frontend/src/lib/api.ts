@@ -8,6 +8,7 @@ import type {
   Group,
   GroupAssignment,
   PageData,
+  Project,
   PromptAttachment,
   User,
   WelcomePayload,
@@ -120,6 +121,24 @@ export const api = {
   },
   listGroups() {
     return request<Group[]>("/groups");
+  },
+  listProjects() {
+    return request<Project[]>("/projects");
+  },
+  createProject(payload: { name: string }) {
+    return request<Project>("/projects", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  updateProject(projectId: string, payload: { name?: string }) {
+    return request<Project>(`/projects/${projectId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteProject(projectId: string) {
+    return request<void>(`/projects/${projectId}`, { method: "DELETE" });
   },
   createGroup(payload: { name: string; description?: string }) {
     return request<Group>("/groups", {
@@ -276,14 +295,14 @@ export const api = {
   getPage(documentId: string, pageNumber: number) {
     return request<PageData>(`/documents/${documentId}/pages/${pageNumber}`);
   },
-  listConversations(groupId?: string | null) {
-    const suffix = groupId ? `?group_id=${groupId}` : "";
+  listConversations(projectId?: string | null) {
+    const suffix = projectId ? `?project_id=${projectId}` : "";
     return request<ConversationSummary[]>(`/conversations${suffix}`);
   },
-  createConversation(groupId: string) {
+  createConversation(payload: { project_id?: string | null; group_id?: string | null }) {
     return request<ConversationSummary>("/conversations", {
       method: "POST",
-      body: JSON.stringify({ group_id: groupId }),
+      body: JSON.stringify(payload),
     });
   },
   getConversation(conversationId: string) {

@@ -5,13 +5,15 @@ from pydantic import BaseModel
 
 
 class ConversationCreate(BaseModel):
-    group_id: UUID
+    project_id: UUID | None = None
+    group_id: UUID | None = None
 
 
 class ConversationResponse(BaseModel):
     id: UUID
     user_id: UUID
-    group_id: UUID
+    project_id: UUID | None
+    group_id: UUID | None
     title: str | None
     title_icon: str | None
     created_at: datetime
@@ -36,7 +38,8 @@ class MessageResponse(BaseModel):
 class ConversationDetailResponse(BaseModel):
     id: UUID
     user_id: UUID
-    group_id: UUID
+    project_id: UUID | None
+    group_id: UUID | None
     title: str | None
     title_icon: str | None
     created_at: datetime
@@ -48,7 +51,8 @@ class ConversationDetailResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     conversation_id: UUID | None = None
-    group_id: UUID
+    project_id: UUID | None = None
+    group_id: UUID | None = None
     document_ids: list[UUID] | None = None
     attachment_ids: list[str] | None = None
     mode: str = "library"  # "standard", "library", or "deep_search"

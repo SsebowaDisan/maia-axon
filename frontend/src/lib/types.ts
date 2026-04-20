@@ -26,6 +26,15 @@ export interface Group {
   user_count: number;
 }
 
+export interface Project {
+  id: string;
+  user_id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  conversation_count: number;
+}
+
 export interface GroupAssignment {
   group_id: string;
   user_id: string;
@@ -137,7 +146,8 @@ export interface MessageResponse {
 export interface ConversationSummary {
   id: string;
   user_id: string;
-  group_id: string;
+  project_id: string | null;
+  group_id: string | null;
   title: string | null;
   title_icon: string | null;
   created_at: string;
@@ -172,7 +182,8 @@ export interface PromptAttachment {
 
 export interface ChatQueryPayload {
   type: "query";
-  group_id: string;
+  project_id: string | null;
+  group_id: string | null;
   document_ids: string[];
   attachment_ids: string[];
   mode: SearchMode;

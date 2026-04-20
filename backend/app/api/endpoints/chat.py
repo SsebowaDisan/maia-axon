@@ -15,6 +15,7 @@ from app.models.chunk import Chunk
 from app.models.conversation import Conversation, Message
 from app.models.document import Document
 from app.models.group import GroupAssignment
+from app.models.project import Project
 from app.models.user import User
 from app.api.endpoints.groups import _check_group_access
 from app.schemas.conversation import (
@@ -220,8 +221,18 @@ async def chat(
     db: AsyncSession = Depends(get_db),
 ):
     """Non-streaming chat endpoint. For streaming, use the WebSocket endpoint."""
+    if body.project_id:
+        project = await db.scalar(
+            select(Project).where(Project.id == body.project_id, Project.user_id == user.id)
+        )
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+    if body.mode != "standard" and body.group_id is None:
+        raise HTTPException(status_code=400, detail="Group is required for grounded chat")
+
     # Verify group access
-    if not user.is_admin:
+    if body.group_id and not user.is_admin:
         result = await db.execute(
             select(GroupAssignment).where(
                 GroupAssignment.group_id == body.group_id,
@@ -242,9 +253,16 @@ async def chat(
         if conversation is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
     else:
-        conversation = Conversation(user_id=user.id, group_id=body.group_id)
+        conversation = Conversation(
+            user_id=user.id,
+            project_id=body.project_id,
+            group_id=body.group_id,
+        )
         db.add(conversation)
         await db.flush()
+
+    conversation.project_id = body.project_id
+    conversation.group_id = body.group_id
 
     # Save user message
     user_msg = Message(

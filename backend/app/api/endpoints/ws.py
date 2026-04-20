@@ -2,7 +2,7 @@
 WebSocket endpoint for streaming chat responses.
 
 Protocol:
-  Client → Server: { type: "query", group_id, document_ids?, mode, message }
+  Client → Server: { type: "query", project_id?, group_id?, document_ids?, mode, message }
   Server → Client: { type: "status", status: "retrieving" | "reasoning" | "calculating" }
   Server → Client: { type: "token", content: "..." }
   Server → Client: { type: "citations", data: [...] }
@@ -25,6 +25,7 @@ from app.core.database import async_session
 from app.core.security import decode_access_token
 from app.models.conversation import Conversation, Message
 from app.models.group import GroupAssignment
+from app.models.project import Project
 from app.models.user import User
 from app.services.answer_engine import (
     AnswerResponse,
@@ -152,7 +153,8 @@ async def websocket_chat(websocket: WebSocket):
                 await websocket.send_json({"type": "error", "message": "Expected type: query"})
                 continue
 
-            group_id = UUID(data["group_id"])
+            group_id = UUID(data["group_id"]) if data.get("group_id") else None
+            project_id = UUID(data["project_id"]) if data.get("project_id") else None
             document_ids = [UUID(d) for d in data.get("document_ids", [])] or None
             attachment_ids = data.get("attachment_ids", []) or []
             mode = data.get("mode", "library")
@@ -160,8 +162,24 @@ async def websocket_chat(websocket: WebSocket):
             conversation_id = UUID(data["conversation_id"]) if data.get("conversation_id") else None
 
             async with async_session() as db:
+                if project_id:
+                    project = await db.scalar(
+                        select(Project).where(Project.id == project_id, Project.user_id == user.id)
+                    )
+                    if project is None:
+                        await websocket.send_json(
+                            {"type": "error", "message": "Project not found"}
+                        )
+                        continue
+
+                if mode != "standard" and group_id is None:
+                    await websocket.send_json(
+                        {"type": "error", "message": "Group is required for grounded chat"}
+                    )
+                    continue
+
                 # Verify group access
-                if not user.is_admin:
+                if group_id and not user.is_admin:
                     result = await db.execute(
                         select(GroupAssignment).where(
                             GroupAssignment.group_id == group_id,
@@ -182,7 +200,6 @@ async def websocket_chat(websocket: WebSocket):
                         .where(
                             Conversation.id == conversation_id,
                             Conversation.user_id == user.id,
-                            Conversation.group_id == group_id,
                         )
                     )
                     conversation = result.scalar_one_or_none()
@@ -190,9 +207,16 @@ async def websocket_chat(websocket: WebSocket):
                     conversation = None
 
                 if conversation is None:
-                    conversation = Conversation(user_id=user.id, group_id=group_id)
+                    conversation = Conversation(
+                        user_id=user.id,
+                        project_id=project_id,
+                        group_id=group_id,
+                    )
                     db.add(conversation)
                     await db.flush()
+
+                conversation.project_id = project_id
+                conversation.group_id = group_id
 
                 # Save user message
                 user_msg = Message(

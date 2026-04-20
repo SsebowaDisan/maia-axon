@@ -9,6 +9,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models.conversation import Conversation, Message
 from app.models.group import GroupAssignment
+from app.models.project import Project
 from app.models.user import User
 from app.schemas.conversation import (
     ConversationCreate,
@@ -38,14 +39,14 @@ async def _check_conversation_access(
 
 @router.get("", response_model=list[ConversationResponse])
 async def list_conversations(
-    group_id: UUID | None = None,
+    project_id: UUID | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List user's conversations, optionally filtered by group."""
+    """List user's conversations, optionally filtered by project."""
     query = select(Conversation).where(Conversation.user_id == user.id)
-    if group_id:
-        query = query.where(Conversation.group_id == group_id)
+    if project_id:
+        query = query.where(Conversation.project_id == project_id)
     query = query.order_by(Conversation.updated_at.desc())
     result = await db.execute(query)
     return result.scalars().all()
@@ -57,9 +58,15 @@ async def create_conversation(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new conversation within a group."""
-    # Verify user has access to group
-    if not user.is_admin:
+    """Create a new conversation under an optional project and group context."""
+    if body.project_id:
+        project = await db.scalar(
+            select(Project).where(Project.id == body.project_id, Project.user_id == user.id)
+        )
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+    if body.group_id and not user.is_admin:
         result = await db.execute(
             select(GroupAssignment).where(
                 GroupAssignment.group_id == body.group_id,
@@ -69,7 +76,7 @@ async def create_conversation(
         if result.scalar_one_or_none() is None:
             raise HTTPException(status_code=403, detail="No access to this group")
 
-    conv = Conversation(user_id=user.id, group_id=body.group_id)
+    conv = Conversation(user_id=user.id, project_id=body.project_id, group_id=body.group_id)
     db.add(conv)
     await db.flush()
     return conv

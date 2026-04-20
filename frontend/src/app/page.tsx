@@ -8,6 +8,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useConversationStore } from "@/stores/conversationStore";
 import { useGroupStore } from "@/stores/groupStore";
+import { useProjectStore } from "@/stores/projectStore";
 
 export default function HomePage() {
   const router = useRouter();
@@ -16,6 +17,7 @@ export default function HomePage() {
   const isLoading = useAuthStore((state) => state.isLoading);
   const bootstrap = useAuthStore((state) => state.bootstrap);
   const fetchGroups = useGroupStore((state) => state.fetchGroups);
+  const fetchProjects = useProjectStore((state) => state.fetchProjects);
   const fetchConversations = useConversationStore((state) => state.fetchConversations);
   const initializeChat = useChatStore((state) => state.initialize);
 
@@ -39,8 +41,9 @@ export default function HomePage() {
       return;
     }
     void fetchGroups();
+    void fetchProjects();
     void fetchConversations();
-  }, [fetchConversations, fetchGroups, isHydrated, isLoading, router, user]);
+  }, [fetchConversations, fetchGroups, fetchProjects, isHydrated, isLoading, router, user]);
 
   if (!isHydrated || isLoading) {
     return (

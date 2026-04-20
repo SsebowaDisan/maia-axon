@@ -117,7 +117,7 @@ export function DocumentUploader({ groupId }: { groupId: string | null }) {
               <p className="mt-1 text-xs text-muted">
                 {uploadEnabled
                   ? "Click a PDF to open a preview."
-                  : "Select a project first, then use + to upload PDFs."}
+                  : "Select a group first, then use + to upload PDFs."}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -128,8 +128,8 @@ export function DocumentUploader({ groupId }: { groupId: string | null }) {
                 className="rounded-full"
                 onClick={() => setUploadDialogOpen(true)}
                 disabled={!uploadEnabled}
-                title={uploadEnabled ? "Upload PDFs" : "Select a project first"}
-                aria-label={uploadEnabled ? "Upload PDFs" : "Select a project first"}
+                title={uploadEnabled ? "Upload PDFs" : "Select a group first"}
+                aria-label={uploadEnabled ? "Upload PDFs" : "Select a group first"}
               >
                 <Plus className="h-4 w-4" />
               </Button>
@@ -153,7 +153,7 @@ export function DocumentUploader({ groupId }: { groupId: string | null }) {
               </div>
             ) : (
               <div className="flex h-full min-h-[220px] items-center justify-center rounded-[22px] border border-dashed border-line bg-white/55 px-6 text-center text-sm text-muted">
-                No PDFs in this project yet.
+                No PDFs in this group yet.
               </div>
             )}
           </div>
@@ -175,8 +175,8 @@ export function DocumentUploader({ groupId }: { groupId: string | null }) {
                 </Dialog.Title>
                 <p className="mt-2 text-sm leading-6 text-muted">
                   {uploadEnabled
-                    ? "Add PDFs to the selected project and prepare them for retrieval."
-                    : "Select a project first. PDF upload stays disabled until a project is selected."}
+                    ? "Add PDFs to the selected group and prepare them for retrieval."
+                    : "Select a group first. PDF upload stays disabled until a group is selected."}
                 </p>
               </div>
               <Dialog.Close asChild>
@@ -211,7 +211,7 @@ export function DocumentUploader({ groupId }: { groupId: string | null }) {
                     <p className="mt-1 text-sm text-muted">
                       {uploadEnabled
                         ? "Upload calculation manuals, scans, handbooks, and datasheets."
-                        : "Create or select a project first to unlock PDF upload."}
+                        : "Create or select a group first to unlock PDF upload."}
                     </p>
                   </div>
                   <Button type="button" variant="secondary" onClick={open} disabled={!uploadEnabled}>
