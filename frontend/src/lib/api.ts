@@ -16,6 +16,7 @@ import type {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
 const TOKEN_KEY = "maia-axon-token";
+const PAGE_CACHE_KEY_PREFIX = "maia-page-cache-v1";
 
 export function getStoredToken() {
   if (typeof window === "undefined") {
@@ -51,6 +52,38 @@ export async function prefetchAuthorized(path: string) {
     });
   } catch {
     // Best effort prefetch only.
+  }
+}
+
+function pageCacheKey(documentId: string, pageNumber: number) {
+  return `${PAGE_CACHE_KEY_PREFIX}:${documentId}:${pageNumber}`;
+}
+
+export function getCachedPageData(documentId: string, pageNumber: number): PageData | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(pageCacheKey(documentId, pageNumber));
+    if (!raw) {
+      return null;
+    }
+    return JSON.parse(raw) as PageData;
+  } catch {
+    return null;
+  }
+}
+
+function setCachedPageData(documentId: string, pageNumber: number, pageData: PageData) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(pageCacheKey(documentId, pageNumber), JSON.stringify(pageData));
+  } catch {
+    // Best effort only.
   }
 }
 
@@ -293,7 +326,30 @@ export const api = {
     });
   },
   getPage(documentId: string, pageNumber: number) {
-    return request<PageData>(`/documents/${documentId}/pages/${pageNumber}`);
+    const cached = getCachedPageData(documentId, pageNumber);
+    if (cached) {
+      return Promise.resolve(cached);
+    }
+
+    return request<PageData>(`/documents/${documentId}/pages/${pageNumber}`).then((pageData) => {
+      setCachedPageData(documentId, pageNumber, pageData);
+      return pageData;
+    });
+  },
+  resolveDocumentPage(documentId: string, pageLabel: number, title?: string) {
+    const suffix = title ? `?title=${encodeURIComponent(title)}` : "";
+    return request<{ page_label: number; resolved_page: number }>(
+      `/documents/${documentId}/resolve-page/${pageLabel}${suffix}`,
+    );
+  },
+  resolveDocumentSection(documentId: string, title: string, fromPage?: number) {
+    const params = new URLSearchParams({ title });
+    if (typeof fromPage === "number") {
+      params.set("from_page", String(fromPage));
+    }
+    return request<{ title: string; resolved_page: number }>(
+      `/documents/${documentId}/resolve-section?${params.toString()}`,
+    );
   },
   listConversations(projectId?: string | null) {
     const suffix = projectId ? `?project_id=${projectId}` : "";

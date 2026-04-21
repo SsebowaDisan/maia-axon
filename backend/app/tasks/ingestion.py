@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import uuid
+from collections import Counter
 
 import fitz  # PyMuPDF
 import openai
@@ -43,6 +44,10 @@ _MATH_TOKEN_RE = re.compile(
     r"(?i)(\b[a-z]{1,4}\s*=|Î”|Î±|Î²|Î³|Î»|Î¼|Î·|Ï|Ï€|Î£|âˆš|\bm/s\b|\bpa\b|\bmbar\b|\bbar\b|\bkw\b|\bw\b|\bkg/s\b|\bmÂ³/h\b|\bm3/h\b|\d+\s*(pa|mbar|bar|kw|w|kg/s|m/s|mm|cm|mÂ³/h|m3/h))"
 )
 _TOC_LINE_RE = re.compile(r"\.{2,}\s*\d{1,3}$")
+_TOC_HEADING_RE = re.compile(r"(?i)\b(table of contents|contents|inhalt|index|indice|sommaire)\b")
+_TOC_PAGE_LINK_RE = re.compile(r"^(.*?)(?:\s*[.\-…_]{2,}\s*|\s+)(\d{1,4})$")
+_TOC_TITLE_ONLY_RE = re.compile(r"^\d+(?:\.\d+)*[.)]?\s+(.+)$")
+_TOC_NUMBER_ONLY_RE = re.compile(r"^[0-9IlS]+(?:\.[0-9IlS]+)*[.)]?$")
 
 
 def _get_document(db: Session, doc_id: str) -> Document:
@@ -248,6 +253,459 @@ def _line_looks_like_equation(text: str) -> bool:
 
 def _line_looks_like_toc_entry(text: str) -> bool:
     return _TOC_LINE_RE.search(text) is not None
+
+
+def _normalize_page_text(text: str | None) -> str:
+    if not text:
+        return ""
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def _normalize_section_title(title: str | None) -> str:
+    normalized = _normalize_page_text(title)
+    if not normalized:
+        return ""
+    return re.sub(r"^\d+\s+", "", normalized).strip()
+
+
+def _extract_printed_page_labels(text: str | None) -> list[int]:
+    if not text:
+        return []
+
+    lines = [line.strip() for line in re.split(r"\r?\n", text) if line.strip()]
+    if not lines:
+        return []
+
+    candidates: list[int] = []
+    edge_lines = lines[:6] + lines[-8:]
+    for line in edge_lines:
+        if len(line) > 14:
+            continue
+        match = re.fullmatch(r"\D{0,2}(\d{1,4})\D{0,2}", line)
+        if not match:
+            continue
+        label = int(match.group(1))
+        if label <= 0:
+            continue
+        candidates.append(label)
+
+    return candidates
+
+
+def _extract_primary_printed_page_label(markdown: str | None, ocr_text: str | None) -> int | None:
+    labels = _extract_printed_page_labels(markdown) + _extract_printed_page_labels(ocr_text)
+    if not labels:
+        return None
+
+    counts = Counter(labels)
+    return max(counts.items(), key=lambda item: (item[1], item[0]))[0]
+
+
+def _score_page_label_match(text: str | None, page_label: int) -> int:
+    if not text:
+        return 0
+
+    label = str(page_label)
+    lines = [line.strip() for line in re.split(r"\r?\n", text) if line.strip()]
+    if not lines:
+        return 0
+
+    best_score = 0
+    for index, line in enumerate(lines):
+        lowered = line.lower()
+        near_edge_bonus = 12 if index < 6 or index >= max(len(lines) - 8, 0) else 0
+
+        if line == label:
+            best_score = max(best_score, 100 + near_edge_bonus)
+            continue
+
+        if len(line) <= 40 and re.search(rf"\b{re.escape(label)}\b$", line):
+            best_score = max(best_score, 72 + near_edge_bonus)
+
+        if re.search(rf"\bpage\s+{re.escape(label)}\b", lowered):
+            best_score = max(best_score, 56 + near_edge_bonus)
+
+        if re.search(rf"^\W*{re.escape(label)}\W*$", line):
+            best_score = max(best_score, 92 + near_edge_bonus)
+
+    return best_score
+
+
+def _section_title_score(page_text: str, section_title: str) -> int:
+    if not page_text or not section_title:
+        return 0
+
+    if section_title == page_text:
+        return 160
+    if page_text.startswith(section_title):
+        return 140
+    if section_title in page_text:
+        return 110
+
+    title_tokens = [token for token in section_title.split() if len(token) > 2]
+    if not title_tokens:
+        return 0
+
+    overlap = sum(1 for token in title_tokens if token in page_text)
+    if overlap < max(2, len(title_tokens) // 2):
+        return 0
+    return 70 + overlap * 6
+
+
+def _bbox_has_area(bbox: list[float] | None) -> bool:
+    if not bbox or len(bbox) != 4:
+        return False
+    return float(bbox[2]) > float(bbox[0]) and float(bbox[3]) > float(bbox[1])
+
+
+def _extract_navigation_entries(text: str | None) -> list[dict]:
+    if not text:
+        return []
+
+    entries: list[dict] = []
+    pending_number: str | None = None
+
+    for raw_line in re.split(r"\r?\n", text):
+        clean_line = _clean_line(raw_line)
+        if not clean_line or len(clean_line) > 220:
+            continue
+
+        if pending_number:
+            combined_line = f"{pending_number} {clean_line}"
+            combined_page_match = re.search(r"(\d{1,4})\s*$", combined_line)
+            if combined_page_match:
+                label = combined_line[: combined_page_match.start()].rstrip(" .·•-–—_")
+                page_label = int(combined_page_match.group(1))
+                alpha_count = sum(1 for ch in label if ch.isalpha())
+                if (
+                    label
+                    and page_label > 0
+                    and alpha_count >= 3
+                    and "=" not in label
+                    and len(label) >= 4
+                ):
+                    entries.append({
+                        "kind": "page",
+                        "raw": combined_line,
+                        "label": label,
+                        "page_label": page_label,
+                    })
+                    pending_number = None
+                    continue
+
+            entries.append({
+                "kind": "section",
+                "raw": combined_line,
+                "label": clean_line,
+            })
+            pending_number = None
+            continue
+
+        if _TOC_NUMBER_ONLY_RE.fullmatch(clean_line):
+            pending_number = clean_line
+            continue
+
+        page_match = re.search(r"(\d{1,4})\s*$", clean_line)
+        if page_match:
+            label = clean_line[: page_match.start()].rstrip(" .·•-–—_")
+            page_label = int(page_match.group(1))
+            alpha_count = sum(1 for ch in label if ch.isalpha())
+            if (
+                label
+                and page_label > 0
+                and alpha_count >= 3
+                and "=" not in label
+                and len(label) >= 4
+            ):
+                entries.append({
+                    "kind": "page",
+                    "raw": clean_line,
+                    "label": label,
+                    "page_label": page_label,
+                })
+            continue
+
+        title_match = _TOC_TITLE_ONLY_RE.match(clean_line)
+        if title_match:
+            label = (title_match.group(1) or "").strip()
+            alpha_count = sum(1 for ch in label if ch.isalpha())
+            if label and alpha_count >= 3 and "=" not in label and len(label) >= 4:
+                entries.append({
+                    "kind": "section",
+                    "raw": clean_line,
+                    "label": label,
+                })
+
+    return entries
+
+
+def _page_looks_like_navigation(page: Page) -> bool:
+    combined = "\n".join(part for part in (page.markdown, page.ocr_text) if part)
+    if _TOC_HEADING_RE.search(combined):
+        return True
+
+    candidate_count = 0
+    for region in page.regions or []:
+        if region.get("type") != "text":
+            continue
+        candidate_count += len(_extract_navigation_entries(region.get("content")))
+
+    return candidate_count >= 8
+
+
+def _build_navigation_rows(pages: list[Page]) -> list[dict]:
+    return [
+        {
+            "page_number": page.page_number,
+            "markdown": page.markdown,
+            "ocr_text": page.ocr_text,
+            "printed_page_label": _extract_primary_printed_page_label(page.markdown, page.ocr_text),
+        }
+        for page in pages
+    ]
+
+
+def _resolve_printed_page_number_for_rows(rows: list[dict], page_label: int, title: str | None) -> int:
+    if page_label <= 0:
+        return page_label
+
+    if not rows:
+        return page_label
+
+    max_page = max(int(row["page_number"]) for row in rows)
+    offset_counter: Counter[int] = Counter()
+
+    for row in rows:
+        printed_label = row.get("printed_page_label")
+        if isinstance(printed_label, int) and printed_label > 0:
+            offset_counter[int(row["page_number"]) - printed_label] += 1
+
+        labels = set(_extract_printed_page_labels(row.get("markdown"))) | set(
+            _extract_printed_page_labels(row.get("ocr_text"))
+        )
+        for label in labels:
+            offset = int(row["page_number"]) - label
+            if -2 <= offset <= max_page:
+                offset_counter[offset] += 1
+
+    dominant_offset = 0
+    if offset_counter:
+        dominant_offset = max(
+            offset_counter.items(),
+            key=lambda item: (item[1], -abs(item[0]), item[0]),
+        )[0]
+
+    guessed_page = min(max(page_label + dominant_offset, 1), max_page)
+
+    matching_rows = [row for row in rows if row.get("printed_page_label") == page_label]
+    if matching_rows:
+        if title:
+            normalized_title = _normalize_page_text(title)
+            if normalized_title:
+                best_row = max(
+                    matching_rows,
+                    key=lambda row: (
+                        _section_title_score(
+                            " ".join(
+                                part
+                                for part in (
+                                    _normalize_page_text(row.get("markdown")),
+                                    _normalize_page_text(row.get("ocr_text")),
+                                )
+                                if part
+                            ),
+                            normalized_title,
+                        ),
+                        -abs(int(row["page_number"]) - guessed_page),
+                    ),
+                )
+                best_row_text = " ".join(
+                    part
+                    for part in (
+                        _normalize_page_text(best_row.get("markdown")),
+                        _normalize_page_text(best_row.get("ocr_text")),
+                    )
+                    if part
+                )
+                if _section_title_score(best_row_text, normalized_title) >= 70:
+                    return int(best_row["page_number"])
+
+        return min((int(row["page_number"]) for row in matching_rows), key=lambda page_number: abs(page_number - guessed_page))
+
+    best_page = guessed_page
+    best_score = 0
+    for row in rows:
+        score = max(
+            _score_page_label_match(row.get("markdown"), page_label),
+            _score_page_label_match(row.get("ocr_text"), page_label),
+        )
+        if score > best_score:
+            best_score = score
+            best_page = int(row["page_number"])
+
+    if best_score >= 56:
+        return best_page
+
+    normalized_title = _normalize_page_text(title)
+    if normalized_title:
+        title_matches: list[int] = []
+        for row in rows:
+            combined = " ".join(
+                part for part in (_normalize_page_text(row.get("markdown")), _normalize_page_text(row.get("ocr_text"))) if part
+            )
+            if normalized_title and normalized_title in combined:
+                title_matches.append(int(row["page_number"]))
+
+        if title_matches:
+            return min(title_matches, key=lambda page_number: abs(page_number - guessed_page))
+
+    return guessed_page
+
+
+def _resolve_section_title_for_rows(rows: list[dict], title: str, from_page: int) -> int | None:
+    normalized_title = _normalize_section_title(title)
+    if not normalized_title:
+        return None
+
+    min_page = max(from_page + 1, 1)
+    best_page: int | None = None
+    best_score = 0
+
+    for row in rows:
+        page_number = int(row["page_number"])
+        if page_number < min_page:
+            continue
+
+        page_text = " ".join(
+            part for part in (_normalize_page_text(row.get("markdown")), _normalize_page_text(row.get("ocr_text"))) if part
+        )
+        score = _section_title_score(page_text, normalized_title)
+        if score > best_score:
+            best_score = score
+            best_page = page_number
+
+    return best_page if best_score >= 88 else None
+
+
+def _persist_navigation_targets(pages: list[Page], db: Session) -> int:
+    if not pages:
+        return 0
+
+    rows = _build_navigation_rows(pages)
+    updated_pages = 0
+
+    for page in pages:
+        source_regions = [dict(region) for region in (page.regions or []) if region.get("type") != "nav_link"]
+        stripped_source_regions: list[dict] = []
+        for region in source_regions:
+            region = dict(region)
+            for key in ("target_page_number", "target_page_label", "target_title", "nav_entry_kind"):
+                region.pop(key, None)
+            stripped_source_regions.append(region)
+        source_regions = stripped_source_regions
+        if not _page_looks_like_navigation(page):
+            if source_regions != (page.regions or []):
+                page.regions = source_regions
+                updated_pages += 1
+            continue
+
+        next_regions: list[dict] = []
+        page_changed = False
+        extracted_entry_count = 0
+
+        for region in source_regions:
+            region = dict(region)
+            if region.get("type") != "text":
+                next_regions.append(region)
+                continue
+
+            entries = _extract_navigation_entries(region.get("content"))
+            if not entries:
+                next_regions.append(region)
+                continue
+
+            extracted_entry_count += len(entries)
+            if len(entries) == 1 and _bbox_has_area(region.get("bbox")):
+                entry = entries[0]
+                if entry["kind"] == "page":
+                    region["target_page_number"] = _resolve_printed_page_number_for_rows(rows, entry["page_label"], entry["label"])
+                    region["target_page_label"] = entry["page_label"]
+                    region["target_title"] = entry["label"]
+                    region["nav_entry_kind"] = "page"
+                else:
+                    resolved_page = _resolve_section_title_for_rows(rows, entry["label"], page.page_number)
+                    if resolved_page:
+                        region["target_page_number"] = resolved_page
+                        region["target_title"] = entry["label"]
+                        region["nav_entry_kind"] = "section"
+
+                next_regions.append(region)
+                if region.get("target_page_number"):
+                    page_changed = True
+                continue
+
+            next_regions.append(region)
+            for entry in entries:
+                nav_region = {
+                    "type": "nav_link",
+                    "glm_label": "nav_link",
+                    "bbox": [0, 0, 0, 0],
+                    "content": entry["raw"],
+                    "target_title": entry["label"],
+                    "nav_entry_kind": entry["kind"],
+                }
+
+                if entry["kind"] == "page":
+                    nav_region["target_page_label"] = entry["page_label"]
+                    nav_region["target_page_number"] = _resolve_printed_page_number_for_rows(
+                        rows,
+                        entry["page_label"],
+                        entry["label"],
+                    )
+                else:
+                    resolved_page = _resolve_section_title_for_rows(rows, entry["label"], page.page_number)
+                    if not resolved_page:
+                        continue
+                    nav_region["target_page_number"] = resolved_page
+
+                next_regions.append(nav_region)
+                page_changed = True
+
+        if extracted_entry_count == 0:
+            combined_entries = _extract_navigation_entries("\n".join(part for part in (page.markdown, page.ocr_text) if part))
+            for entry in combined_entries:
+                nav_region = {
+                    "type": "nav_link",
+                    "glm_label": "nav_link",
+                    "bbox": [0, 0, 0, 0],
+                    "content": entry["raw"],
+                    "target_title": entry["label"],
+                    "nav_entry_kind": entry["kind"],
+                }
+                if entry["kind"] == "page":
+                    nav_region["target_page_label"] = entry["page_label"]
+                    nav_region["target_page_number"] = _resolve_printed_page_number_for_rows(
+                        rows,
+                        entry["page_label"],
+                        entry["label"],
+                    )
+                else:
+                    resolved_page = _resolve_section_title_for_rows(rows, entry["label"], page.page_number)
+                    if not resolved_page:
+                        continue
+                    nav_region["target_page_number"] = resolved_page
+
+                next_regions.append(nav_region)
+                page_changed = True
+
+        if page_changed or next_regions != (page.regions or []):
+            page.regions = next_regions
+            updated_pages += 1
+
+    if updated_pages:
+        db.commit()
+
+    return updated_pages
 
 
 def _page_is_searchable(text: str) -> bool:
@@ -760,6 +1218,10 @@ def run_ocr_stage(self, doc_id: str):
             _update_progress(db, doc_id, completed, total)
             if completed == total or completed % _PROGRESS_LOG_INTERVAL == 0:
                 _progress_log(doc_id, "glm_ocr", completed, total)
+
+        navigation_updates = _persist_navigation_targets(_document_page_rows(db, doc_id), db)
+        if navigation_updates:
+            logger.info("[%s] Persisted navigation targets on %s pages", doc_id, navigation_updates)
 
         logger.info("[%s] OCR complete", doc_id)
         caption_document.delay(doc_id)

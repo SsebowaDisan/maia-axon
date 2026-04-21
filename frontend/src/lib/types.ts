@@ -89,6 +89,10 @@ export interface PageRegion {
   glm_label?: string;
   bbox?: number[];
   content?: string;
+  target_page_number?: number;
+  target_page_label?: number;
+  target_title?: string;
+  nav_entry_kind?: "page" | "section" | string;
   latex?: string;
   variables?: Record<string, string>;
   caption?: string;
@@ -102,6 +106,7 @@ export interface PageData {
   id: string;
   document_id: string;
   page_number: number;
+  printed_page_label: number | null;
   image_url: string;
   page_width: number | null;
   page_height: number | null;

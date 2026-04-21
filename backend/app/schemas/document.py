@@ -54,6 +54,7 @@ class PageResponse(BaseModel):
     id: UUID
     document_id: UUID
     page_number: int
+    printed_page_label: int | None = None
     image_url: str
     page_width: float | None = None
     page_height: float | None = None

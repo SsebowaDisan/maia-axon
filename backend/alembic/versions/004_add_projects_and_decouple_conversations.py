@@ -1,6 +1,6 @@
 """add projects and decouple conversations from groups
 
-Revision ID: 004_add_projects_and_decouple_conversations
+Revision ID: 004_projects_groups
 Revises: 003_add_document_progress_fields
 Create Date: 2026-04-20
 """
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
-revision: str = "004_add_projects_and_decouple_conversations"
+revision: str = "004_projects_groups"
 down_revision: Union[str, None] = "003_add_document_progress_fields"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

@@ -1,6 +1,8 @@
 import fitz
 from uuid import UUID
 from functools import lru_cache
+import re
+from collections import Counter
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response
@@ -68,6 +70,212 @@ def _get_pdf_page_dimensions(document_id: UUID, page_number: int) -> tuple[float
     if 0 < page_number <= len(dimensions):
         return dimensions[page_number - 1]
     return None, None
+
+
+def _score_page_label_match(text: str | None, page_label: int) -> int:
+    if not text:
+        return 0
+
+    label = str(page_label)
+    lines = [line.strip() for line in re.split(r"\r?\n", text) if line.strip()]
+    if not lines:
+        return 0
+
+    best_score = 0
+    for index, line in enumerate(lines):
+        lowered = line.lower()
+        near_edge_bonus = 12 if index < 6 or index >= max(len(lines) - 8, 0) else 0
+
+        if line == label:
+            best_score = max(best_score, 100 + near_edge_bonus)
+            continue
+
+        if len(line) <= 40 and re.search(rf"\b{re.escape(label)}\b$", line):
+            best_score = max(best_score, 72 + near_edge_bonus)
+
+        if re.search(rf"\bpage\s+{re.escape(label)}\b", lowered):
+            best_score = max(best_score, 56 + near_edge_bonus)
+
+        if re.search(rf"^\W*{re.escape(label)}\W*$", line):
+            best_score = max(best_score, 92 + near_edge_bonus)
+
+    return best_score
+
+
+def _normalize_page_text(text: str | None) -> str:
+    if not text:
+        return ""
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def _normalize_section_title(title: str | None) -> str:
+    normalized = _normalize_page_text(title)
+    if not normalized:
+        return ""
+    return re.sub(r"^\d+\s+", "", normalized).strip()
+
+
+def _section_title_score(page_text: str, section_title: str) -> int:
+    if not page_text or not section_title:
+        return 0
+
+    if section_title == page_text:
+        return 160
+    if page_text.startswith(section_title):
+        return 140
+    if section_title in page_text:
+        return 110
+
+    title_tokens = [token for token in section_title.split() if len(token) > 2]
+    if not title_tokens:
+        return 0
+
+    overlap = sum(1 for token in title_tokens if token in page_text)
+    if overlap < max(2, len(title_tokens) // 2):
+        return 0
+    return 70 + overlap * 6
+
+
+def _extract_printed_page_labels(text: str | None) -> list[int]:
+    if not text:
+        return []
+
+    lines = [line.strip() for line in re.split(r"\r?\n", text) if line.strip()]
+    if not lines:
+        return []
+
+    candidates: list[int] = []
+    edge_lines = lines[:6] + lines[-8:]
+    for line in edge_lines:
+        if len(line) > 14:
+            continue
+        match = re.fullmatch(r"\D{0,2}(\d{1,4})\D{0,2}", line)
+        if not match:
+            continue
+        label = int(match.group(1))
+        if label <= 0:
+            continue
+        candidates.append(label)
+
+    return candidates
+
+
+def _extract_primary_printed_page_label(markdown: str | None, ocr_text: str | None) -> int | None:
+    labels = _extract_printed_page_labels(markdown) + _extract_printed_page_labels(ocr_text)
+    if not labels:
+        return None
+
+    counts = Counter(labels)
+    return max(counts.items(), key=lambda item: (item[1], item[0]))[0]
+
+
+async def _resolve_printed_page_number(
+    document_id: UUID,
+    page_label: int,
+    title: str | None,
+    db: AsyncSession,
+) -> int:
+    if page_label <= 0:
+        return page_label
+
+    result = await db.execute(
+        select(Page.page_number, Page.markdown, Page.ocr_text)
+        .where(Page.document_id == document_id)
+        .order_by(Page.page_number.asc())
+    )
+    rows = result.all()
+    if not rows:
+        return page_label
+
+    max_page = max(int(row.page_number) for row in rows)
+
+    offset_counter: Counter[int] = Counter()
+    for row in rows:
+        page_number = int(row.page_number)
+        labels = set(_extract_printed_page_labels(row.markdown)) | set(_extract_printed_page_labels(row.ocr_text))
+        for label in labels:
+            offset = page_number - label
+            if -2 <= offset <= max_page:
+                offset_counter[offset] += 1
+
+    dominant_offset = 0
+    if offset_counter:
+        dominant_offset = max(
+            offset_counter.items(),
+            key=lambda item: (item[1], -abs(item[0]), item[0]),
+        )[0]
+
+    guessed_page = min(max(page_label + dominant_offset, 1), max_page)
+
+    best_page = guessed_page
+    best_score = 0
+    for row in rows:
+        score = max(
+            _score_page_label_match(row.markdown, page_label),
+            _score_page_label_match(row.ocr_text, page_label),
+        )
+        if score > best_score:
+            best_score = score
+            best_page = int(row.page_number)
+
+    if best_score >= 56:
+        return best_page
+
+    normalized_title = _normalize_page_text(title)
+    if normalized_title:
+        title_matches: list[int] = []
+        for row in rows:
+            combined = " ".join(
+                part for part in (_normalize_page_text(row.markdown), _normalize_page_text(row.ocr_text)) if part
+            )
+            if normalized_title and normalized_title in combined:
+                title_matches.append(int(row.page_number))
+
+        if title_matches:
+            return min(title_matches, key=lambda page_number: abs(page_number - guessed_page))
+
+    return guessed_page
+
+
+async def _resolve_section_title(
+    document_id: UUID,
+    title: str,
+    from_page: int | None,
+    db: AsyncSession,
+) -> int | None:
+    normalized_title = _normalize_section_title(title)
+    if not normalized_title:
+        return None
+
+    result = await db.execute(
+        select(Page.page_number, Page.markdown, Page.ocr_text)
+        .where(Page.document_id == document_id)
+        .order_by(Page.page_number.asc())
+    )
+    rows = result.all()
+    if not rows:
+        return None
+
+    min_page = max((from_page or 1) + 1, 1)
+    best_page: int | None = None
+    best_score = 0
+
+    for row in rows:
+        page_number = int(row.page_number)
+        if page_number < min_page:
+            continue
+
+        page_text = " ".join(
+            part
+            for part in (_normalize_page_text(row.markdown), _normalize_page_text(row.ocr_text))
+            if part
+        )
+        score = _section_title_score(page_text, normalized_title)
+        if score > best_score:
+            best_score = score
+            best_page = page_number
+
+    return best_page if best_score >= 88 else None
 
 
 async def _check_group_access(group_id: UUID, user: User, db: AsyncSession) -> Group:
@@ -369,6 +577,7 @@ async def get_page(
         id=public_page.id,
         document_id=public_page.document_id,
         page_number=public_page.page_number,
+        printed_page_label=_extract_primary_printed_page_label(public_page.markdown, public_page.ocr_text),
         image_url=public_page.image_url,
         page_width=page_width,
         page_height=page_height,
@@ -411,3 +620,48 @@ async def get_page_image(
         media_type="image/png",
         headers={"Cache-Control": "private, max-age=3600"},
     )
+
+
+@router.get("/documents/{document_id}/resolve-page/{page_label}")
+async def resolve_document_page(
+    document_id: UUID,
+    page_label: int,
+    title: str | None = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    doc = result.scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await _check_group_access(doc.group_id, user, db)
+
+    resolved_page = await _resolve_printed_page_number(document_id, page_label, title, db)
+    return {
+        "page_label": page_label,
+        "resolved_page": resolved_page,
+    }
+
+
+@router.get("/documents/{document_id}/resolve-section")
+async def resolve_document_section(
+    document_id: UUID,
+    title: str,
+    from_page: int | None = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    doc = result.scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await _check_group_access(doc.group_id, user, db)
+
+    resolved_page = await _resolve_section_title(document_id, title, from_page, db)
+    if resolved_page is None:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    return {
+        "title": title,
+        "resolved_page": resolved_page,
+    }

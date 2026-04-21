@@ -14,6 +14,7 @@ export function DeleteConfirmDialog({
   description,
   confirmLabel,
   isDeleting = false,
+  requireDeleteText = true,
   onConfirm,
 }: {
   open: boolean;
@@ -22,6 +23,7 @@ export function DeleteConfirmDialog({
   description: React.ReactNode;
   confirmLabel: string;
   isDeleting?: boolean;
+  requireDeleteText?: boolean;
   onConfirm: () => Promise<void> | void;
 }) {
   const [deleteText, setDeleteText] = useState("");
@@ -60,11 +62,13 @@ export function DeleteConfirmDialog({
           </div>
 
           <div className="mt-5 space-y-3">
-            <Input
-              placeholder='Type "delete"'
-              value={deleteText}
-              onChange={(event) => setDeleteText(event.target.value)}
-            />
+            {requireDeleteText ? (
+              <Input
+                placeholder='Type "delete"'
+                value={deleteText}
+                onChange={(event) => setDeleteText(event.target.value)}
+              />
+            ) : null}
             <div className="flex gap-3">
               <Dialog.Close asChild>
                 <Button type="button" variant="secondary" className="flex-1">
@@ -75,7 +79,7 @@ export function DeleteConfirmDialog({
                 type="button"
                 variant="danger"
                 className="flex-1"
-                disabled={deleteText.trim().toLowerCase() !== "delete" || isDeleting}
+                disabled={(requireDeleteText && deleteText.trim().toLowerCase() !== "delete") || isDeleting}
                 onClick={() => void onConfirm()}
               >
                 {isDeleting ? "Deleting..." : confirmLabel}

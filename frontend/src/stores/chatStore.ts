@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 
 import { api } from "@/lib/api";
 import { chatSocket } from "@/lib/ws";
@@ -9,7 +10,6 @@ import type {
   ChatQueryPayload,
   PromptAttachment,
   SearchMode,
-  WsServerEvent,
 } from "@/lib/types";
 import { useAuthStore } from "@/stores/authStore";
 import { useConversationStore } from "@/stores/conversationStore";
@@ -18,6 +18,9 @@ import { useGroupStore } from "@/stores/groupStore";
 import { useMindmapStore } from "@/stores/mindmapStore";
 import { usePDFViewerStore } from "@/stores/pdfViewerStore";
 import { useProjectStore } from "@/stores/projectStore";
+
+const PDF_WARMUP_DOC_LIMIT = 3;
+const PDF_WARMUP_PAGES = [1, 2, 3];
 
 function makeMessage(
   partial: Partial<ChatMessage> & Pick<ChatMessage, "role" | "content" | "searchMode">,
@@ -40,6 +43,7 @@ function makeMessage(
 
 interface ChatState {
   messages: ChatMessage[];
+  messageCacheByConversation: Record<string, ChatMessage[]>;
   draft: string;
   promptAttachments: PromptAttachment[];
   draftMode: "compose" | "user_edit" | "assistant_edit";
@@ -48,6 +52,9 @@ interface ChatState {
   welcomeStreaming: boolean;
   connectionError: string | null;
   initialized: boolean;
+  isHydrated: boolean;
+  autoScrollNonce: number;
+  setHydrated: () => void;
   initialize: () => void;
   setMode: (mode: SearchMode) => void;
   setDraft: (draft: string) => void;
@@ -58,7 +65,8 @@ interface ChatState {
   setDraftMode: (draftMode: "compose" | "user_edit" | "assistant_edit") => void;
   updateMessageContent: (messageId: string, content: string) => void;
   clearChat: () => void;
-  hydrateMessages: (messages: ChatMessage[]) => void;
+  hydrateMessages: (messages: ChatMessage[], conversationId?: string | null) => void;
+  getCachedMessagesForConversation: (conversationId: string) => ChatMessage[] | null;
   sendMessage: (message: string) => Promise<void>;
 }
 
@@ -71,8 +79,32 @@ function lastAssistantIndex(messages: ChatMessage[]) {
   return -1;
 }
 
-export const useChatStore = create<ChatState>((set, get) => ({
+function withConversationCache(
+  state: Pick<ChatState, "messages" | "messageCacheByConversation">,
+  messages: ChatMessage[],
+  conversationId: string | null | undefined,
+) {
+  if (!conversationId) {
+    return {
+      ...state,
+      messages,
+    };
+  }
+
+  return {
+    ...state,
+    messages,
+    messageCacheByConversation: {
+      ...state.messageCacheByConversation,
+      [conversationId]: messages,
+    },
+  };
+}
+
+export const useChatStore = create<ChatState>()(
+  persist((set, get) => ({
   messages: [],
+  messageCacheByConversation: {},
   draft: "",
   promptAttachments: [],
   draftMode: "compose",
@@ -81,6 +113,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   welcomeStreaming: false,
   connectionError: null,
   initialized: false,
+  isHydrated: false,
+  autoScrollNonce: 0,
+  setHydrated() {
+    set({ isHydrated: true });
+  },
   initialize() {
     if (get().initialized) {
       return;
@@ -112,7 +149,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
           content: `${next[index].content}${pending}`,
           isStreaming: true,
         };
-        return { ...state, messages: next };
+        return withConversationCache(
+          state,
+          next,
+          useConversationStore.getState().activeConversationId,
+        );
       });
     };
 
@@ -125,7 +166,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
           const next = [...state.messages];
           next[index] = updater(next[index]);
-          return { ...state, messages: next };
+          return withConversationCache(
+            state,
+            next,
+            useConversationStore.getState().activeConversationId,
+          );
         });
       };
 
@@ -188,6 +233,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }));
           useConversationStore.getState().setActiveConversationId(event.conversation_id);
           void useConversationStore.getState().fetchConversations();
+          set((state) => withConversationCache(state, state.messages, event.conversation_id));
           set({ streaming: false });
           break;
         case "error":
@@ -255,10 +301,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     useMindmapStore.getState().clearMindmap();
     set({ messages: [], streaming: false, draft: "", draftMode: "compose", promptAttachments: [] });
   },
-  hydrateMessages(messages) {
-    set({ messages });
+  hydrateMessages(messages, conversationId) {
+    set((state) => withConversationCache(state, messages, conversationId));
     const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
     useMindmapStore.getState().setMindmapData(lastAssistant?.mindmap ?? null);
+  },
+  getCachedMessagesForConversation(conversationId) {
+    return get().messageCacheByConversation[conversationId] ?? null;
   },
   async sendMessage(content) {
     const { mode, promptAttachments } = get();
@@ -266,11 +315,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const groupState = useGroupStore.getState();
     const projectState = useProjectStore.getState();
     const conversationState = useConversationStore.getState();
+    const documentState = useDocumentStore.getState();
     const groupId =
       mode === "standard"
         ? groupState.activeGroupId ?? groupState.groups[0]?.id ?? null
         : groupState.activeGroupId;
-    const documentIds = useDocumentStore.getState().selectedDocumentIds;
+    const documentIds = documentState.selectedDocumentIds;
     const activeConversationProjectId =
       conversationState.activeConversation?.project_id ??
       conversationState.conversations.find(
@@ -287,6 +337,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     get().initialize();
+
+    if (mode !== "standard" && groupId) {
+      const documentsInGroup = documentState.documentsByGroup[groupId] ?? [];
+      const warmupDocuments =
+        documentIds.length > 0
+          ? documentsInGroup.filter((document) => documentIds.includes(document.id))
+          : documentsInGroup.filter((document) => document.status === "ready").slice(0, PDF_WARMUP_DOC_LIMIT);
+
+      for (const document of warmupDocuments.slice(0, PDF_WARMUP_DOC_LIMIT)) {
+        void usePDFViewerStore.getState().prefetchPages(document, PDF_WARMUP_PAGES);
+      }
+    }
 
     const visibleUserContent =
       content.trim() ||
@@ -307,10 +369,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
 
     set((state) => ({
-      messages: [...state.messages, userMessage, assistantMessage],
+      ...withConversationCache(
+        state,
+        [...state.messages, userMessage, assistantMessage],
+        conversationId,
+      ),
       streaming: true,
       connectionError: null,
       promptAttachments: [],
+      autoScrollNonce: state.autoScrollNonce + 1,
     }));
 
     const payload: ChatQueryPayload = {
@@ -343,4 +410,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       throw error;
     }
   },
-}));
+}),
+  {
+    name: "maia-axon-chat",
+    partialize: (state) => ({
+      messages: state.messages,
+      messageCacheByConversation: state.messageCacheByConversation,
+      mode: state.mode,
+    }),
+    onRehydrateStorage: () => (state) => {
+      state?.setHydrated();
+    },
+  },
+));

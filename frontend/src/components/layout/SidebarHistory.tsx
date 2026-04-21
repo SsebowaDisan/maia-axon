@@ -428,6 +428,7 @@ export function SidebarHistory() {
   const fetchDocuments = useDocumentStore((state) => state.fetchDocuments);
   const clearSelection = useDocumentStore((state) => state.clearSelection);
   const hydrateMessages = useChatStore((state) => state.hydrateMessages);
+  const getCachedMessagesForConversation = useChatStore((state) => state.getCachedMessagesForConversation);
   const clearChat = useChatStore((state) => state.clearChat);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(null);
@@ -438,7 +439,6 @@ export function SidebarHistory() {
   const [creatingProject, setCreatingProject] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
   const [deleteProjectTarget, setDeleteProjectTarget] = useState<Project | null>(null);
-  const [deleteProjectText, setDeleteProjectText] = useState("");
   const [deleteConversationTarget, setDeleteConversationTarget] = useState<ConversationSummary | null>(null);
   const [deletingProject, setDeletingProject] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -498,39 +498,30 @@ export function SidebarHistory() {
 
   const grouped = useMemo(() => {
     const groupedById = filteredConversations.reduce<Record<string, typeof filteredConversations>>(
-      (acc, conversation) => {
-        const key = conversation.project_id ?? "unassigned";
-        acc[key] ??= [];
-        acc[key].push(conversation);
-        return acc;
-      },
-      {},
+        (acc, conversation) => {
+        if (!conversation.project_id) {
+          return acc;
+        }
+        const key = conversation.project_id;
+          acc[key] ??= [];
+          acc[key].push(conversation);
+          return acc;
+        },
+        {},
     );
 
-    const sections = projects.map((project) => ({
-      id: project.id,
-      label: deletedProjectIds[project.id] ? "Deleted" : project.name,
-      isDeleted: !!deletedProjectIds[project.id],
-      items: groupedById[project.id] ?? [],
-    }));
+      const sections = projects.map((project) => ({
+        id: project.id,
+        label: deletedProjectIds[project.id] ? "Deleted" : project.name,
+        isDeleted: !!deletedProjectIds[project.id],
+        items: groupedById[project.id] ?? [],
+      }));
 
-    const otherItems = groupedById.unassigned ?? [];
-
-    if (otherItems.length) {
-      sections.push({
-        id: "unassigned",
-        label: "Unassigned",
-        isDeleted: false,
-        items: otherItems,
-      });
-    }
-
-    return sections;
+      return sections;
   }, [deletedProjectIds, filteredConversations, projects]);
 
   function closeDeleteProjectDialog() {
     setDeleteProjectTarget(null);
-    setDeleteProjectText("");
   }
 
   function closeCreateProjectDialog() {
@@ -550,7 +541,14 @@ export function SidebarHistory() {
       await fetchDocuments(groupId);
     }
     const detail = await loadConversation(conversationId);
-    hydrateMessages(detail.messages.map(mapMessage));
+    const serverMessages = detail.messages.map(mapMessage);
+    const latestCachedMessages = getCachedMessagesForConversation(detail.id);
+    if (latestCachedMessages && latestCachedMessages.length > serverMessages.length) {
+      hydrateMessages(latestCachedMessages, detail.id);
+      return;
+    }
+
+    hydrateMessages(serverMessages, detail.id);
   }
 
   function toggleProjectSection(projectId: string) {
@@ -592,7 +590,7 @@ export function SidebarHistory() {
   }
 
   async function handleDeleteProject() {
-    if (!deleteProjectTarget || deleteProjectText.trim().toLowerCase() !== "delete") {
+    if (!deleteProjectTarget) {
       return;
     }
 
@@ -604,7 +602,6 @@ export function SidebarHistory() {
         startNewConversation();
       }
       setDeleteProjectTarget(null);
-      setDeleteProjectText("");
       await fetchConversations();
     } finally {
       setDeletingProject(false);
@@ -687,8 +684,8 @@ export function SidebarHistory() {
 
           <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin pr-1">
             {grouped.map((section) => (
-              <div key={section.id} className="group mb-5">
-                <div className="mb-2 flex items-center justify-between gap-2 px-2">
+              <div key={section.id} className="mb-5">
+                <div className="group/project-header mb-2 flex items-center justify-between gap-2 px-2">
                   <button
                     type="button"
                     className="flex min-w-0 items-center gap-2 text-left"
@@ -705,38 +702,35 @@ export function SidebarHistory() {
                       {section.label}
                     </p>
                   </button>
-                  {section.id !== "unassigned" ? (
-                    <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        title="New chat"
-                        aria-label={`New chat in ${section.label}`}
-                        disabled={section.isDeleted}
-                        onClick={() => void handleStartChat(section.id)}
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        title="Delete project"
-                        aria-label={`Delete ${section.label}`}
-                        disabled={section.isDeleted}
-                        onClick={() => {
-                          const target = projects.find((project) => project.id === section.id) ?? null;
-                          setDeleteProjectTarget(target);
-                          setDeleteProjectText("");
-                        }}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  ) : null}
+                  <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover/project-header:opacity-100 group-focus-within/project-header:opacity-100">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      title="New chat"
+                      aria-label={`New chat in ${section.label}`}
+                      disabled={section.isDeleted}
+                      onClick={() => void handleStartChat(section.id)}
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      title="Delete project"
+                      aria-label={`Delete ${section.label}`}
+                      disabled={section.isDeleted}
+                      onClick={() => {
+                        const target = projects.find((project) => project.id === section.id) ?? null;
+                        setDeleteProjectTarget(target);
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
                 {expandedProjects[section.id] ? <div className="space-y-2">
                   {section.items.map((conversation) => (
@@ -874,68 +868,28 @@ export function SidebarHistory() {
         isAdmin={user?.role === "admin"}
       />
 
-      <Dialog.Root
+      <DeleteConfirmDialog
         open={deleteProjectTarget !== null}
         onOpenChange={(open) => {
           if (!open) {
             closeDeleteProjectDialog();
           }
         }}
-      >
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" />
-          <Dialog.Content
-            aria-describedby={undefined}
-            className="fixed left-1/2 top-1/2 z-[80] w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
-            onPointerDownOutside={closeDeleteProjectDialog}
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <Dialog.Title className="font-display text-[1.5rem] font-semibold tracking-[-0.04em] text-ink">
-                  Delete project
-                </Dialog.Title>
-                <p className="mt-2 text-sm leading-6 text-muted">
-                  Type <span className="font-semibold text-ink">delete</span> to remove{" "}
-                  <span className="font-semibold text-ink">{deleteProjectTarget?.name ?? "this project"}</span>.
-                </p>
-              </div>
-              <Dialog.Close asChild>
-                <button
-                  type="button"
-                  className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
-                  aria-label="Close delete project dialog"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </Dialog.Close>
-            </div>
-
-            <div className="mt-5 space-y-3">
-              <Input
-                placeholder='Type "delete"'
-                value={deleteProjectText}
-                onChange={(event) => setDeleteProjectText(event.target.value)}
-              />
-              <div className="flex gap-3">
-                <Dialog.Close asChild>
-                  <Button type="button" variant="secondary" className="flex-1">
-                    Cancel
-                  </Button>
-                </Dialog.Close>
-                <Button
-                  type="button"
-                  variant="danger"
-                  className="flex-1"
-                  disabled={deleteProjectText.trim().toLowerCase() !== "delete" || deletingProject}
-                  onClick={() => void handleDeleteProject()}
-                >
-                  {deletingProject ? "Deleting..." : "Delete project"}
-                </Button>
-              </div>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+        title="Delete project?"
+        description={
+          <>
+            <span className="font-semibold text-ink">This permanently deletes the project and removes its chat organization.</span>{" "}
+            Conversations will no longer stay grouped under{" "}
+            <span className="font-semibold text-ink">{deleteProjectTarget?.name ?? "this project"}</span>.
+          </>
+        }
+        confirmLabel="Delete"
+        isDeleting={deletingProject}
+        requireDeleteText={false}
+        onConfirm={async () => {
+          await handleDeleteProject();
+        }}
+      />
 
       <DeleteConfirmDialog
         open={deleteConversationTarget !== null}
@@ -947,13 +901,15 @@ export function SidebarHistory() {
         title="Delete conversation"
         description={
           <>
-            Type <span className="font-semibold text-ink">delete</span> to remove{" "}
+            <span className="font-semibold text-ink">This permanently deletes the conversation.</span>{" "}
+            You will lose the current chat history for{" "}
             <span className="font-semibold text-ink">
               {deleteConversationTarget?.title || titleFromMessage("this conversation")}
             </span>.
           </>
         }
-        confirmLabel="Delete conversation"
+        confirmLabel="Delete"
+        requireDeleteText={false}
         onConfirm={async () => {
           if (!deleteConversationTarget) {
             return;

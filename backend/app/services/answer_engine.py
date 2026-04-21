@@ -420,16 +420,18 @@ def generate_welcome_payload(
                         "Return valid JSON with keys intro_markdown and suggested_questions. "
                         "Write professionally and clearly. "
                         "The introduction must briefly explain that Maia AI is being developed and trained by Axon Group to assist with technical questions grounded in uploaded documents and general technical reasoning. "
-                        "Include a short section that explicitly lists the currently available books or PDFs when they are provided. "
-                        "For each available book or PDF, include a concise one-sentence summary based only on the provided summary_source or metadata. "
-                        "Format the list so each title is immediately followed by its short summary. "
+                        "The introduction must act as onboarding, not as a library summary. "
+                        "Teach the user how to use Maia: how to choose a group with #, how to target specific PDFs with @, how to open Library and upload files, and that documents should be Ready before grounded questions are asked. "
+                        "Teach the user how to ask good first questions, such as definitions, summaries, calculations, comparisons, troubleshooting, formulas, and source-backed questions. "
+                        "Do not summarise the available books or PDFs. "
+                        "Do not produce per-book bullets or one-sentence book descriptions. "
+                        "You may mention the active group name and how many ready PDFs are available. "
                         "The tone must sound like a serious technical assistant, not marketing copy. "
                         "Do not mention today's date, training data cutoffs, knowledge cutoffs, model release dates, or any statement such as 'up to October 2023'. "
-                        "Generate 5 to 7 suggested questions on the spot from the provided documents. "
-                        "Do not hardcode generic sample questions unrelated to the supplied PDFs. "
-                        "When the document titles suggest formulas, calculations, design methods, acoustics, fans, coating, or engineering processes, include calculation-style and engineering-style questions as appropriate. "
+                        "Generate 5 to 7 suggested first questions that help a user start using Maia well in this workspace. "
+                        "Keep them document-grounded and practical. "
                         "Keep each suggested question concise, practical, and professional. "
-                        "The intro_markdown must be valid Markdown and should preferably contain a short bullet list of the available books with summary lines."
+                        "The intro_markdown must be valid Markdown and should preferably contain short paragraphs plus a short bullet list of usage guidance."
                     ),
                 },
                 {
@@ -457,37 +459,34 @@ def generate_welcome_payload(
     except Exception as exc:
         logger.warning("Failed to generate welcome payload with LLM: %s", exc)
 
-    doc_names = [
-        str(doc.get("filename", "")).strip()
-        for doc in documents
-        if str(doc.get("filename", "")).strip()
+    document_count = len(documents)
+    fallback_questions = [
+        "What is the best way to ask you a document-grounded question in this workspace?",
+        "Which PDF should I target first for this topic?",
+        "Summarise this document section and cite the pages you used.",
+        "What formula or engineering relationship is most relevant here?",
+        "Compare the approaches described in these PDFs and cite the evidence.",
+        "What should I read first if I am new to this topic?",
     ]
-    fallback_docs = ", ".join(doc_names[:4]) or "the uploaded technical documents"
-    listed_books = "\n".join(
-        (
-            f"- **{str(doc.get('filename', '')).strip()}**: "
-            f"{str(doc.get('summary_source', '')).strip()[:220].rstrip(' ,.;:') or 'Technical reference available in this workspace.'}"
-        )
-        for doc in documents[:6]
-        if str(doc.get("filename", "")).strip()
-    )
-    fallback_questions: list[str] = []
-    if doc_names:
-        primary_name = doc_names[0]
-        fallback_questions = [
-            f"What are the main topics covered in {primary_name}?",
-            f"Which formulas or engineering relationships are presented in {primary_name}?",
-            f"Can you summarise one important calculation method from {primary_name}?",
-            f"What practical design guidance does {primary_name} provide?",
-            f"Which sections of {primary_name} are most relevant for troubleshooting?",
-        ]
     return {
         "intro_markdown": (
-            "Hi colleague,\n\n"
-            "My name is **Maia AI**. I am an Axon Group AI assistant currently under development and being trained by Axon Group to support technical reasoning, document-grounded answers, calculations, and engineering analysis.\n\n"
-            f"I can currently assist you with questions based on {fallback_docs}, as well as broader technical questions when needed.\n\n"
-            "## Available technical books\n"
-            f"{listed_books or '- No ready PDFs are available yet.'}"
+            f"Welcome to the Axon Group engineering workspace"
+            f"{f' for {group_name}' if group_name else ''}.\n\n"
+            "Maia AI is being developed and trained by Axon Group to support technical reasoning, "
+            "document-grounded answers, calculations, and engineering analysis.\n\n"
+            "### How to use Maia\n"
+            "- Use `#` in the composer to choose the right group before asking document-grounded questions.\n"
+            "- Use `@` after selecting a group to target one or more specific PDFs.\n"
+            "- Open **Library** to upload PDFs, organize groups, and review what is available.\n"
+            "- Wait until a document shows **Ready** before relying on it for grounded answers.\n"
+            "- Ask clear questions such as definitions, summaries, comparisons, calculations, troubleshooting, or \"show me the supporting pages\".\n\n"
+            "### Good first questions\n"
+            "- What does this document say about this topic, and which pages support it?\n"
+            "- Summarise this section and cite the pages you used.\n"
+            "- Compare the methods described in these PDFs.\n"
+            "- Show me the formula, variables, and assumptions for this calculation.\n"
+            "- Which part of the library should I read first for this question?\n\n"
+            f"There {'is' if document_count == 1 else 'are'} currently **{document_count}** ready PDF{'s' if document_count != 1 else ''} available in this workspace."
         ),
         "suggested_questions": fallback_questions,
     }

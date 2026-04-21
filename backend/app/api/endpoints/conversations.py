@@ -47,6 +47,8 @@ async def list_conversations(
     query = select(Conversation).where(Conversation.user_id == user.id)
     if project_id:
         query = query.where(Conversation.project_id == project_id)
+    else:
+        query = query.where(Conversation.project_id.is_not(None))
     query = query.order_by(Conversation.updated_at.desc())
     result = await db.execute(query)
     return result.scalars().all()
@@ -58,13 +60,15 @@ async def create_conversation(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new conversation under an optional project and group context."""
-    if body.project_id:
-        project = await db.scalar(
-            select(Project).where(Project.id == body.project_id, Project.user_id == user.id)
-        )
-        if project is None:
-            raise HTTPException(status_code=404, detail="Project not found")
+    """Create a new conversation under a required project and optional group context."""
+    if body.project_id is None:
+        raise HTTPException(status_code=400, detail="Project is required")
+
+    project = await db.scalar(
+        select(Project).where(Project.id == body.project_id, Project.user_id == user.id)
+    )
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
 
     if body.group_id and not user.is_admin:
         result = await db.execute(

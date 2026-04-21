@@ -130,8 +130,12 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
 
   if (message.role === "user") {
     return (
-      <div className="flex justify-end">
-        <div className="group/user max-w-[78%] rounded-[30px] rounded-br-xl bg-black px-5 py-4 text-[15px] text-white shadow-[0_24px_60px_rgba(0,0,0,0.12)]">
+      <div
+        className="flex justify-end scroll-mt-6"
+        data-message-id={message.id}
+        data-message-role={message.role}
+      >
+        <div className="group/user max-w-[78%] rounded-[30px] rounded-br-xl border border-black bg-black px-5 py-4 text-[15px] text-white">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.18em] text-white/55">
               <User2 className="h-3.5 w-3.5" />
@@ -191,7 +195,11 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
   }
 
   return (
-    <div className="w-full">
+    <div
+      className="w-full scroll-mt-6"
+      data-message-id={message.id}
+      data-message-role={message.role}
+    >
       <article className="group/assistant answer-workspace">
         <div className="answer-workspace-rail">
           <span className="answer-workspace-botmark">

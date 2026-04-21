@@ -1,12 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   History,
   MessageSquareText,
   Network,
+  PanelLeftOpen,
+  X,
 } from "lucide-react";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import {
+  Panel,
+  PanelGroup,
+  PanelResizeHandle,
+} from "react-resizable-panels";
 
 import { SidebarHistory } from "@/components/layout/SidebarHistory";
 import { ChatPanel } from "@/components/layout/ChatPanel";
@@ -46,6 +52,8 @@ function useViewportMode() {
 export function AppShell() {
   const mode = useViewportMode();
   const [mobileTab, setMobileTab] = useState<"history" | "chat" | "sources">("chat");
+  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
+  const closeDrawerTimeoutRef = useRef<number | null>(null);
   const searchMode = useChatStore((state) => state.mode);
   const currentDocument = usePDFViewerStore((state) => state.currentDocument);
   const currentWebCitation = usePDFViewerStore((state) => state.currentWebCitation);
@@ -60,6 +68,34 @@ export function AppShell() {
       }
     }
   }, [closeViewer, mobileTab, searchMode]);
+
+  useEffect(() => {
+    return () => {
+      if (closeDrawerTimeoutRef.current !== null) {
+        window.clearTimeout(closeDrawerTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  function cancelCloseDrawer() {
+    if (closeDrawerTimeoutRef.current !== null) {
+      window.clearTimeout(closeDrawerTimeoutRef.current);
+      closeDrawerTimeoutRef.current = null;
+    }
+  }
+
+  function openHistoryDrawer() {
+    cancelCloseDrawer();
+    setHistoryDrawerOpen(true);
+  }
+
+  function scheduleCloseDrawer() {
+    cancelCloseDrawer();
+    closeDrawerTimeoutRef.current = window.setTimeout(() => {
+      setHistoryDrawerOpen(false);
+      closeDrawerTimeoutRef.current = null;
+    }, 140);
+  }
 
   const panels = {
     history: <SidebarHistory />,
@@ -107,15 +143,9 @@ export function AppShell() {
 
   return (
     <ErrorBoundary>
-      <div className="h-screen bg-bg px-3 py-3 app-grid">
-        <div className="h-[calc(100vh-1.5rem)] rounded-[28px] bg-panel/70 p-1 shadow-[0_20px_45px_rgba(15,23,42,0.05)]">
+      <div className="relative h-screen bg-bg px-3 py-3 app-grid">
+        <div className="relative h-[calc(100vh-1.5rem)] rounded-[28px] bg-panel/70 p-1 shadow-[0_20px_45px_rgba(15,23,42,0.05)]">
           <PanelGroup direction="horizontal" className="h-full min-h-0">
-            <Panel defaultSize={20} minSize={17} maxSize={28}>
-              <div className="h-full min-h-0 overflow-hidden rounded-[24px] bg-panel">
-                <SidebarHistory />
-              </div>
-            </Panel>
-            <ResizeHandle />
             <Panel defaultSize={56} minSize={40}>
               <div className="h-full min-h-0 overflow-hidden rounded-[24px] bg-panel">
                 <ChatPanel />
@@ -124,7 +154,7 @@ export function AppShell() {
             {showSourcesPanel ? (
               <>
                 <ResizeHandle />
-                <Panel defaultSize={24} minSize={20} maxSize={32}>
+                <Panel defaultSize={28} minSize={20} maxSize={42}>
                   <div className="h-full min-h-0 overflow-hidden rounded-[24px] bg-panel">
                     <DocumentPanel />
                   </div>
@@ -133,6 +163,48 @@ export function AppShell() {
             ) : null}
           </PanelGroup>
         </div>
+        <div
+          className="absolute inset-y-3 left-0 z-20 w-16"
+          onMouseEnter={openHistoryDrawer}
+          onMouseLeave={scheduleCloseDrawer}
+        >
+          <button
+            type="button"
+            onMouseEnter={openHistoryDrawer}
+            onFocus={openHistoryDrawer}
+            onClick={openHistoryDrawer}
+            className="absolute left-0 top-1/2 flex h-12 w-12 -translate-y-1/2 items-center justify-center rounded-r-xl border border-black/10 border-l-0 bg-white text-ink shadow-[0_10px_24px_rgba(15,23,42,0.08)] transition hover:bg-black hover:text-white"
+            aria-label="Open workspace drawer"
+            title="Open workspace"
+          >
+            <PanelLeftOpen className="h-4 w-4" />
+          </button>
+        </div>
+        {historyDrawerOpen ? (
+          <div
+            className="absolute inset-y-3 left-3 z-30 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[24px] border border-black/8 bg-panel shadow-[0_24px_50px_rgba(15,23,42,0.12)]"
+            onMouseEnter={cancelCloseDrawer}
+            onMouseLeave={scheduleCloseDrawer}
+          >
+              <div className="flex items-center justify-between gap-3 border-b border-black/[0.06] px-4 py-3">
+                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
+                  <History className="h-4 w-4" />
+                  Workspace
+                </div>
+                <button
+                  type="button"
+                  className="rounded-lg border border-black/10 bg-white p-2 text-ink transition hover:bg-black hover:text-white"
+                  aria-label="Close workspace drawer"
+                  onClick={() => setHistoryDrawerOpen(false)}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-hidden">
+                <SidebarHistory />
+              </div>
+          </div>
+        ) : null}
       </div>
     </ErrorBoundary>
   );

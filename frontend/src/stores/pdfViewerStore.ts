@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 
-import { api, prefetchAuthorized } from "@/lib/api";
+import { api, getCachedPageData, prefetchAuthorized } from "@/lib/api";
 import type { Citation, Document, PageData } from "@/lib/types";
 
 interface PDFViewerState {
@@ -42,7 +42,28 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
     const uniquePageNumbers = [...new Set(pageNumbers)]
       .filter((pageNumber) => pageNumber >= 1 && (!document.page_count || pageNumber <= document.page_count));
 
-    const missingPages = uniquePageNumbers.filter((pageNumber) => !get().pageCache[pageKey(document.id, pageNumber)]);
+    const cachedPages = uniquePageNumbers
+      .map((pageNumber) => ({
+        pageNumber,
+        pageData: get().pageCache[pageKey(document.id, pageNumber)] ?? getCachedPageData(document.id, pageNumber),
+      }))
+      .filter((entry): entry is { pageNumber: number; pageData: PageData } => !!entry.pageData);
+
+    if (cachedPages.length) {
+      set((state) => ({
+        pageCache: {
+          ...state.pageCache,
+          ...Object.fromEntries(
+            cachedPages.map(({ pageNumber, pageData }) => [pageKey(document.id, pageNumber), pageData]),
+          ),
+        },
+      }));
+    }
+
+    const missingPages = uniquePageNumbers.filter(
+      (pageNumber) =>
+        !get().pageCache[pageKey(document.id, pageNumber)] && !getCachedPageData(document.id, pageNumber),
+    );
     if (!missingPages.length) {
       return;
     }
@@ -111,7 +132,7 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
   },
   async loadPage(document, pageNumber, highlightCitations = []) {
     const key = pageKey(document.id, pageNumber);
-    const cached = get().pageCache[key];
+    const cached = get().pageCache[key] ?? getCachedPageData(document.id, pageNumber);
 
     set({
       currentDocument: document,
@@ -123,7 +144,14 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
     });
 
     if (cached) {
-      set({ pageData: cached, loading: false });
+      set((state) => ({
+        pageData: cached,
+        loading: false,
+        pageCache: {
+          ...state.pageCache,
+          [key]: cached,
+        },
+      }));
       return;
     }
 

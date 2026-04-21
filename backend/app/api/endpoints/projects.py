@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -82,8 +82,9 @@ async def delete_project(
 ):
     project = await _get_project_or_404(project_id, user, db)
     await db.execute(
-        update(Conversation)
-        .where(Conversation.project_id == project.id)
-        .values(project_id=None)
+        delete(Conversation).where(
+            Conversation.project_id == project.id,
+            Conversation.user_id == user.id,
+        )
     )
     await db.delete(project)

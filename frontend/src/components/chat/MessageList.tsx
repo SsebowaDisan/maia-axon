@@ -1,41 +1,42 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { RefObject, useCallback, useEffect, useState } from "react";
 
 import { MarkdownRenderer } from "@/components/shared/MarkdownRenderer";
 import { api } from "@/lib/api";
 import { MessageBubble } from "@/components/chat/MessageBubble";
 import type { ChatMessage, WelcomePayload } from "@/lib/types";
 import { useChatStore } from "@/stores/chatStore";
+import { useConversationStore } from "@/stores/conversationStore";
 import { useGroupStore } from "@/stores/groupStore";
 
 const FALLBACK_WELCOME: WelcomePayload = {
   intro_markdown:
-    "Hi colleague,\n\nMy name is **Maia AI**. I am an Axon Group AI assistant currently under development and being trained by Axon Group to support technical reasoning, document-grounded answers, calculations, and engineering analysis.\n\nI can assist you with the technical books currently available in your workspace, as well as broader engineering and technical questions when needed.",
+    "Welcome to the Axon Group engineering workspace.\n\nMaia AI is being developed and trained by Axon Group to support technical reasoning, document-grounded answers, calculations, and engineering analysis.\n\n### How to use Maia\n- Use `#` in the composer to choose the right group before asking document-grounded questions.\n- Use `@` after selecting a group to target one or more specific PDFs.\n- Open **Library** to upload PDFs, organize groups, and review what is available.\n- Wait until a document shows **Ready** before relying on it for grounded answers.\n- Ask clear questions such as definitions, summaries, comparisons, calculations, troubleshooting, or \"show me the supporting pages\".",
   suggested_questions: [],
 };
 
-const ONBOARDING_MARKDOWN = [
-  "### How to use Maia",
-  "- Type `#` in the composer to choose a group or document workspace.",
-  "- Type `@` after selecting a group to target one or more specific PDFs.",
-  "- Open **Library**, choose the correct group, and use **Upload PDFs** to add new files.",
-  "- Wait until a document shows **Ready** in the Library before asking grounded questions about it.",
-  "- Ask in plain language. Maia will use the selected group documents and cite pages when available.",
-].join("\n");
-
 function buildWelcomeMarkdown(introMarkdown: string) {
-  return `${introMarkdown.trim()}\n\n${ONBOARDING_MARKDOWN}`;
+  return introMarkdown.trim();
 }
 
-export function MessageList({ messages }: { messages: ChatMessage[] }) {
+export function MessageList({
+  messages,
+  scrollContainerRef,
+}: {
+  messages: ChatMessage[];
+  scrollContainerRef: RefObject<HTMLDivElement | null>;
+}) {
   const streaming = useChatStore((state) => state.streaming);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const chatHydrated = useChatStore((state) => state.isHydrated);
+  const autoScrollNonce = useChatStore((state) => state.autoScrollNonce);
+  const restoredConversationId = useConversationStore((state) => state.activeConversationId);
+  const conversationHydrated = useConversationStore((state) => state.isHydrated);
+  const conversationLoading = useConversationStore((state) => state.loading);
   const [isPinnedToBottom, setIsPinnedToBottom] = useState(true);
 
   useEffect(() => {
-    const container = containerRef.current;
+    const container = scrollContainerRef.current;
     if (!container) {
       return;
     }
@@ -51,34 +52,92 @@ export function MessageList({ messages }: { messages: ChatMessage[] }) {
     return () => {
       container.removeEventListener("scroll", handleScroll);
     };
-  }, []);
+  }, [scrollContainerRef]);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior) => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    const run = () => {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior,
+      });
+    };
+
+    run();
+    window.requestAnimationFrame(() => {
+      run();
+      window.requestAnimationFrame(run);
+    });
+  }, [scrollContainerRef]);
 
   useEffect(() => {
     if (!isPinnedToBottom) {
       return;
     }
 
-    const container = containerRef.current;
+    if (streaming) {
+      return;
+    }
+
+    scrollToBottom("smooth");
+  }, [isPinnedToBottom, messages, scrollToBottom, streaming]);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
     if (!container) {
       return;
     }
 
-    container.scrollTo({
-      top: container.scrollHeight,
-      behavior: streaming ? "auto" : "smooth",
+    const scrollLatestUserMessageToTop = () => {
+      const userMessages = container.querySelectorAll<HTMLElement>('[data-message-role="user"]');
+      const latestUserMessage = userMessages[userMessages.length - 1];
+      if (!latestUserMessage) {
+        scrollToBottom("smooth");
+        return;
+      }
+      latestUserMessage.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    };
+
+    scrollLatestUserMessageToTop();
+    window.requestAnimationFrame(() => {
+      scrollLatestUserMessageToTop();
+      window.requestAnimationFrame(scrollLatestUserMessageToTop);
     });
-  }, [isPinnedToBottom, messages, streaming]);
+  }, [autoScrollNonce, scrollContainerRef, scrollToBottom]);
+
+  const hasRestorableConversation = !!restoredConversationId;
+
+  if (!messages.length && hasRestorableConversation && (!chatHydrated || !conversationHydrated || conversationLoading)) {
+    return (
+      <div className="mx-auto flex min-h-full w-full max-w-[980px] flex-col justify-start px-6 pb-10 pt-4">
+        <div className="border-l border-black/10 pl-8">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-muted">
+            Restoring conversation
+          </p>
+          <p className="mt-4 text-base leading-8 text-muted">
+            Loading your previous chat...
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (!messages.length) {
     return <WelcomeCanvas />;
   }
 
   return (
-    <div ref={containerRef} className="mx-auto flex w-full max-w-[1220px] flex-col gap-12 overflow-y-auto px-2 pb-10 pt-2 md:px-4">
+    <div className="mx-auto flex w-full max-w-[1220px] flex-col gap-12 px-2 pb-10 pt-2 md:px-4">
       {messages.map((message) => (
         <MessageBubble key={message.id} message={message} />
       ))}
-      <div ref={bottomRef} />
     </div>
   );
 }

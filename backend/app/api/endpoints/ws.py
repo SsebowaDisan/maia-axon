@@ -127,6 +127,28 @@ def _serialize_mindmap(node) -> dict:
     return result
 
 
+async def _persist_assistant_message(
+    db: AsyncSession,
+    conversation: Conversation,
+    query: str,
+    mode: str,
+    content: str,
+    citations: list[dict] | None = None,
+    mindmap: dict | None = None,
+) -> None:
+    assistant_msg = Message(
+        conversation_id=conversation.id,
+        role="assistant",
+        content=content,
+        citations={"citations": citations or []},
+        mindmap=mindmap,
+        search_mode=mode,
+    )
+    _ensure_conversation_metadata(conversation, query, mode)
+    db.add(assistant_msg)
+    await db.commit()
+
+
 def _build_user_content(text: str, image_parts: list[dict]) -> str | list[dict]:
     if not image_parts:
         return text
@@ -162,15 +184,20 @@ async def websocket_chat(websocket: WebSocket):
             conversation_id = UUID(data["conversation_id"]) if data.get("conversation_id") else None
 
             async with async_session() as db:
-                if project_id:
-                    project = await db.scalar(
-                        select(Project).where(Project.id == project_id, Project.user_id == user.id)
+                if project_id is None:
+                    await websocket.send_json(
+                        {"type": "error", "message": "Project is required"}
                     )
-                    if project is None:
-                        await websocket.send_json(
-                            {"type": "error", "message": "Project not found"}
-                        )
-                        continue
+                    continue
+
+                project = await db.scalar(
+                    select(Project).where(Project.id == project_id, Project.user_id == user.id)
+                )
+                if project is None:
+                    await websocket.send_json(
+                        {"type": "error", "message": "Project not found"}
+                    )
+                    continue
 
                 if mode != "standard" and group_id is None:
                     await websocket.send_json(
@@ -260,19 +287,16 @@ async def websocket_chat(websocket: WebSocket):
                         "type": "mindmap",
                         "data": _serialize_mindmap(answer.mindmap),
                     })
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
-
-                    assistant_msg = Message(
-                        conversation_id=conversation.id,
-                        role="assistant",
-                        content=answer.text,
-                        citations={"citations": citations},
-                        mindmap=_serialize_mindmap(answer.mindmap),
-                        search_mode=mode,
+                    await _persist_assistant_message(
+                        db,
+                        conversation,
+                        message,
+                        mode,
+                        answer.text,
+                        citations,
+                        _serialize_mindmap(answer.mindmap),
                     )
-                    _ensure_conversation_metadata(conversation, message, mode)
-                    db.add(assistant_msg)
-                    await db.commit()
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
                     continue
 
                 if classify_identity_question(message):
@@ -286,19 +310,16 @@ async def websocket_chat(websocket: WebSocket):
                         "type": "mindmap",
                         "data": _serialize_mindmap(answer.mindmap),
                     })
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
-
-                    assistant_msg = Message(
-                        conversation_id=conversation.id,
-                        role="assistant",
-                        content=answer.text,
-                        citations={"citations": []},
-                        mindmap=_serialize_mindmap(answer.mindmap),
-                        search_mode=mode,
+                    await _persist_assistant_message(
+                        db,
+                        conversation,
+                        message,
+                        mode,
+                        answer.text,
+                        [],
+                        _serialize_mindmap(answer.mindmap),
                     )
-                    _ensure_conversation_metadata(conversation, message, mode)
-                    db.add(assistant_msg)
-                    await db.commit()
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
                     continue
 
                 if mode == "standard":
@@ -355,19 +376,16 @@ async def websocket_chat(websocket: WebSocket):
 
                     await websocket.send_json({"type": "citations", "data": []})
                     await websocket.send_json({"type": "mindmap", "data": _serialize_mindmap(mindmap)})
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
-
-                    assistant_msg = Message(
-                        conversation_id=conversation.id,
-                        role="assistant",
-                        content=full_text,
-                        citations={"citations": []},
-                        mindmap=_serialize_mindmap(mindmap),
-                        search_mode=mode,
+                    await _persist_assistant_message(
+                        db,
+                        conversation,
+                        message,
+                        mode,
+                        full_text,
+                        [],
+                        _serialize_mindmap(mindmap),
                     )
-                    _ensure_conversation_metadata(conversation, message, mode)
-                    db.add(assistant_msg)
-                    await db.commit()
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
                     continue
 
                 # --- Stage 1: Retrieval ---
@@ -381,10 +399,20 @@ async def websocket_chat(websocket: WebSocket):
                 sources = retrieval.results
 
                 if not sources:
+                    no_sources_text = "I couldn't find relevant information in the selected group's documents."
                     await websocket.send_json({
                         "type": "token",
-                        "content": "I couldn't find relevant information in the selected group's documents.",
+                        "content": no_sources_text,
                     })
+                    await _persist_assistant_message(
+                        db,
+                        conversation,
+                        message,
+                        mode,
+                        no_sources_text,
+                        [],
+                        None,
+                    )
                     await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
                     continue
 
@@ -400,19 +428,16 @@ async def websocket_chat(websocket: WebSocket):
                         "type": "mindmap",
                         "data": _serialize_mindmap(answer.mindmap),
                     })
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
-
-                    assistant_msg = Message(
-                        conversation_id=conversation.id,
-                        role="assistant",
-                        content=answer.text,
-                        citations={"citations": citations},
-                        mindmap=_serialize_mindmap(answer.mindmap),
-                        search_mode=mode,
+                    await _persist_assistant_message(
+                        db,
+                        conversation,
+                        message,
+                        mode,
+                        answer.text,
+                        citations,
+                        _serialize_mindmap(answer.mindmap),
                     )
-                    _ensure_conversation_metadata(conversation, message, mode)
-                    db.add(assistant_msg)
-                    await db.commit()
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
                     continue
 
                 # --- Stage 2: Intent Classification ---
@@ -433,20 +458,16 @@ async def websocket_chat(websocket: WebSocket):
                         "type": "mindmap",
                         "data": _serialize_mindmap(answer.mindmap),
                     })
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
-
-                    # Save
-                    assistant_msg = Message(
-                        conversation_id=conversation.id,
-                        role="assistant",
-                        content=answer.text,
-                        citations={"citations": citations},
-                        mindmap=_serialize_mindmap(answer.mindmap),
-                        search_mode=mode,
+                    await _persist_assistant_message(
+                        db,
+                        conversation,
+                        message,
+                        mode,
+                        answer.text,
+                        citations,
+                        _serialize_mindmap(answer.mindmap),
                     )
-                    _ensure_conversation_metadata(conversation, message, mode)
-                    db.add(assistant_msg)
-                    await db.commit()
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
                     continue
 
                 if intent == "calculation":
@@ -468,20 +489,16 @@ async def websocket_chat(websocket: WebSocket):
                     if answer.warnings:
                         await websocket.send_json({"type": "warnings", "data": answer.warnings})
 
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
-
-                    # Save
-                    assistant_msg = Message(
-                        conversation_id=conversation.id,
-                        role="assistant",
-                        content=answer.text,
-                        citations={"citations": citations},
-                        mindmap=_serialize_mindmap(answer.mindmap) if answer.mindmap else None,
-                        search_mode=mode,
+                    await _persist_assistant_message(
+                        db,
+                        conversation,
+                        message,
+                        mode,
+                        answer.text,
+                        citations,
+                        _serialize_mindmap(answer.mindmap) if answer.mindmap else None,
                     )
-                    _ensure_conversation_metadata(conversation, message, mode)
-                    db.add(assistant_msg)
-                    await db.commit()
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
                     continue
 
                 # --- Stage 4: Streaming Q&A ---
@@ -572,20 +589,16 @@ async def websocket_chat(websocket: WebSocket):
                 if warnings:
                     await websocket.send_json({"type": "warnings", "data": warnings})
 
-                await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
-
-                # Save assistant message
-                assistant_msg = Message(
-                    conversation_id=conversation.id,
-                    role="assistant",
-                    content=full_text,
-                    citations={"citations": citations},
-                    mindmap=_serialize_mindmap(mindmap),
-                    search_mode=mode,
+                await _persist_assistant_message(
+                    db,
+                    conversation,
+                    message,
+                    mode,
+                    full_text,
+                    citations,
+                    _serialize_mindmap(mindmap),
                 )
-                _ensure_conversation_metadata(conversation, message, mode)
-                db.add(assistant_msg)
-                await db.commit()
+                await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for user {user.id}")

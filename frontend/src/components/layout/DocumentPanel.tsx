@@ -10,10 +10,10 @@ import { useMindmapStore } from "@/stores/mindmapStore";
 
 export function DocumentPanel() {
   const mindmap = useMindmapStore((state) => state.data);
-  const [mindmapCollapsed, setMindmapCollapsed] = useState(false);
+  const [mindmapCollapsed, setMindmapCollapsed] = useState(true);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 p-3">
+    <div className="flex h-full min-h-0 flex-col gap-2 p-2">
       <div className="flex items-start justify-between px-2 py-1">
         <p className="font-display text-[1.35rem] font-semibold tracking-[-0.03em] text-ink">Sources</p>
         <div className="flex items-center">
@@ -28,7 +28,7 @@ export function DocumentPanel() {
         </div>
       </div>
       {!mindmapCollapsed ? (
-        <div className="h-[34%] min-h-[180px] rounded-[22px] bg-black/[0.02] p-3">
+        <div className="h-[30%] min-h-[160px] rounded-[16px] border border-black/[0.05] bg-white p-2">
           <MindmapCanvas data={mindmap} />
         </div>
       ) : null}
