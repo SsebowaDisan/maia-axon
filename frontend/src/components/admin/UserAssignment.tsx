@@ -12,6 +12,7 @@ import { useGroupStore } from "@/stores/groupStore";
 
 export function UserAssignment({ groupId }: { groupId: string }) {
   const groupUsers = useGroupStore((state) => state.groupUsers);
+  const deletedGroupUserIds = useGroupStore((state) => state.deletedGroupUserIds);
   const fetchGroupUsers = useGroupStore((state) => state.fetchGroupUsers);
   const assignUser = useGroupStore((state) => state.assignUser);
   const removeUser = useGroupStore((state) => state.removeUser);
@@ -23,6 +24,7 @@ export function UserAssignment({ groupId }: { groupId: string }) {
   const [removeTarget, setRemoveTarget] = useState<User | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
   const assignedUsers = useMemo(() => groupUsers[groupId] ?? [], [groupId, groupUsers]);
+  const deletedUserIds = deletedGroupUserIds[groupId] ?? {};
 
   const refreshUsers = useCallback(() => {
     return api.listUsers().then(setAllUsers).catch(() => undefined);
@@ -116,15 +118,26 @@ export function UserAssignment({ groupId }: { groupId: string }) {
 
       <div className="space-y-3">
         {assignedUsers.map((user) => (
-          <div key={user.id} className="flex items-center justify-between rounded-[24px] border border-line bg-panel/80 px-4 py-3">
-            <div>
-              <p className="text-sm font-semibold text-ink">{user.name}</p>
-              <p className="text-xs uppercase tracking-[0.14em] text-muted">{user.role}</p>
-            </div>
-            <Button type="button" size="sm" variant="ghost" onClick={() => setRemoveTarget(user)}>
-              Remove
-            </Button>
-          </div>
+          (() => {
+            const isDeleted = !!deletedUserIds[user.id];
+
+            return (
+              <div
+                key={user.id}
+                className={`flex items-center justify-between rounded-[24px] border px-4 py-3 ${isDeleted ? "border-danger/20 bg-danger/5 opacity-70" : "border-line bg-panel/80"}`}
+              >
+                <div>
+                  <p className="text-sm font-semibold text-ink">{isDeleted ? "Deleted" : user.name}</p>
+                  <p className="text-xs uppercase tracking-[0.14em] text-muted">
+                    {isDeleted ? "Deleting..." : user.role}
+                  </p>
+                </div>
+                <Button type="button" size="sm" variant="ghost" disabled={isDeleted} onClick={() => setRemoveTarget(user)}>
+                  {isDeleted ? "Deleted" : "Remove"}
+                </Button>
+              </div>
+            );
+          })()
         ))}
       </div>
 

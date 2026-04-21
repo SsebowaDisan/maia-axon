@@ -6,9 +6,12 @@ import { persist } from "zustand/middleware";
 import { api } from "@/lib/api";
 import type { Project } from "@/lib/types";
 
+const DELETE_TOMBSTONE_MS = 1200;
+
 interface ProjectState {
   projects: Project[];
   activeProjectId: string | null;
+  deletedProjectIds: Record<string, true>;
   loading: boolean;
   error: string | null;
   fetchProjects: () => Promise<void>;
@@ -23,6 +26,7 @@ export const useProjectStore = create<ProjectState>()(
     (set, get) => ({
       projects: [],
       activeProjectId: null,
+      deletedProjectIds: {},
       loading: false,
       error: null,
       async fetchProjects() {
@@ -61,9 +65,24 @@ export const useProjectStore = create<ProjectState>()(
       async deleteProject(projectId) {
         await api.deleteProject(projectId);
         set((state) => ({
-          projects: state.projects.filter((project) => project.id !== projectId),
+          deletedProjectIds: {
+            ...state.deletedProjectIds,
+            [projectId]: true,
+          },
           activeProjectId: state.activeProjectId === projectId ? null : state.activeProjectId,
         }));
+
+        window.setTimeout(() => {
+          set((state) => {
+            const nextDeletedProjectIds = { ...state.deletedProjectIds };
+            delete nextDeletedProjectIds[projectId];
+
+            return {
+              deletedProjectIds: nextDeletedProjectIds,
+              projects: state.projects.filter((project) => project.id !== projectId),
+            };
+          });
+        }, DELETE_TOMBSTONE_MS);
       },
     }),
     {

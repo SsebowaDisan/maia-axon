@@ -6,9 +6,13 @@ import { persist } from "zustand/middleware";
 import { api } from "@/lib/api";
 import type { Group, User } from "@/lib/types";
 
+const DELETE_TOMBSTONE_MS = 1200;
+
 interface GroupState {
   groups: Group[];
   groupUsers: Record<string, User[]>;
+  deletedGroupIds: Record<string, true>;
+  deletedGroupUserIds: Record<string, Record<string, true>>;
   activeGroupId: string | null;
   loading: boolean;
   error: string | null;
@@ -27,6 +31,8 @@ export const useGroupStore = create<GroupState>()(
     (set, get) => ({
       groups: [],
       groupUsers: {},
+      deletedGroupIds: {},
+      deletedGroupUserIds: {},
       activeGroupId: null,
       loading: false,
       error: null,
@@ -64,9 +70,30 @@ export const useGroupStore = create<GroupState>()(
       async deleteGroup(groupId) {
         await api.deleteGroup(groupId);
         set((state) => ({
-          groups: state.groups.filter((group) => group.id !== groupId),
+          deletedGroupIds: {
+            ...state.deletedGroupIds,
+            [groupId]: true,
+          },
           activeGroupId: state.activeGroupId === groupId ? null : state.activeGroupId,
         }));
+
+        window.setTimeout(() => {
+          set((state) => {
+            const nextDeletedGroupIds = { ...state.deletedGroupIds };
+            const nextDeletedGroupUserIds = { ...state.deletedGroupUserIds };
+            const nextGroupUsers = { ...state.groupUsers };
+            delete nextDeletedGroupIds[groupId];
+            delete nextDeletedGroupUserIds[groupId];
+            delete nextGroupUsers[groupId];
+
+            return {
+              deletedGroupIds: nextDeletedGroupIds,
+              deletedGroupUserIds: nextDeletedGroupUserIds,
+              groupUsers: nextGroupUsers,
+              groups: state.groups.filter((group) => group.id !== groupId),
+            };
+          });
+        }, DELETE_TOMBSTONE_MS);
       },
       async fetchGroupUsers(groupId) {
         const users = await api.listGroupUsers(groupId);
@@ -78,7 +105,39 @@ export const useGroupStore = create<GroupState>()(
       },
       async removeUser(groupId, userId) {
         await api.removeUser(groupId, userId);
-        await get().fetchGroupUsers(groupId);
+        set((state) => ({
+          deletedGroupUserIds: {
+            ...state.deletedGroupUserIds,
+            [groupId]: {
+              ...(state.deletedGroupUserIds[groupId] ?? {}),
+              [userId]: true,
+            },
+          },
+        }));
+
+        window.setTimeout(() => {
+          set((state) => {
+            const nextDeletedGroupUserIds = {
+              ...state.deletedGroupUserIds,
+              [groupId]: {
+                ...(state.deletedGroupUserIds[groupId] ?? {}),
+              },
+            };
+
+            delete nextDeletedGroupUserIds[groupId]?.[userId];
+            if (nextDeletedGroupUserIds[groupId] && !Object.keys(nextDeletedGroupUserIds[groupId]).length) {
+              delete nextDeletedGroupUserIds[groupId];
+            }
+
+            return {
+              deletedGroupUserIds: nextDeletedGroupUserIds,
+              groupUsers: {
+                ...state.groupUsers,
+                [groupId]: (state.groupUsers[groupId] ?? []).filter((user) => user.id !== userId),
+              },
+            };
+          });
+        }, DELETE_TOMBSTONE_MS);
       },
     }),
     {

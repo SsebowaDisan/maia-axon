@@ -29,6 +29,7 @@ export function IndexingStatus({
   onOpen?: (document: Document) => void;
 }) {
   const deleteDocument = useDocumentStore((state) => state.deleteDocument);
+  const isDeleted = useDocumentStore((state) => !!state.deletedDocumentIds[document.id]);
   const reindexDocument = useDocumentStore((state) => state.reindexDocument);
   const statusOverride = useDocumentStore((state) => state.documentStatuses[document.id]);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -40,12 +41,12 @@ export function IndexingStatus({
   const currentStage = statusOverride?.current_stage ?? document.current_stage;
   const errorDetail = statusOverride?.error_detail ?? document.error_detail;
   const Icon = iconByStatus[status];
-  const isProcessing = !["ready", "failed"].includes(status);
-  const isPreviewable = status === "ready" && (document.page_count ?? 0) > 0 && !!onOpen;
+  const isProcessing = !["ready", "failed"].includes(status) && !isDeleted;
+  const isPreviewable = status === "ready" && (document.page_count ?? 0) > 0 && !!onOpen && !isDeleted;
   const progressLabel = documentProgressLabel(progressCurrent, progressTotal);
 
   return (
-    <div className="rounded-[24px] border border-line bg-panel/80 p-4">
+    <div className={`rounded-[24px] border p-4 ${isDeleted ? "border-danger/20 bg-danger/5 opacity-70" : "border-line bg-panel/80"}`}>
       <div className="flex items-start justify-between gap-4">
         <button
           type="button"
@@ -57,23 +58,26 @@ export function IndexingStatus({
           }}
           disabled={!isPreviewable}
         >
-          <p className="truncate text-sm font-semibold text-ink">{document.filename}</p>
+          <p className="truncate text-sm font-semibold text-ink">{isDeleted ? "Deleted" : document.filename}</p>
           <p className="mt-1 text-xs text-muted">
-            {formatBytes(document.file_size_bytes)} · {document.page_count ?? "?"} pages
-            {isPreviewable ? " · Open preview" : ""}
+            {isDeleted
+              ? "Deleting..."
+              : `${formatBytes(document.file_size_bytes)} · ${document.page_count ?? "?"} pages${isPreviewable ? " · Open preview" : ""}`}
           </p>
         </button>
         <div
           className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${
-            status === "ready"
-              ? "bg-success/10 text-success"
-              : status === "failed"
-                ? "bg-danger/10 text-danger"
-                : "bg-accentSoft text-accent"
+            isDeleted
+              ? "bg-danger/10 text-danger"
+              : status === "ready"
+                ? "bg-success/10 text-success"
+                : status === "failed"
+                  ? "bg-danger/10 text-danger"
+                  : "bg-accentSoft text-accent"
           }`}
         >
           <Icon className={`h-3.5 w-3.5 ${isProcessing ? "animate-spin" : ""}`} />
-          {statusLabel(status)}
+          {isDeleted ? "Deleted" : statusLabel(status)}
         </div>
       </div>
       {isProcessing && progressLabel ? (
@@ -83,7 +87,7 @@ export function IndexingStatus({
       ) : null}
       {errorDetail ? <p className="mt-2 text-xs text-danger">{errorDetail}</p> : null}
       <div className="mt-4 flex items-center gap-2">
-        {status === "failed" ? (
+        {status === "failed" && !isDeleted ? (
           <Button
             type="button"
             size="sm"
@@ -101,6 +105,7 @@ export function IndexingStatus({
           type="button"
           size="sm"
           variant="ghost"
+          disabled={isDeleted}
           onClick={(event) => {
             event.stopPropagation();
             setDeleteOpen(true);

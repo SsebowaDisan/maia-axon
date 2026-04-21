@@ -5,10 +5,13 @@ import { create } from "zustand";
 import { api } from "@/lib/api";
 import type { ConversationDetail, ConversationSummary } from "@/lib/types";
 
+const DELETE_TOMBSTONE_MS = 1200;
+
 interface ConversationState {
   conversations: ConversationSummary[];
   activeConversationId: string | null;
   activeConversation: ConversationDetail | null;
+  deletedConversationIds: Record<string, true>;
   searchTerm: string;
   loading: boolean;
   fetchConversations: (projectId?: string | null) => Promise<void>;
@@ -23,6 +26,7 @@ export const useConversationStore = create<ConversationState>((set) => ({
   conversations: [],
   activeConversationId: null,
   activeConversation: null,
+  deletedConversationIds: {},
   searchTerm: "",
   loading: false,
   async fetchConversations(projectId) {
@@ -56,12 +60,27 @@ export const useConversationStore = create<ConversationState>((set) => ({
   async deleteConversation(conversationId) {
     await api.deleteConversation(conversationId);
     set((state) => ({
-      conversations: state.conversations.filter((item) => item.id !== conversationId),
+      deletedConversationIds: {
+        ...state.deletedConversationIds,
+        [conversationId]: true,
+      },
       activeConversationId:
         state.activeConversationId === conversationId ? null : state.activeConversationId,
       activeConversation:
         state.activeConversationId === conversationId ? null : state.activeConversation,
     }));
+
+    window.setTimeout(() => {
+      set((state) => {
+        const nextDeletedConversationIds = { ...state.deletedConversationIds };
+        delete nextDeletedConversationIds[conversationId];
+
+        return {
+          deletedConversationIds: nextDeletedConversationIds,
+          conversations: state.conversations.filter((item) => item.id !== conversationId),
+        };
+      });
+    }, DELETE_TOMBSTONE_MS);
   },
   startNewConversation() {
     set({

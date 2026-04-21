@@ -413,10 +413,12 @@ export function SidebarHistory() {
   const setSearchTerm = useConversationStore((state) => state.setSearchTerm);
   const loadConversation = useConversationStore((state) => state.loadConversation);
   const deleteConversation = useConversationStore((state) => state.deleteConversation);
+  const deletedConversationIds = useConversationStore((state) => state.deletedConversationIds);
   const startNewConversation = useConversationStore((state) => state.startNewConversation);
   const fetchConversations = useConversationStore((state) => state.fetchConversations);
   const projects = useProjectStore((state) => state.projects);
   const activeProjectId = useProjectStore((state) => state.activeProjectId);
+  const deletedProjectIds = useProjectStore((state) => state.deletedProjectIds);
   const createProject = useProjectStore((state) => state.createProject);
   const deleteProject = useProjectStore((state) => state.deleteProject);
   const setActiveProject = useProjectStore((state) => state.setActiveProject);
@@ -507,7 +509,8 @@ export function SidebarHistory() {
 
     const sections = projects.map((project) => ({
       id: project.id,
-      label: project.name,
+      label: deletedProjectIds[project.id] ? "Deleted" : project.name,
+      isDeleted: !!deletedProjectIds[project.id],
       items: groupedById[project.id] ?? [],
     }));
 
@@ -517,12 +520,13 @@ export function SidebarHistory() {
       sections.push({
         id: "unassigned",
         label: "Unassigned",
+        isDeleted: false,
         items: otherItems,
       });
     }
 
     return sections;
-  }, [filteredConversations, projects]);
+  }, [deletedProjectIds, filteredConversations, projects]);
 
   function closeDeleteProjectDialog() {
     setDeleteProjectTarget(null);
@@ -710,6 +714,7 @@ export function SidebarHistory() {
                         className="h-8 w-8"
                         title="New chat"
                         aria-label={`New chat in ${section.label}`}
+                        disabled={section.isDeleted}
                         onClick={() => void handleStartChat(section.id)}
                       >
                         <Plus className="h-3.5 w-3.5" />
@@ -721,6 +726,7 @@ export function SidebarHistory() {
                         className="h-8 w-8"
                         title="Delete project"
                         aria-label={`Delete ${section.label}`}
+                        disabled={section.isDeleted}
                         onClick={() => {
                           const target = projects.find((project) => project.id === section.id) ?? null;
                           setDeleteProjectTarget(target);
@@ -734,30 +740,32 @@ export function SidebarHistory() {
                 </div>
                 {expandedProjects[section.id] ? <div className="space-y-2">
                   {section.items.map((conversation) => (
+                    (() => {
+                      const isDeletedConversation = !!deletedConversationIds[conversation.id];
+                      const ConversationIcon =
+                        conversationIconMap[
+                          (conversation.title_icon as keyof typeof conversationIconMap) || "message"
+                        ] ?? MessageSquareMore;
+
+                      return (
                     <div
                       key={conversation.id}
                       className={`group/conversation block w-full rounded-[24px] border px-4 py-3 text-left transition ${
-                        activeConversationId === conversation.id
+                        isDeletedConversation
+                          ? "border-danger/20 bg-danger/5 opacity-70"
+                          : activeConversationId === conversation.id
                           ? "border-black/[0.08] bg-black/[0.03]"
                           : "border-transparent bg-black/[0.02] hover:bg-black/[0.04]"
                       }`}
                     >
                       <div className="flex items-center justify-between gap-3">
-                        {(() => {
-                          const ConversationIcon =
-                            conversationIconMap[
-                              (conversation.title_icon as keyof typeof conversationIconMap) || "message"
-                            ] ?? MessageSquareMore;
-
-                          return (
-                            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/[0.04] text-muted">
-                              <ConversationIcon className="h-4 w-4" />
-                            </span>
-                          );
-                        })()}
+                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/[0.04] text-muted">
+                          <ConversationIcon className="h-4 w-4" />
+                        </span>
                         <button
                           type="button"
                           className="min-w-0 flex-1 text-left"
+                          disabled={isDeletedConversation}
                           onClick={() =>
                             void handleSelectConversation(
                               conversation.id,
@@ -767,32 +775,38 @@ export function SidebarHistory() {
                           }
                         >
                           <p className="truncate text-sm font-semibold text-ink">
-                            {conversation.title || titleFromMessage("Untitled conversation")}
+                            {isDeletedConversation
+                              ? "Deleted"
+                              : conversation.title || titleFromMessage("Untitled conversation")}
                           </p>
                           <div className="mt-2">
                             <span className="text-xs text-muted">
-                              {formatRelativeTime(conversation.updated_at)}
+                              {isDeletedConversation ? "Deleting..." : formatRelativeTime(conversation.updated_at)}
                             </span>
                           </div>
                         </button>
-                        <button
-                          type="button"
-                          className="rounded-full p-2 text-muted opacity-0 transition hover:bg-danger/10 hover:text-danger group-hover/conversation:opacity-100 group-focus-within/conversation:opacity-100"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setDeleteConversationTarget(conversation);
-                          }}
-                          title="Delete"
-                          aria-label="Delete conversation"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        {isDeletedConversation ? null : (
+                          <button
+                            type="button"
+                            className="rounded-full p-2 text-muted opacity-0 transition hover:bg-danger/10 hover:text-danger group-hover/conversation:opacity-100 group-focus-within/conversation:opacity-100"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setDeleteConversationTarget(conversation);
+                            }}
+                            title="Delete"
+                            aria-label="Delete conversation"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
                       </div>
                     </div>
+                      );
+                    })()
                   ))}
                   {!section.items.length ? (
                     <div className="rounded-[22px] bg-black/[0.02] px-5 py-5 text-sm text-muted">
-                      No chats in this project yet
+                      {section.isDeleted ? "Deleted" : "No chats in this project yet"}
                     </div>
                   ) : null}
                 </div> : null}

@@ -6,11 +6,14 @@ import { api } from "@/lib/api";
 import type { Document, DocumentStatus, UploadProgressState } from "@/lib/types";
 import { useGroupStore } from "@/stores/groupStore";
 
+const DELETE_TOMBSTONE_MS = 1200;
+
 interface DocumentState {
   documentsByGroup: Record<string, Document[]>;
   selectedDocumentIds: string[];
   uploadStates: UploadProgressState[];
   documentStatuses: Record<string, DocumentStatus>;
+  deletedDocumentIds: Record<string, true>;
   loading: boolean;
   fetchDocuments: (groupId: string) => Promise<void>;
   toggleDocument: (documentId: string) => void;
@@ -27,6 +30,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   selectedDocumentIds: [],
   uploadStates: [],
   documentStatuses: {},
+  deletedDocumentIds: {},
   loading: false,
   async fetchDocuments(groupId) {
     set({ loading: true });
@@ -134,12 +138,27 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   async deleteDocument(documentId, groupId) {
     await api.deleteDocument(documentId);
     set((state) => ({
-      documentsByGroup: {
-        ...state.documentsByGroup,
-        [groupId]: (state.documentsByGroup[groupId] ?? []).filter((doc) => doc.id !== documentId),
+      deletedDocumentIds: {
+        ...state.deletedDocumentIds,
+        [documentId]: true,
       },
       selectedDocumentIds: state.selectedDocumentIds.filter((id) => id !== documentId),
     }));
+
+    window.setTimeout(() => {
+      set((state) => {
+        const nextDeletedDocumentIds = { ...state.deletedDocumentIds };
+        delete nextDeletedDocumentIds[documentId];
+
+        return {
+          deletedDocumentIds: nextDeletedDocumentIds,
+          documentsByGroup: {
+            ...state.documentsByGroup,
+            [groupId]: (state.documentsByGroup[groupId] ?? []).filter((doc) => doc.id !== documentId),
+          },
+        };
+      });
+    }, DELETE_TOMBSTONE_MS);
   },
   async reindexDocument(documentId) {
     const status = await api.reindexDocument(documentId);

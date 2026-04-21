@@ -17,6 +17,7 @@ export function GroupManager({
   onSelectGroup: (groupId: string | null) => void;
 }) {
   const groups = useGroupStore((state) => state.groups);
+  const deletedGroupIds = useGroupStore((state) => state.deletedGroupIds);
   const createGroup = useGroupStore((state) => state.createGroup);
   const updateGroup = useGroupStore((state) => state.updateGroup);
   const deleteGroup = useGroupStore((state) => state.deleteGroup);
@@ -87,33 +88,44 @@ export function GroupManager({
         <div className="min-h-0 flex-1 overflow-y-auto pr-1 scrollbar-thin">
           <div className="space-y-3">
           {groups.map((group) => (
+            (() => {
+              const isDeleted = !!deletedGroupIds[group.id];
+
+              return (
             <div
               key={group.id}
               role="button"
               tabIndex={0}
-              onClick={() => onSelectGroup(group.id)}
+              onClick={() => {
+                if (!isDeleted) {
+                  onSelectGroup(group.id);
+                }
+              }}
               onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
+                if (!isDeleted && (event.key === "Enter" || event.key === " ")) {
                   event.preventDefault();
                   onSelectGroup(group.id);
                 }
               }}
               className={`group block w-full cursor-pointer rounded-[26px] border px-4 py-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/15 ${
-                selectedGroupId === group.id
+                isDeleted
+                  ? "border-danger/20 bg-danger/5 opacity-70"
+                  : selectedGroupId === group.id
                   ? "border-accent bg-accentSoft/50"
                   : "border-line bg-panel/80 hover:bg-white/70"
               }`}
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-sm font-semibold text-ink">{group.name}</p>
-                  <p className="mt-1 text-xs text-muted">{group.document_count} PDFs</p>
+                  <p className="text-sm font-semibold text-ink">{isDeleted ? "Deleted" : group.name}</p>
+                  <p className="mt-1 text-xs text-muted">{isDeleted ? "Deleting..." : `${group.document_count} PDFs`}</p>
                 </div>
                 <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                   <Button
                     type="button"
                     size="icon"
                     variant="ghost"
+                    disabled={isDeleted}
                     onClick={(event) => {
                       event.stopPropagation();
                       setEditing(group);
@@ -130,6 +142,7 @@ export function GroupManager({
                     type="button"
                     size="icon"
                     variant="ghost"
+                    disabled={isDeleted}
                     onClick={(event) => {
                       event.stopPropagation();
                       setDeleteTarget(group);
@@ -141,6 +154,8 @@ export function GroupManager({
                 </div>
               </div>
             </div>
+              );
+            })()
           ))}
           </div>
         </div>
