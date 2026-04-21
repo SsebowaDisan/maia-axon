@@ -319,6 +319,67 @@ def _reindex_citation_references(
     return remapped_text, remapped_citations
 
 
+def _citation_location_key(citation: Citation) -> tuple[str, str, int]:
+    source_ref = ""
+    if citation.source_type == "pdf":
+        source_ref = str(citation.document_id or citation.document_name or "")
+    else:
+        source_ref = str(citation.url or citation.title or "")
+    return (citation.source_type, source_ref, int(citation.page or 0))
+
+
+def _merge_citation_pair(existing: Citation, incoming: Citation) -> Citation:
+    merged_boxes = _normalize_bbox_references((existing.boxes or []) + (incoming.boxes or []))
+    return Citation(
+        id=existing.id,
+        source_type=existing.source_type,
+        document_id=existing.document_id or incoming.document_id,
+        document_name=existing.document_name or incoming.document_name,
+        page=existing.page or incoming.page,
+        bbox=_merge_bbox_references(merged_boxes) or existing.bbox or incoming.bbox,
+        boxes=merged_boxes or existing.boxes or incoming.boxes,
+        snippet=existing.snippet if len(existing.snippet) >= len(incoming.snippet) else incoming.snippet,
+        url=existing.url or incoming.url,
+        title=existing.title or incoming.title,
+    )
+
+
+def _deduplicate_citation_references(text: str, citations: list[Citation]) -> tuple[str, list[Citation]]:
+    if not citations:
+        return text, citations
+
+    deduped: list[Citation] = []
+    key_to_new_index: dict[tuple[str, str, int], int] = {}
+    old_to_new: dict[int, int] = {}
+
+    for old_index, citation in enumerate(citations, start=1):
+        key = _citation_location_key(citation)
+        existing_index = key_to_new_index.get(key)
+        if existing_index is None:
+            next_index = len(deduped) + 1
+            key_to_new_index[key] = next_index
+            old_to_new[old_index] = next_index
+            deduped.append(citation)
+            continue
+
+        old_to_new[old_index] = existing_index
+        deduped[existing_index - 1] = _merge_citation_pair(deduped[existing_index - 1], citation)
+
+    remapped_text = text
+    for old_index in range(len(citations), 0, -1):
+        new_index = old_to_new[old_index]
+        remapped_text = re.sub(rf"\[{old_index}\]", f"[{new_index}]", remapped_text)
+
+    remapped_text = re.sub(r"(\[(\d+)\])(?:\s*\[\2\])+", r"\1", remapped_text)
+    remapped_text = re.sub(r"(\[(\d+)\])(?:\s*,\s*\[\2\])+", r"\1", remapped_text)
+    remapped_text = re.sub(r"\s{2,}", " ", remapped_text)
+
+    for new_index, citation in enumerate(deduped, start=1):
+        citation.id = f"cite-{new_index}"
+
+    return remapped_text, deduped
+
+
 def _sanitize_conversation_title(title: str, fallback_query: str) -> str:
     cleaned = " ".join((title or "").replace("\n", " ").split()).strip(" -:.,")
     if cleaned:
@@ -918,6 +979,7 @@ def qa_agent(
     unsupported_claims.extend(
         claim for claim in verifier_unsupported_claims if claim not in unsupported_claims
     )
+    answer_text, citations = _deduplicate_citation_references(answer_text, citations)
     answer_text = ensure_inline_citation_references(answer_text, citations)
 
     # Check for OCR warnings
