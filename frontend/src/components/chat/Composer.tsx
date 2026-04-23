@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Hash, Layers3, Paperclip, Plus, Send, X } from "lucide-react";
+import { BarChart3, Building2, Hash, Layers3, Paperclip, Plus, Send, X } from "lucide-react";
 
+import { CompanySelector } from "@/components/chat/CompanySelector";
 import { ComposerMenu } from "@/components/chat/ComposerMenu";
 import { DocumentSelector } from "@/components/chat/DocumentSelector";
 import { GroupSelector } from "@/components/chat/GroupSelector";
@@ -10,8 +11,9 @@ import { DocumentPreviewDialog } from "@/components/pdf/DocumentPreviewDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import type { Document, Group } from "@/lib/types";
+import type { Company, Document, Group, SearchMode } from "@/lib/types";
 import { useChatStore } from "@/stores/chatStore";
+import { useCompanyStore } from "@/stores/companyStore";
 import { useConversationStore } from "@/stores/conversationStore";
 import { useDocumentStore } from "@/stores/documentStore";
 import { useGroupStore } from "@/stores/groupStore";
@@ -23,14 +25,37 @@ function replaceTrigger(value: string, regex: RegExp) {
   return value.replace(regex, "$1");
 }
 
-function formatModeLabel(mode: "library" | "deep_search" | "standard") {
+function formatModeLabel(mode: SearchMode) {
   if (mode === "deep_search") {
     return "Deep Search";
   }
   if (mode === "standard") {
     return "Standard";
   }
+  if (mode === "google_analytics") {
+    return "Google Analytics";
+  }
+  if (mode === "google_ads") {
+    return "Google Ads";
+  }
   return "Library";
+}
+
+function isDocumentMode(mode: SearchMode) {
+  return mode === "library" || mode === "deep_search";
+}
+
+function isGoogleMode(mode: SearchMode): mode is Extract<SearchMode, "google_analytics" | "google_ads"> {
+  return mode === "google_analytics" || mode === "google_ads";
+}
+
+function getAvailableCompanies(
+  companies: Company[],
+  mode: Extract<SearchMode, "google_analytics" | "google_ads">,
+) {
+  return companies.filter((company) =>
+    mode === "google_analytics" ? !!company.ga4_property_id : !!company.google_ads_customer_id,
+  );
 }
 
 export function Composer() {
@@ -39,9 +64,13 @@ export function Composer() {
   const modeMenuRef = useRef<HTMLDivElement | null>(null);
   const groupSelectorRef = useRef<HTMLDivElement | null>(null);
   const documentSelectorRef = useRef<HTMLDivElement | null>(null);
+  const companySelectorRef = useRef<HTMLDivElement | null>(null);
   const activeGroupId = useGroupStore((state) => state.activeGroupId);
   const groups = useGroupStore((state) => state.groups);
   const setActiveGroup = useGroupStore((state) => state.setActiveGroup);
+  const companies = useCompanyStore((state) => state.companies);
+  const selectedCompanyByMode = useCompanyStore((state) => state.selectedCompanyByMode);
+  const setSelectedCompany = useCompanyStore((state) => state.setSelectedCompany);
   const selectedDocumentIds = useDocumentStore((state) => state.selectedDocumentIds);
   const setSelectedDocuments = useDocumentStore((state) => state.setSelectedDocuments);
   const toggleDocument = useDocumentStore((state) => state.toggleDocument);
@@ -67,8 +96,10 @@ export function Composer() {
   const [showModeMenu, setShowModeMenu] = useState(false);
   const [groupQuery, setGroupQuery] = useState("");
   const [documentQuery, setDocumentQuery] = useState("");
+  const [companyQuery, setCompanyQuery] = useState("");
   const [forceGroupOpen, setForceGroupOpen] = useState(false);
   const [forceDocumentOpen, setForceDocumentOpen] = useState(false);
+  const [forceCompanyOpen, setForceCompanyOpen] = useState(false);
   const [previewDocument, setPreviewDocument] = useState<Document | null>(null);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -81,12 +112,15 @@ export function Composer() {
     () => groups.find((group) => group.id === activeGroupId) ?? groups[0] ?? null,
     [activeGroupId, groups],
   );
-  const needsProjectSelection = mode !== "standard";
+  const selectedCompanyId = isGoogleMode(mode) ? selectedCompanyByMode[mode] : null;
+  const selectedCompany = companies.find((company) => company.id === selectedCompanyId) ?? null;
+  const needsProjectSelection = isDocumentMode(mode);
   const canSend =
     (!!value.trim() || promptAttachments.length > 0) &&
     !streaming &&
     !welcomeStreaming &&
-    !!fallbackGroup;
+    (isGoogleMode(mode) ? !!selectedCompany : true) &&
+    (mode === "standard" || isGoogleMode(mode) || !!fallbackGroup);
 
   const activeGroup = groups.find((group) => group.id === activeGroupId) ?? null;
 
@@ -100,9 +134,19 @@ export function Composer() {
     return documents.filter((document) => document.filename.toLowerCase().includes(needle));
   }, [documentQuery, documents, value]);
 
+  const filteredCompanies = useMemo(() => {
+    const needle = companyQuery.toLowerCase();
+    const available = isGoogleMode(mode) ? getAvailableCompanies(companies, mode) : companies;
+    if (!needle) {
+      return available;
+    }
+    return available.filter((company) => company.name.toLowerCase().includes(needle));
+  }, [companies, companyQuery, mode]);
+
   const showGroupSelector = forceGroupOpen || groupRegex.test(value);
   const showDocumentSelector =
     !!activeGroupId && (forceDocumentOpen || documentRegex.test(value));
+  const showCompanySelector = isGoogleMode(mode) && forceCompanyOpen;
 
   useEffect(() => {
     const element = textareaRef.current;
@@ -140,8 +184,10 @@ export function Composer() {
         showGroupSelector && !groupSelectorRef.current?.contains(target);
       const closeDocumentSelector =
         showDocumentSelector && !documentSelectorRef.current?.contains(target);
+      const closeCompanySelector =
+        showCompanySelector && !companySelectorRef.current?.contains(target);
 
-      if (!closeModeMenu && !closeGroupSelector && !closeDocumentSelector) {
+      if (!closeModeMenu && !closeGroupSelector && !closeDocumentSelector && !closeCompanySelector) {
         return;
       }
 
@@ -155,6 +201,9 @@ export function Composer() {
         if (closeDocumentSelector) {
           setForceDocumentOpen(false);
         }
+        if (closeCompanySelector) {
+          setForceCompanyOpen(false);
+        }
       });
     }
 
@@ -165,7 +214,7 @@ export function Composer() {
         window.cancelAnimationFrame(frame);
       }
     };
-  }, [showDocumentSelector, showGroupSelector, showModeMenu]);
+  }, [showCompanySelector, showDocumentSelector, showGroupSelector, showModeMenu]);
 
   const selectedDocuments = documents.filter((document) => selectedDocumentIds.includes(document.id));
   const isExpandedComposer = value.includes("\n") || value.length > 180;
@@ -201,6 +250,15 @@ export function Composer() {
     setDocumentQuery("");
   }
 
+  function handleSelectCompany(company: Company) {
+    if (!isGoogleMode(mode)) {
+      return;
+    }
+    setSelectedCompany(mode, company.id);
+    setForceCompanyOpen(false);
+    setCompanyQuery("");
+  }
+
   async function handleSend() {
     if (!canSend) {
       return;
@@ -210,6 +268,7 @@ export function Composer() {
     setDraftMode("compose");
     setForceGroupOpen(false);
     setForceDocumentOpen(false);
+    setForceCompanyOpen(false);
     await sendMessage(message);
   }
 
@@ -232,6 +291,10 @@ export function Composer() {
     ? activeGroupId
       ? "Ask a question..."
       : "Select a group with # to start"
+    : isGoogleMode(mode)
+      ? selectedCompany
+        ? "Ask about this company's data..."
+        : "Choose a company to start"
     : fallbackGroup
       ? "Ask anything..."
       : "No group available yet";
@@ -258,6 +321,20 @@ export function Composer() {
               type="button"
               className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted transition hover:bg-black/[0.05] hover:text-black"
               onClick={() => setForceGroupOpen(true)}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </Badge>
+        ) : null}
+
+        {isGoogleMode(mode) && selectedCompany ? (
+          <Badge className="h-9 gap-2 rounded-full border border-black/[0.05] bg-[rgba(245,245,246,0.98)] px-3 text-black shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
+            {mode === "google_analytics" ? <BarChart3 className="h-3 w-3" /> : <Building2 className="h-3 w-3" />}
+            {selectedCompany.name}
+            <button
+              type="button"
+              className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted transition hover:bg-black/[0.05] hover:text-black"
+              onClick={() => setForceCompanyOpen(true)}
             >
               <X className="h-3 w-3" />
             </button>
@@ -298,6 +375,17 @@ export function Composer() {
         />
       ) : null}
 
+      {showCompanySelector ? (
+        <CompanySelector
+          ref={companySelectorRef}
+          companies={filteredCompanies}
+          query={companyQuery}
+          mode={mode}
+          onQueryChange={setCompanyQuery}
+          onSelect={handleSelectCompany}
+        />
+      ) : null}
+
       {isEditingUserMessage ? (
         <div className="mb-3 flex items-center justify-between px-1">
           <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
@@ -333,6 +421,21 @@ export function Composer() {
               value={mode}
               onSelect={(nextMode) => {
                 setMode(nextMode);
+                if (isGoogleMode(nextMode)) {
+                  const availableCompanies = getAvailableCompanies(companies, nextMode);
+                  const rememberedCompanyId = selectedCompanyByMode[nextMode];
+                  const hasRememberedCompany = availableCompanies.some((company) => company.id === rememberedCompanyId);
+                  if (availableCompanies.length === 1) {
+                    setSelectedCompany(nextMode, availableCompanies[0].id);
+                    setForceCompanyOpen(false);
+                  } else if (hasRememberedCompany) {
+                    setForceCompanyOpen(false);
+                  } else {
+                    setForceCompanyOpen(true);
+                  }
+                } else {
+                  setForceCompanyOpen(false);
+                }
                 setShowModeMenu(false);
               }}
             />

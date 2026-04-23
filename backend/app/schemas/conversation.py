@@ -28,6 +28,7 @@ class MessageResponse(BaseModel):
     role: str
     content: str
     citations: dict | None
+    visualizations: list[dict] | None
     mindmap: dict | None
     search_mode: str | None
     created_at: datetime
@@ -53,9 +54,10 @@ class ChatRequest(BaseModel):
     conversation_id: UUID | None = None
     project_id: UUID | None = None
     group_id: UUID | None = None
+    company_id: UUID | None = None
     document_ids: list[UUID] | None = None
     attachment_ids: list[str] | None = None
-    mode: str = "library"  # "standard", "library", or "deep_search"
+    mode: str = "library"  # "standard", "library", "deep_search", "google_analytics", or "google_ads"
     message: str
 
 

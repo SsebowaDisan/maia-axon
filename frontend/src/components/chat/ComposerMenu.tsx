@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef } from "react";
-import { BookOpen, Bot, Globe } from "lucide-react";
+import { BarChart3, BookOpen, Bot, Building2, Globe } from "lucide-react";
 
 import type { SearchMode } from "@/lib/types";
 
@@ -54,6 +54,37 @@ export const ComposerMenu = forwardRef<HTMLDivElement, {
           Deep Search
         </span>
         {value === "deep_search" ? (
+          <span className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold">Active</span>
+        ) : null}
+      </button>
+      <div className="my-2 border-t border-black/[0.06]" />
+      <button
+        type="button"
+        className={`flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left text-sm transition ${
+          value === "google_analytics" ? "bg-accentSoft text-accent" : "hover:bg-black/5"
+        }`}
+        onClick={() => onSelect("google_analytics")}
+      >
+        <span className="flex items-center gap-2">
+          <BarChart3 className="h-4 w-4" />
+          Google Analytics
+        </span>
+        {value === "google_analytics" ? (
+          <span className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold">Active</span>
+        ) : null}
+      </button>
+      <button
+        type="button"
+        className={`mt-1 flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left text-sm transition ${
+          value === "google_ads" ? "bg-accentSoft text-accent" : "hover:bg-black/5"
+        }`}
+        onClick={() => onSelect("google_ads")}
+      >
+        <span className="flex items-center gap-2">
+          <Building2 className="h-4 w-4" />
+          Google Ads
+        </span>
+        {value === "google_ads" ? (
           <span className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold">Active</span>
         ) : null}
       </button>

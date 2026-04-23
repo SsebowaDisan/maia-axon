@@ -7,6 +7,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import type { ChatMessage, MessageResponse } from "@/lib/types";
 import { useAuthStore } from "@/stores/authStore";
 import { useChatStore } from "@/stores/chatStore";
+import { useCompanyStore } from "@/stores/companyStore";
 import { useConversationStore } from "@/stores/conversationStore";
 import { useDocumentStore } from "@/stores/documentStore";
 import { useGroupStore } from "@/stores/groupStore";
@@ -19,6 +20,7 @@ function mapMessage(message: MessageResponse): ChatMessage {
     content: message.content,
     createdAt: message.created_at,
     citations: message.citations?.citations ?? [],
+    visualizations: message.visualizations ?? [],
     mindmap: message.mindmap,
     warnings: [],
     searchMode: message.search_mode ?? "library",
@@ -40,6 +42,7 @@ export default function HomePage() {
   const bootstrap = useAuthStore((state) => state.bootstrap);
   const fetchGroups = useGroupStore((state) => state.fetchGroups);
   const setActiveGroup = useGroupStore((state) => state.setActiveGroup);
+  const fetchCompanies = useCompanyStore((state) => state.fetchCompanies);
   const fetchProjects = useProjectStore((state) => state.fetchProjects);
   const setActiveProject = useProjectStore((state) => state.setActiveProject);
   const fetchConversations = useConversationStore((state) => state.fetchConversations);
@@ -77,11 +80,13 @@ export default function HomePage() {
       return;
     }
     void fetchGroups();
+    void fetchCompanies();
     void fetchProjects();
     void fetchConversations();
   }, [
     chatHydrated,
     conversationHydrated,
+    fetchCompanies,
     fetchConversations,
     fetchGroups,
     fetchProjects,

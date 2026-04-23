@@ -12,6 +12,7 @@ import type {
   SearchMode,
 } from "@/lib/types";
 import { useAuthStore } from "@/stores/authStore";
+import { useCompanyStore } from "@/stores/companyStore";
 import { useConversationStore } from "@/stores/conversationStore";
 import { useDocumentStore } from "@/stores/documentStore";
 import { useGroupStore } from "@/stores/groupStore";
@@ -32,6 +33,7 @@ function makeMessage(
     attachments: partial.attachments ?? [],
     createdAt: new Date().toISOString(),
     citations: partial.citations ?? [],
+    visualizations: partial.visualizations ?? [],
     mindmap: partial.mindmap ?? null,
     warnings: partial.warnings ?? [],
     searchMode: partial.searchMode,
@@ -214,6 +216,10 @@ export const useChatStore = create<ChatState>()(
             }
           }
           break;
+        case "visualizations":
+          flushTokenBuffer();
+          updateAssistant((message) => ({ ...message, visualizations: event.data }));
+          break;
         case "mindmap":
           flushTokenBuffer();
           updateAssistant((message) => ({ ...message, mindmap: event.data }));
@@ -301,7 +307,7 @@ export const useChatStore = create<ChatState>()(
     useMindmapStore.getState().clearMindmap();
     set({ messages: [], streaming: false, draft: "", draftMode: "compose", promptAttachments: [] });
   },
-  hydrateMessages(messages, conversationId) {
+      hydrateMessages(messages, conversationId) {
     set((state) => withConversationCache(state, messages, conversationId));
     const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
     useMindmapStore.getState().setMindmapData(lastAssistant?.mindmap ?? null);
@@ -312,14 +318,21 @@ export const useChatStore = create<ChatState>()(
   async sendMessage(content) {
     const { mode, promptAttachments } = get();
     const token = useAuthStore.getState().token;
+    const companyState = useCompanyStore.getState();
     const groupState = useGroupStore.getState();
     const projectState = useProjectStore.getState();
     const conversationState = useConversationStore.getState();
     const documentState = useDocumentStore.getState();
+    const companyId =
+      mode === "google_analytics" || mode === "google_ads"
+        ? companyState.selectedCompanyByMode[mode]
+        : null;
     const groupId =
       mode === "standard"
         ? groupState.activeGroupId ?? groupState.groups[0]?.id ?? null
-        : groupState.activeGroupId;
+        : mode === "library" || mode === "deep_search"
+          ? groupState.activeGroupId
+          : null;
     const documentIds = documentState.selectedDocumentIds;
     const activeConversationProjectId =
       conversationState.activeConversation?.project_id ??
@@ -332,7 +345,12 @@ export const useChatStore = create<ChatState>()(
         ? conversationState.activeConversationId
         : null;
 
-    if (!token || !groupId || (!content.trim() && promptAttachments.length === 0)) {
+    if (
+      !token ||
+      ((mode === "library" || mode === "deep_search") && !groupId) ||
+      ((mode === "google_analytics" || mode === "google_ads") && !companyId) ||
+      (!content.trim() && promptAttachments.length === 0)
+    ) {
       return;
     }
 
@@ -384,6 +402,7 @@ export const useChatStore = create<ChatState>()(
       type: "query",
       project_id: projectState.activeProjectId,
       group_id: groupId,
+      company_id: companyId,
       document_ids: documentIds,
       attachment_ids: promptAttachments.map((attachment) => attachment.id),
       mode,

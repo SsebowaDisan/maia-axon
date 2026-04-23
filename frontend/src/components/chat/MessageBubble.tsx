@@ -1,24 +1,32 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Bot, Brain, Check, Copy, FileText, ImageIcon, Paperclip, Pencil, Share2, User2 } from "lucide-react";
+import { AlertTriangle, Bot, Brain, Check, Copy, FileText, ImageIcon, Paperclip, Pencil, Share2, TableProperties, User2 } from "lucide-react";
 
+import { ExportDialog } from "@/components/chat/ExportDialog";
 import { StreamingIndicator } from "@/components/chat/StreamingIndicator";
+import { MessageVisualizationBlock } from "@/components/chat/MessageVisualization";
 import { Badge } from "@/components/ui/badge";
 import { MarkdownRenderer } from "@/components/shared/MarkdownRenderer";
 import { Textarea } from "@/components/ui/textarea";
-import type { ChatMessage, Citation, Document } from "@/lib/types";
+import type { ChatMessage, Citation, Document, SearchMode } from "@/lib/types";
 import { formatRelativeTime, toEditableDraft } from "@/lib/utils";
 import { useDocumentStore } from "@/stores/documentStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useGroupStore } from "@/stores/groupStore";
 
-function formatModeLabel(mode: "library" | "deep_search" | "standard") {
+function formatModeLabel(mode: SearchMode) {
   if (mode === "deep_search") {
     return "Deep Search";
   }
   if (mode === "standard") {
     return "Standard";
+  }
+  if (mode === "google_analytics") {
+    return "Google Analytics";
+  }
+  if (mode === "google_ads") {
+    return "Google Ads";
   }
   return "Library";
 }
@@ -48,6 +56,8 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
   const [isInlineEditing, setIsInlineEditing] = useState(false);
   const [editableContent, setEditableContent] = useState("");
   const [actionFeedback, setActionFeedback] = useState<"edit" | "copy" | "share" | null>(null);
+  const [docsDialogOpen, setDocsDialogOpen] = useState(false);
+  const [sheetsDialogOpen, setSheetsDialogOpen] = useState(false);
   const feedbackTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -284,6 +294,26 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
                 {actionFeedback === "share" ? <Check className="h-3.5 w-3.5" /> : <Share2 className="h-3.5 w-3.5" />}
                 {actionFeedback === "share" ? "Shared" : "Share"}
               </button>
+              <button
+                type="button"
+                className="inline-flex h-9 items-center gap-2 rounded-full border border-black/8 bg-white px-3 text-[12px] font-medium text-black/72 transition hover:border-black/12 hover:bg-black hover:text-white"
+                aria-label="Write to Docs"
+                title="Write to Docs"
+                onClick={() => setDocsDialogOpen(true)}
+              >
+                <FileText className="h-3.5 w-3.5" />
+                Write to Docs
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-9 items-center gap-2 rounded-full border border-black/8 bg-white px-3 text-[12px] font-medium text-black/72 transition hover:border-black/12 hover:bg-black hover:text-white"
+                aria-label="Write to Sheets"
+                title="Write to Sheets"
+                onClick={() => setSheetsDialogOpen(true)}
+              >
+                <TableProperties className="h-3.5 w-3.5" />
+                Write to Sheets
+              </button>
             </div>
           </div>
 
@@ -320,6 +350,12 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
                   />
                 ) : (
                   <>
+                    {message.visualizations.map((visualization, index) => (
+                      <MessageVisualizationBlock
+                        key={`${message.id}-viz-${index}`}
+                        visualization={visualization}
+                      />
+                    ))}
                     <MarkdownRenderer
                       content={message.content || (message.isStreaming ? " " : "")}
                       citations={message.citations}
@@ -332,6 +368,18 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
           )}
         </div>
       </article>
+      <ExportDialog
+        open={docsDialogOpen}
+        onOpenChange={setDocsDialogOpen}
+        type="google_doc"
+        message={message}
+      />
+      <ExportDialog
+        open={sheetsDialogOpen}
+        onOpenChange={setSheetsDialogOpen}
+        type="google_sheet"
+        message={message}
+      />
     </div>
   );
 }

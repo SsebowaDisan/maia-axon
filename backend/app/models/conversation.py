@@ -57,6 +57,7 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String(20), nullable=False)  # user, assistant, system
     content: Mapped[str] = mapped_column(Text, nullable=False)
     citations: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    visualizations: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     mindmap: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     search_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

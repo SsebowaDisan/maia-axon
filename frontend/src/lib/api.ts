@@ -1,10 +1,15 @@
 import type {
   AuthTokenResponse,
+  Company,
+  CompanyUserAssignment,
   ConversationDetail,
   ConversationSummary,
   Document,
   DocumentUploadInitResponse,
   DocumentStatus,
+  ExportDestination,
+  ExportDestinationInfo,
+  ExportWriteResponse,
   Group,
   GroupAssignment,
   PageData,
@@ -154,6 +159,86 @@ export const api = {
   },
   listGroups() {
     return request<Group[]>("/groups");
+  },
+  listCompanies() {
+    return request<Company[]>("/companies");
+  },
+  createCompany(payload: {
+    name: string;
+    ga4_property_id?: string | null;
+    google_ads_customer_id?: string | null;
+    google_ads_login_customer_id?: string | null;
+  }) {
+    return request<Company>("/companies", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  updateCompany(
+    companyId: string,
+    payload: {
+      name?: string;
+      ga4_property_id?: string | null;
+      google_ads_customer_id?: string | null;
+      google_ads_login_customer_id?: string | null;
+    },
+  ) {
+    return request<Company>(`/companies/${companyId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteCompany(companyId: string) {
+    return request<void>(`/companies/${companyId}`, { method: "DELETE" });
+  },
+  listCompanyUsers(companyId: string) {
+    return request<User[]>(`/companies/${companyId}/users`);
+  },
+  assignCompanyUser(companyId: string, userId: string) {
+    return request<CompanyUserAssignment>(`/companies/${companyId}/users`, {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId }),
+    });
+  },
+  removeCompanyUser(companyId: string, userId: string) {
+    return request<void>(`/companies/${companyId}/users/${userId}`, {
+      method: "DELETE",
+    });
+  },
+  getExportDestinationInfo() {
+    return request<ExportDestinationInfo>("/export-destinations/info");
+  },
+  listExportDestinations() {
+    return request<ExportDestination[]>("/export-destinations");
+  },
+  createExportDestination(payload: {
+    company_id?: string | null;
+    type: "google_doc" | "google_sheet";
+    title?: string | null;
+    url: string;
+  }) {
+    return request<ExportDestination>("/export-destinations", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteExportDestination(destinationId: string) {
+    return request<void>(`/export-destinations/${destinationId}`, {
+      method: "DELETE",
+    });
+  },
+  writeExportDestination(payload: {
+    destination_id: string;
+    title: string;
+    content: string;
+    search_mode?: string | null;
+    company_name?: string | null;
+    visualizations?: unknown[];
+  }) {
+    return request<ExportWriteResponse>("/export-destinations/write", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   },
   listProjects() {
     return request<Project[]>("/projects");

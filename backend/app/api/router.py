@@ -1,6 +1,17 @@
 from fastapi import APIRouter
 
-from app.api.endpoints import auth, chat, conversations, documents, groups, projects, users, ws
+from app.api.endpoints import (
+    auth,
+    chat,
+    companies,
+    conversations,
+    documents,
+    export_destinations,
+    groups,
+    projects,
+    users,
+    ws,
+)
 
 api_router = APIRouter()
 
@@ -13,6 +24,12 @@ api_router.include_router(groups.router)
 
 # Projects
 api_router.include_router(projects.router)
+
+# Companies
+api_router.include_router(companies.router)
+
+# Export destinations
+api_router.include_router(export_destinations.router)
 
 # Documents (mounted under /groups/{id}/documents and /documents/{id})
 api_router.include_router(documents.router)

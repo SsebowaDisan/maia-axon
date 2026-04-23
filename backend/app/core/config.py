@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     # LLM Provider (OpenAI — used for chat, vision, embeddings)
     openai_api_key: str = ""
 
+    # Google integrations
+    google_service_account_email: str = ""
+    google_service_account_key_path: str = ""
+    google_ads_developer_token: str = ""
+
     # GLM-OCR
     glmocr_api_key: str = ""
     glmocr_deployment: str = "cloud"  # "cloud" or "selfhosted"

@@ -21,6 +21,8 @@ dependencies = [
     "celery[redis]>=5.4.0",
     # Object Storage
     "boto3>=1.35.0",
+    "google-analytics-data>=0.18.0",
+    "google-auth>=2.35.0",
     "google-cloud-storage>=2.18.0",
     # LLM / AI
     "openai>=1.50.0",

@@ -1,4 +1,9 @@
-export type SearchMode = "library" | "deep_search" | "standard";
+export type SearchMode =
+  | "library"
+  | "deep_search"
+  | "standard"
+  | "google_analytics"
+  | "google_ads";
 
 export type StreamingStatus = "idle" | "retrieving" | "reasoning" | "calculating" | "done";
 
@@ -33,6 +38,51 @@ export interface Project {
   created_at: string;
   updated_at: string;
   conversation_count: number;
+}
+
+export interface Company {
+  id: string;
+  name: string;
+  ga4_property_id: string | null;
+  google_ads_customer_id: string | null;
+  google_ads_login_customer_id: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CompanyUserAssignment {
+  id: string;
+  company_id: string;
+  user_id: string;
+  assigned_by: string;
+  assigned_at: string;
+}
+
+export interface ExportDestination {
+  id: string;
+  user_id: string;
+  company_id: string | null;
+  type: "google_doc" | "google_sheet";
+  title: string;
+  url: string;
+  file_id: string;
+  status: string;
+  last_verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExportDestinationInfo {
+  service_account_email: string;
+}
+
+export interface ExportWriteResponse {
+  destination_id: string;
+  destination_type: "google_doc" | "google_sheet";
+  title: string;
+  status: string;
+  written_at: string;
 }
 
 export interface GroupAssignment {
@@ -137,12 +187,29 @@ export interface MindmapNode {
   children: MindmapNode[];
 }
 
+export interface MessageVisualizationSeries {
+  key: string;
+  label: string;
+  color?: string | null;
+}
+
+export interface MessageVisualization {
+  type: "line" | "bar" | "stacked_bar" | "area" | "pie" | "table";
+  title: string;
+  subtitle?: string | null;
+  x_key?: string | null;
+  series?: MessageVisualizationSeries[];
+  rows: Record<string, string | number | null>[];
+  meta?: Record<string, string | number | null> | null;
+}
+
 export interface MessageResponse {
   id: string;
   conversation_id: string;
   role: "user" | "assistant" | "system";
   content: string;
   citations: { citations?: Citation[] } | null;
+  visualizations: MessageVisualization[] | null;
   mindmap: MindmapNode | null;
   search_mode: SearchMode | null;
   created_at: string;
@@ -170,6 +237,7 @@ export interface ChatMessage {
   attachments?: PromptAttachment[];
   createdAt: string;
   citations: Citation[];
+  visualizations: MessageVisualization[];
   mindmap: MindmapNode | null;
   warnings: string[];
   searchMode: SearchMode;
@@ -189,6 +257,7 @@ export interface ChatQueryPayload {
   type: "query";
   project_id: string | null;
   group_id: string | null;
+  company_id: string | null;
   document_ids: string[];
   attachment_ids: string[];
   mode: SearchMode;
@@ -200,6 +269,7 @@ export type WsServerEvent =
   | { type: "status"; status: Exclude<StreamingStatus, "idle" | "done"> }
   | { type: "token"; content: string }
   | { type: "citations"; data: Citation[] }
+  | { type: "visualizations"; data: MessageVisualization[] }
   | { type: "mindmap"; data: MindmapNode }
   | { type: "warnings"; data: string[] }
   | { type: "done"; conversation_id: string }

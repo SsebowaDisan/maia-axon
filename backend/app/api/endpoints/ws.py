@@ -23,6 +23,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.core.database import async_session
 from app.core.security import decode_access_token
+from app.models.company import Company, CompanyUser
 from app.models.conversation import Conversation, Message
 from app.models.group import GroupAssignment
 from app.models.project import Project
@@ -46,10 +47,13 @@ from app.services.answer_engine import (
     language_instruction_for_query,
     structural_listing_agent,
 )
+from app.services.google_marketing import generate_ga4_answer, generate_google_ads_answer
 from app.services.prompt_attachments import build_attachment_context, load_prompt_attachment
 from app.services.retrieval import deep_search, library_search
 
 logger = logging.getLogger(__name__)
+GOOGLE_MODES = {"google_analytics", "google_ads"}
+DOCUMENT_MODES = {"library", "deep_search"}
 
 router = APIRouter()
 
@@ -134,6 +138,7 @@ async def _persist_assistant_message(
     mode: str,
     content: str,
     citations: list[dict] | None = None,
+    visualizations: list[dict] | None = None,
     mindmap: dict | None = None,
 ) -> None:
     assistant_msg = Message(
@@ -141,6 +146,7 @@ async def _persist_assistant_message(
         role="assistant",
         content=content,
         citations={"citations": citations or []},
+        visualizations=visualizations or [],
         mindmap=mindmap,
         search_mode=mode,
     )
@@ -176,6 +182,7 @@ async def websocket_chat(websocket: WebSocket):
                 continue
 
             group_id = UUID(data["group_id"]) if data.get("group_id") else None
+            company_id = UUID(data["company_id"]) if data.get("company_id") else None
             project_id = UUID(data["project_id"]) if data.get("project_id") else None
             document_ids = [UUID(d) for d in data.get("document_ids", [])] or None
             attachment_ids = data.get("attachment_ids", []) or []
@@ -199,9 +206,14 @@ async def websocket_chat(websocket: WebSocket):
                     )
                     continue
 
-                if mode != "standard" and group_id is None:
+                if mode in DOCUMENT_MODES and group_id is None:
                     await websocket.send_json(
                         {"type": "error", "message": "Group is required for grounded chat"}
+                    )
+                    continue
+                if mode in GOOGLE_MODES and company_id is None:
+                    await websocket.send_json(
+                        {"type": "error", "message": "Company is required for Google data chat"}
                     )
                     continue
 
@@ -216,6 +228,22 @@ async def websocket_chat(websocket: WebSocket):
                     if result.scalar_one_or_none() is None:
                         await websocket.send_json(
                             {"type": "error", "message": "No access to this group"}
+                        )
+                        continue
+
+                company = None
+                if mode in GOOGLE_MODES:
+                    if user.is_admin:
+                        company = await db.scalar(select(Company).where(Company.id == company_id))
+                    else:
+                        company = await db.scalar(
+                            select(Company)
+                            .join(CompanyUser, CompanyUser.company_id == Company.id)
+                            .where(Company.id == company_id, CompanyUser.user_id == user.id)
+                        )
+                    if company is None:
+                        await websocket.send_json(
+                            {"type": "error", "message": "No access to this company"}
                         )
                         continue
 
@@ -283,6 +311,7 @@ async def websocket_chat(websocket: WebSocket):
                     await websocket.send_json({"type": "token", "content": answer.text})
                     citations = [_serialize_citation(c) for c in answer.citations]
                     await websocket.send_json({"type": "citations", "data": citations})
+                    await websocket.send_json({"type": "visualizations", "data": answer.visualizations})
                     await websocket.send_json({
                         "type": "mindmap",
                         "data": _serialize_mindmap(answer.mindmap),
@@ -294,6 +323,7 @@ async def websocket_chat(websocket: WebSocket):
                         mode,
                         answer.text,
                         citations,
+                        answer.visualizations,
                         _serialize_mindmap(answer.mindmap),
                     )
                     await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
@@ -306,6 +336,7 @@ async def websocket_chat(websocket: WebSocket):
 
                     await websocket.send_json({"type": "token", "content": answer.text})
                     await websocket.send_json({"type": "citations", "data": []})
+                    await websocket.send_json({"type": "visualizations", "data": answer.visualizations})
                     await websocket.send_json({
                         "type": "mindmap",
                         "data": _serialize_mindmap(answer.mindmap),
@@ -317,6 +348,35 @@ async def websocket_chat(websocket: WebSocket):
                         mode,
                         answer.text,
                         [],
+                        answer.visualizations,
+                        _serialize_mindmap(answer.mindmap),
+                    )
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
+                    continue
+
+                if mode in GOOGLE_MODES:
+                    await websocket.send_json({"type": "status", "status": "reasoning"})
+                    if mode == "google_analytics":
+                        answer = generate_ga4_answer(effective_message, company)
+                    else:
+                        answer = generate_google_ads_answer(effective_message, company)
+                    answer.mindmap = _build_mindmap(answer)
+
+                    await websocket.send_json({"type": "token", "content": answer.text})
+                    await websocket.send_json({"type": "citations", "data": []})
+                    await websocket.send_json({"type": "visualizations", "data": answer.visualizations})
+                    await websocket.send_json({
+                        "type": "mindmap",
+                        "data": _serialize_mindmap(answer.mindmap),
+                    })
+                    await _persist_assistant_message(
+                        db,
+                        conversation,
+                        message,
+                        mode,
+                        answer.text,
+                        [],
+                        answer.visualizations,
                         _serialize_mindmap(answer.mindmap),
                     )
                     await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
@@ -375,6 +435,7 @@ async def websocket_chat(websocket: WebSocket):
                     )
 
                     await websocket.send_json({"type": "citations", "data": []})
+                    await websocket.send_json({"type": "visualizations", "data": []})
                     await websocket.send_json({"type": "mindmap", "data": _serialize_mindmap(mindmap)})
                     await _persist_assistant_message(
                         db,
@@ -382,6 +443,7 @@ async def websocket_chat(websocket: WebSocket):
                         message,
                         mode,
                         full_text,
+                        [],
                         [],
                         _serialize_mindmap(mindmap),
                     )
@@ -404,12 +466,14 @@ async def websocket_chat(websocket: WebSocket):
                         "type": "token",
                         "content": no_sources_text,
                     })
+                    await websocket.send_json({"type": "visualizations", "data": []})
                     await _persist_assistant_message(
                         db,
                         conversation,
                         message,
                         mode,
                         no_sources_text,
+                        [],
                         [],
                         None,
                     )
@@ -424,6 +488,7 @@ async def websocket_chat(websocket: WebSocket):
                     await websocket.send_json({"type": "status", "status": "reasoning"})
                     await websocket.send_json({"type": "token", "content": answer.text})
                     await websocket.send_json({"type": "citations", "data": citations})
+                    await websocket.send_json({"type": "visualizations", "data": answer.visualizations})
                     await websocket.send_json({
                         "type": "mindmap",
                         "data": _serialize_mindmap(answer.mindmap),
@@ -435,6 +500,7 @@ async def websocket_chat(websocket: WebSocket):
                         mode,
                         answer.text,
                         citations,
+                        answer.visualizations,
                         _serialize_mindmap(answer.mindmap),
                     )
                     await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
@@ -453,6 +519,7 @@ async def websocket_chat(websocket: WebSocket):
                         "content": answer.text,
                     })
                     await websocket.send_json({"type": "citations", "data": citations})
+                    await websocket.send_json({"type": "visualizations", "data": answer.visualizations})
                     answer.mindmap = _build_mindmap(answer)
                     await websocket.send_json({
                         "type": "mindmap",
@@ -465,6 +532,7 @@ async def websocket_chat(websocket: WebSocket):
                         mode,
                         answer.text,
                         citations,
+                        answer.visualizations,
                         _serialize_mindmap(answer.mindmap),
                     )
                     await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
@@ -479,6 +547,7 @@ async def websocket_chat(websocket: WebSocket):
 
                     citations = [_serialize_citation(c) for c in answer.citations]
                     await websocket.send_json({"type": "citations", "data": citations})
+                    await websocket.send_json({"type": "visualizations", "data": answer.visualizations})
 
                     if answer.mindmap:
                         await websocket.send_json({
@@ -496,6 +565,7 @@ async def websocket_chat(websocket: WebSocket):
                         mode,
                         answer.text,
                         citations,
+                        answer.visualizations,
                         _serialize_mindmap(answer.mindmap) if answer.mindmap else None,
                     )
                     await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
@@ -575,6 +645,7 @@ async def websocket_chat(websocket: WebSocket):
                     sections=[AnswerSection(type="explanation", content=full_text, grounded=True)],
                     citations=citations_list,
                 )
+                await websocket.send_json({"type": "visualizations", "data": answer.visualizations})
                 mindmap = _build_mindmap(answer)
                 await websocket.send_json({"type": "mindmap", "data": _serialize_mindmap(mindmap)})
 
@@ -596,6 +667,7 @@ async def websocket_chat(websocket: WebSocket):
                     mode,
                     full_text,
                     citations,
+                    answer.visualizations,
                     _serialize_mindmap(mindmap),
                 )
                 await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})

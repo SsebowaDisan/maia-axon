@@ -27,8 +27,9 @@ import {
 
 import { DocumentUploader } from "@/components/admin/DocumentUploader";
 import { GroupManager } from "@/components/admin/GroupManager";
-import { DeleteConfirmDialog } from "@/components/shared/DeleteConfirmDialog";
+import { CompanyManager } from "@/components/admin/CompanyManager";
 import { UserAssignment } from "@/components/admin/UserAssignment";
+import { DeleteConfirmDialog } from "@/components/shared/DeleteConfirmDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -61,6 +62,7 @@ function mapMessage(message: MessageResponse): ChatMessage {
     content: message.content,
     createdAt: message.created_at,
     citations: message.citations?.citations ?? [],
+    visualizations: message.visualizations ?? [],
     mindmap: message.mindmap,
     warnings: [],
     searchMode: message.search_mode ?? "library",
@@ -76,6 +78,7 @@ function mapMessage(message: MessageResponse): ChatMessage {
 function AdminWorkspaceView() {
   const groups = useGroupStore((state) => state.groups);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(groups[0]?.id ?? null);
+  const [adminTab, setAdminTab] = useState<"people" | "companies">("people");
 
   useEffect(() => {
     if (!selectedGroupId && groups[0]?.id) {
@@ -85,14 +88,31 @@ function AdminWorkspaceView() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="mb-4 rounded-[24px] border border-line bg-white/55 p-2">
-        <button type="button" className="w-full rounded-2xl bg-accentSoft px-3 py-2 text-left text-sm text-accent">
+      <div className="mb-4 grid grid-cols-2 gap-2 rounded-[24px] border border-line bg-white/55 p-2">
+        <button
+          type="button"
+          className={`rounded-2xl px-3 py-2 text-left text-sm transition ${
+            adminTab === "people" ? "bg-accentSoft text-accent" : "text-muted hover:bg-black/5"
+          }`}
+          onClick={() => setAdminTab("people")}
+        >
           People
+        </button>
+        <button
+          type="button"
+          className={`rounded-2xl px-3 py-2 text-left text-sm transition ${
+            adminTab === "companies" ? "bg-accentSoft text-accent" : "text-muted hover:bg-black/5"
+          }`}
+          onClick={() => setAdminTab("companies")}
+        >
+          Companies
         </button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-        {selectedGroupId ? (
+        {adminTab === "companies" ? (
+          <CompanyManager />
+        ) : selectedGroupId ? (
           <UserAssignment groupId={selectedGroupId} />
         ) : (
           <div className="rounded-[26px] border border-dashed border-line p-6 text-center text-sm text-muted">

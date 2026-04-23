@@ -104,6 +104,7 @@ class AnswerResponse:
     text: str
     sections: list[AnswerSection] = field(default_factory=list)
     citations: list[Citation] = field(default_factory=list)
+    visualizations: list[dict[str, Any]] = field(default_factory=list)
     mindmap: MindmapNode | None = None
     warnings: list[str] = field(default_factory=list)
     needs_clarification: bool = False

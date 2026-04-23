@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models.chunk import Chunk
+from app.models.company import Company, CompanyUser
 from app.models.conversation import Conversation, Message
 from app.models.document import Document
 from app.models.group import GroupAssignment
@@ -37,9 +38,13 @@ from app.services.answer_engine import (
     is_structural_listing_sources,
     structural_listing_agent,
 )
+from app.services.google_marketing import generate_ga4_answer, generate_google_ads_answer
 from app.services.retrieval import deep_search, library_search
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+GOOGLE_MODES = {"google_analytics", "google_ads"}
+DOCUMENT_MODES = {"library", "deep_search"}
 
 
 def _page_number_from_metadata(metadata: dict | None) -> int:
@@ -186,6 +191,7 @@ def _serialize_answer(answer: AnswerResponse) -> dict:
     return {
         "text": answer.text,
         "citations": citations,
+        "visualizations": answer.visualizations,
         "mindmap": mindmap,
         "warnings": answer.warnings,
         "needs_clarification": answer.needs_clarification,
@@ -228,8 +234,10 @@ async def chat(
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
 
-    if body.mode != "standard" and body.group_id is None:
+    if body.mode in DOCUMENT_MODES and body.group_id is None:
         raise HTTPException(status_code=400, detail="Group is required for grounded chat")
+    if body.mode in GOOGLE_MODES and body.company_id is None:
+        raise HTTPException(status_code=400, detail="Company is required for Google data chat")
 
     # Verify group access
     if body.group_id and not user.is_admin:
@@ -241,6 +249,19 @@ async def chat(
         )
         if result.scalar_one_or_none() is None:
             raise HTTPException(status_code=403, detail="No access to this group")
+
+    company = None
+    if body.mode in GOOGLE_MODES:
+        if user.is_admin:
+            company = await db.scalar(select(Company).where(Company.id == body.company_id))
+        else:
+            company = await db.scalar(
+                select(Company)
+                .join(CompanyUser, CompanyUser.company_id == Company.id)
+                .where(Company.id == body.company_id, CompanyUser.user_id == user.id)
+            )
+        if company is None:
+            raise HTTPException(status_code=403, detail="No access to this company")
 
     # Get or create conversation
     if body.conversation_id:
@@ -296,7 +317,13 @@ async def chat(
         )
 
     # Retrieve sources unless the user requested direct LLM mode
-    if body.mode == "standard":
+    if body.mode == "google_analytics":
+        answer = generate_ga4_answer(effective_message, company)
+        sources = []
+    elif body.mode == "google_ads":
+        answer = generate_google_ads_answer(effective_message, company)
+        sources = []
+    elif body.mode == "standard":
         sources = []
     elif body.mode == "deep_search":
         retrieval = await deep_search(db, effective_message, body.group_id, body.document_ids)
@@ -306,8 +333,11 @@ async def chat(
         sources = retrieval.results
 
     # Generate answer
-    if is_structural_listing_sources(sources):
+    if body.mode in GOOGLE_MODES:
+        serialized = _serialize_answer(answer)
+    elif is_structural_listing_sources(sources):
         answer = structural_listing_agent(sources)
+        serialized = _serialize_answer(answer)
     else:
         answer = await generate_answer(
             query=effective_message,
@@ -315,8 +345,7 @@ async def chat(
             conversation_history=history,
             search_mode=body.mode,
         )
-
-    serialized = _serialize_answer(answer)
+        serialized = _serialize_answer(answer)
 
     # Determine response content
     content = answer.clarification_question if answer.needs_clarification else answer.text
@@ -333,6 +362,7 @@ async def chat(
         role="assistant",
         content=content,
         citations={"citations": serialized["citations"]},
+        visualizations=serialized["visualizations"],
         mindmap=serialized["mindmap"],
         search_mode=body.mode,
     )
