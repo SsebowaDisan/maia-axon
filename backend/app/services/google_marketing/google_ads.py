@@ -10,6 +10,7 @@ from google.oauth2 import service_account
 from app.core.config import settings
 from app.models.company import Company
 from app.services.answer_engine import AnswerResponse, AnswerSection
+from app.services.google_marketing.narrative import build_marketing_narrative
 
 GOOGLE_ADS_SCOPE = "https://www.googleapis.com/auth/adwords"
 GOOGLE_ADS_API_VERSION = "v24"
@@ -174,6 +175,80 @@ def _dimension_value(row: dict, dimension: str) -> str:
     return "(not set)"
 
 
+def _dashboard_visualizations(
+    *,
+    plan: GoogleAdsPlan,
+    company_name: str,
+    customer_id: str,
+    label: str,
+    dimension_key: str,
+    rows: list[dict],
+) -> list[dict]:
+    base_meta = {
+        "company_name": company_name,
+        "source_mode": "google_ads",
+        "date_range": label,
+        "customer_id": customer_id,
+    }
+    visualizations = [
+        {
+            "type": plan.visualization_type,
+            "title": plan.title,
+            "subtitle": f"{company_name} | {label}",
+            "x_key": dimension_key,
+            "series": [
+                {"key": "impressions", "label": "Impressions"},
+                {"key": "clicks", "label": "Clicks"},
+                {"key": "conversions", "label": "Conversions"},
+            ],
+            "rows": rows,
+            "meta": base_meta,
+        }
+    ]
+
+    focus_keys = [plan.primary_metric, "conversions", "ctr_percent"]
+    for focus_key in focus_keys:
+      if focus_key not in rows[0]:
+          continue
+      focus_rows = [
+          {
+              dimension_key: row.get(dimension_key),
+              focus_key: row.get(focus_key),
+          }
+          for row in rows
+      ]
+      visualizations.append(
+          {
+              "type": "bar",
+              "title": f"{focus_key.replace('_', ' ').title()} focus",
+              "subtitle": f"{company_name} | {label}",
+              "x_key": dimension_key,
+              "series": [{"key": focus_key, "label": focus_key}],
+              "rows": focus_rows[:8],
+              "meta": base_meta,
+          }
+      )
+
+    visualizations.append(
+        {
+            "type": "table",
+            "title": "Underlying data",
+            "subtitle": f"{company_name} | {label}",
+            "x_key": dimension_key,
+            "series": [
+                {"key": "impressions", "label": "Impressions"},
+                {"key": "clicks", "label": "Clicks"},
+                {"key": "cost", "label": "Cost"},
+                {"key": "conversions", "label": "Conversions"},
+            ],
+            "rows": rows,
+            "meta": base_meta,
+        }
+    )
+
+    return visualizations
+
+
 def generate_google_ads_answer(query: str, company: Company) -> AnswerResponse:
     if not company.google_ads_customer_id:
         return AnswerResponse(
@@ -223,7 +298,7 @@ def generate_google_ads_answer(query: str, company: Company) -> AnswerResponse:
         "conversion_value": 0.0,
     }
     viz_rows: list[dict] = []
-    lines: list[str] = []
+    summary_rows: list[dict] = []
 
     dimension_key = "date" if plan.dimension == "segments.date" else "label"
 
@@ -259,51 +334,50 @@ def generate_google_ads_answer(query: str, company: Company) -> AnswerResponse:
         )
 
         if index <= 5:
-            lines.append(
-                f"{index}. **{dim_value}** - impressions: {_format_int(impressions)}, "
-                f"clicks: {_format_int(clicks)}, cost: {_format_float(cost)}, "
-                f"conversions: {_format_float(conversions)}, ctr: {_format_float(ctr * 100)}%"
+            summary_rows.append(
+                {
+                    "label": dim_value,
+                    "metrics": {
+                        "impressions": _format_int(impressions),
+                        "clicks": _format_int(clicks),
+                        "cost": _format_float(cost),
+                        "conversions": _format_float(conversions),
+                        "ctr": f"{_format_float(ctr * 100)}%",
+                    },
+                }
             )
 
     overall_ctr = (totals["clicks"] / totals["impressions"] * 100) if totals["impressions"] else 0.0
     overall_avg_cpc = (totals["cost"] / totals["clicks"]) if totals["clicks"] else 0.0
 
-    text = (
-        f"## {plan.title}\n\n"
-        f"Google Ads data for **{company.name}** over **{label}** using customer **{company.google_ads_customer_id}**.\n\n"
-        f"**impressions**: {_format_int(totals['impressions'])}, "
-        f"**clicks**: {_format_int(totals['clicks'])}, "
-        f"**cost**: {_format_float(totals['cost'])}, "
-        f"**conversions**: {_format_float(totals['conversions'])}, "
-        f"**conversion value**: {_format_float(totals['conversion_value'])}, "
-        f"**CTR**: {_format_float(overall_ctr)}%, "
-        f"**avg CPC**: {_format_float(overall_avg_cpc)}\n\n"
-        f"### Top rows\n"
-        + "\n".join(f"- {line}" for line in lines)
+    text = build_marketing_narrative(
+        source_name="Google Ads",
+        report_title=plan.title,
+        company_name=company.name,
+        date_range=label,
+        user_query=query,
+        primary_metric_key=plan.primary_metric,
+        totals_display={
+            "impressions": _format_int(totals["impressions"]),
+            "clicks": _format_int(totals["clicks"]),
+            "cost": _format_float(totals["cost"]),
+            "conversions": _format_float(totals["conversions"]),
+            "conversion_value": _format_float(totals["conversion_value"]),
+            "ctr": f"{_format_float(overall_ctr)}%",
+            "avg_cpc": _format_float(overall_avg_cpc),
+        },
+        top_rows=summary_rows,
     )
 
     return AnswerResponse(
         text=text,
         sections=[AnswerSection(type="explanation", content=text, grounded=False)],
-        visualizations=[
-            {
-                "type": plan.visualization_type,
-                "title": plan.title,
-                "subtitle": f"{company.name} | {label}",
-                "x_key": dimension_key,
-                "series": [
-                    {
-                        "key": plan.primary_metric,
-                        "label": plan.primary_metric.replace("_", " ").title(),
-                    }
-                ],
-                "rows": viz_rows,
-                "meta": {
-                    "company_name": company.name,
-                    "source_mode": "google_ads",
-                    "date_range": label,
-                    "customer_id": company.google_ads_customer_id,
-                },
-            }
-        ],
+        visualizations=_dashboard_visualizations(
+            plan=plan,
+            company_name=company.name,
+            customer_id=company.google_ads_customer_id,
+            label=label,
+            dimension_key=dimension_key,
+            rows=viz_rows,
+        ),
     )

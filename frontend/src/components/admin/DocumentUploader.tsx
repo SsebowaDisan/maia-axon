@@ -8,6 +8,7 @@ import { useDropzone } from "react-dropzone";
 import { IndexingStatus } from "@/components/admin/IndexingStatus";
 import { DocumentPreviewDialog } from "@/components/pdf/DocumentPreviewDialog";
 import { Button } from "@/components/ui/button";
+import { useDialogDismiss } from "@/hooks/useDialogDismiss";
 import type { Document } from "@/lib/types";
 import { useDocumentStore } from "@/stores/documentStore";
 
@@ -58,6 +59,15 @@ export function DocumentUploader({ groupId }: { groupId: string | null }) {
   const [previewDocument, setPreviewDocument] = useState<Document | null>(null);
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [pendingAutoCloseFiles, setPendingAutoCloseFiles] = useState<string[]>([]);
+  const {
+    handleOpenChange,
+    handlePointerDownOutside,
+    handleEscapeKeyDown,
+    handleFocusOutside,
+    handleInteractOutside,
+    requestClose,
+  } =
+    useDialogDismiss(() => setUploadDialogOpen(false));
 
   useEffect(() => {
     if (!uploadDialogOpen || pendingAutoCloseFiles.length === 0) {
@@ -160,14 +170,17 @@ export function DocumentUploader({ groupId }: { groupId: string | null }) {
         </div>
       </div>
 
-      <Dialog.Root open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
+      <Dialog.Root open={uploadDialogOpen} onOpenChange={handleOpenChange}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" />
-          <Dialog.Content
-            aria-describedby={undefined}
-            className="fixed left-1/2 top-1/2 z-[80] w-[min(620px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
-            onPointerDownOutside={() => setUploadDialogOpen(false)}
-          >
+          <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" onDoubleClick={requestClose} />
+        <Dialog.Content
+          aria-describedby={undefined}
+          className="fixed left-1/2 top-1/2 z-[80] w-[min(620px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
+          onPointerDownOutside={handlePointerDownOutside}
+          onEscapeKeyDown={handleEscapeKeyDown}
+          onFocusOutside={handleFocusOutside}
+          onInteractOutside={handleInteractOutside}
+        >
             <div className="flex items-start justify-between gap-4">
               <div>
                 <Dialog.Title className="font-display text-[1.5rem] font-semibold tracking-[-0.04em] text-ink">
@@ -179,15 +192,14 @@ export function DocumentUploader({ groupId }: { groupId: string | null }) {
                     : "Select a group first. PDF upload stays disabled until a group is selected."}
                 </p>
               </div>
-              <Dialog.Close asChild>
-                <button
-                  type="button"
-                  className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
-                  aria-label="Close upload dialog"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </Dialog.Close>
+              <button
+                type="button"
+                className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
+                aria-label="Close upload dialog"
+                onClick={requestClose}
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
 
             <div className="mt-5 space-y-4">

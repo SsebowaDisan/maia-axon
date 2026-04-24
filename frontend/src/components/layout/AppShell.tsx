@@ -53,6 +53,7 @@ export function AppShell() {
   const mode = useViewportMode();
   const [mobileTab, setMobileTab] = useState<"history" | "chat" | "sources">("chat");
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const closeDrawerTimeoutRef = useRef<number | null>(null);
   const searchMode = useChatStore((state) => state.mode);
   const currentDocument = usePDFViewerStore((state) => state.currentDocument);
@@ -90,6 +91,9 @@ export function AppShell() {
   }
 
   function scheduleCloseDrawer() {
+    if (historyModalOpen) {
+      return;
+    }
     cancelCloseDrawer();
     closeDrawerTimeoutRef.current = window.setTimeout(() => {
       setHistoryDrawerOpen(false);
@@ -97,8 +101,17 @@ export function AppShell() {
     }, 140);
   }
 
+  useEffect(() => {
+    if (!historyModalOpen) {
+      return;
+    }
+
+    cancelCloseDrawer();
+    setHistoryDrawerOpen(true);
+  }, [historyModalOpen]);
+
   const panels = {
-    history: <SidebarHistory />,
+    history: <SidebarHistory onModalStateChange={setHistoryModalOpen} />,
     chat: <ChatPanel />,
     sources: <DocumentPanel />,
   };
@@ -201,7 +214,7 @@ export function AppShell() {
                 </button>
               </div>
               <div className="min-h-0 flex-1 overflow-hidden">
-                <SidebarHistory />
+                <SidebarHistory onModalStateChange={setHistoryModalOpen} />
               </div>
           </div>
         ) : null}

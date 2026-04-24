@@ -1,8 +1,8 @@
 "use client";
 
-import { Search, Brain, Sigma, Loader2 } from "lucide-react";
+import { BarChart3, Brain, Building2, Loader2, Search, Sigma } from "lucide-react";
 
-import type { StreamingStatus } from "@/lib/types";
+import type { SearchMode, StreamingStatus } from "@/lib/types";
 
 const statusConfig: Record<Exclude<StreamingStatus, "idle" | "done">, { label: string; icon: typeof Search }> = {
   retrieving: { label: "Searching documents...", icon: Search },
@@ -10,12 +10,23 @@ const statusConfig: Record<Exclude<StreamingStatus, "idle" | "done">, { label: s
   calculating: { label: "Calculating...", icon: Sigma },
 };
 
-export function StreamingIndicator({ status }: { status: StreamingStatus }) {
+export function StreamingIndicator({
+  status,
+  searchMode,
+}: {
+  status: StreamingStatus;
+  searchMode: SearchMode;
+}) {
   if (status === "idle" || status === "done") {
     return null;
   }
 
-  const config = statusConfig[status];
+  const config =
+    searchMode === "google_analytics"
+      ? { label: "Querying Google Analytics...", icon: BarChart3 }
+      : searchMode === "google_ads"
+        ? { label: "Querying Google Ads...", icon: Building2 }
+        : statusConfig[status];
   const Icon = config.icon;
 
   return (

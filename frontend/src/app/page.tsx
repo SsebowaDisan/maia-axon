@@ -72,7 +72,7 @@ export default function HomePage() {
     if (!chatHydrated || !conversationHydrated) {
       return;
     }
-    if (isLoading) {
+    if (isLoading && !user) {
       return;
     }
     if (!user) {
@@ -155,7 +155,7 @@ export default function HomePage() {
     user,
   ]);
 
-  if (!isHydrated || isLoading) {
+  if (!isHydrated || (isLoading && !user)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-bg px-6 py-10 text-sm text-muted">
         Loading Maia...

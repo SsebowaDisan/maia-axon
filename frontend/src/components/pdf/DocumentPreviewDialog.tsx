@@ -7,6 +7,7 @@ import { Minus, Plus, X } from "lucide-react";
 import { PageRenderer } from "@/components/pdf/PageRenderer";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { Button } from "@/components/ui/button";
+import { useDialogDismiss } from "@/hooks/useDialogDismiss";
 import { getCachedPageData } from "@/lib/api";
 import type { Document, PageData } from "@/lib/types";
 import { usePDFViewerStore } from "@/stores/pdfViewerStore";
@@ -110,6 +111,15 @@ export function DocumentPreviewDialog({
   const prefetchPages = usePDFViewerStore((state) => state.prefetchPages);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const {
+    handleOpenChange,
+    handlePointerDownOutside,
+    handleEscapeKeyDown,
+    handleFocusOutside,
+    handleInteractOutside,
+    requestClose,
+  } =
+    useDialogDismiss(() => onOpenChange(false));
 
   const loadPreviewPages = useCallback(
     async (activeDocument: Document, targetVisiblePages: number) => {
@@ -213,13 +223,16 @@ export function DocumentPreviewDialog({
   );
 
   return (
-    <Dialog.Root open={document !== null} onOpenChange={onOpenChange}>
+    <Dialog.Root open={document !== null} onOpenChange={handleOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" />
+        <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" onDoubleClick={requestClose} />
         <Dialog.Content
           aria-describedby={undefined}
           className="fixed left-1/2 top-1/2 z-[80] flex h-[min(860px,calc(100vh-3rem))] w-[min(1180px,calc(100vw-3rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden border border-black/[0.08] bg-white shadow-[0_18px_48px_rgba(15,23,42,0.10)] outline-none"
-          onPointerDownOutside={() => onOpenChange(false)}
+          onPointerDownOutside={handlePointerDownOutside}
+          onEscapeKeyDown={handleEscapeKeyDown}
+          onFocusOutside={handleFocusOutside}
+          onInteractOutside={handleInteractOutside}
         >
           <Dialog.Title className="sr-only">
             {document?.filename ?? "PDF Preview"}
@@ -267,7 +280,7 @@ export function DocumentPreviewDialog({
                       size="icon"
                       variant="ghost"
                       className="h-9 w-9"
-                      onClick={() => onOpenChange(false)}
+                      onClick={requestClose}
                     >
                       <X className="h-4 w-4" />
                     </Button>

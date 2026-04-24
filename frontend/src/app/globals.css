@@ -110,7 +110,7 @@ body {
 .answer-workspace-header {
   position: relative;
   padding-bottom: 1rem;
-  max-width: 72ch;
+  max-width: none;
 }
 
 .answer-workspace-header::after {
@@ -124,15 +124,16 @@ body {
 }
 
 .answer-workspace-body {
-  max-width: 72ch;
+  max-width: none;
 }
 
 .answer-workspace-body .chat-markdown {
   font-size: 1.02rem;
+  max-width: 90ch;
 }
 
 .answer-workspace-body .chat-markdown p {
-  max-width: 68ch;
+  max-width: 74ch;
 }
 
 .answer-canvas {

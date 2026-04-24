@@ -24,10 +24,10 @@ export default function LoginPage() {
   }, [bootstrap]);
 
   useEffect(() => {
-    if (isHydrated && !isLoading && user) {
+    if (isHydrated && user) {
       router.replace("/");
     }
-  }, [isHydrated, isLoading, router, user]);
+  }, [isHydrated, router, user]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();

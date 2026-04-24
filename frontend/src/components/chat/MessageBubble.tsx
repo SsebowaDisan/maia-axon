@@ -5,7 +5,7 @@ import { AlertTriangle, Bot, Brain, Check, Copy, FileText, ImageIcon, Paperclip,
 
 import { ExportDialog } from "@/components/chat/ExportDialog";
 import { StreamingIndicator } from "@/components/chat/StreamingIndicator";
-import { MessageVisualizationBlock } from "@/components/chat/MessageVisualization";
+import { MessageVisualizationDashboard } from "@/components/chat/MessageVisualization";
 import { Badge } from "@/components/ui/badge";
 import { MarkdownRenderer } from "@/components/shared/MarkdownRenderer";
 import { Textarea } from "@/components/ui/textarea";
@@ -227,7 +227,7 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
               {formatModeLabel(message.searchMode)}
             </Badge>
             <span className="text-xs text-muted">{formatRelativeTime(message.createdAt)}</span>
-            <StreamingIndicator status={message.status} />
+            <StreamingIndicator status={message.status} searchMode={message.searchMode} />
             <div className="ml-auto flex items-center gap-1 opacity-0 transition-opacity group-hover/assistant:opacity-100 group-focus-within/assistant:opacity-100">
               {isInlineEditing ? (
                 <>
@@ -350,12 +350,9 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
                   />
                 ) : (
                   <>
-                    {message.visualizations.map((visualization, index) => (
-                      <MessageVisualizationBlock
-                        key={`${message.id}-viz-${index}`}
-                        visualization={visualization}
-                      />
-                    ))}
+                    {message.visualizations.length ? (
+                      <MessageVisualizationDashboard visualizations={message.visualizations} />
+                    ) : null}
                     <MarkdownRenderer
                       content={message.content || (message.isStreaming ? " " : "")}
                       citations={message.citations}

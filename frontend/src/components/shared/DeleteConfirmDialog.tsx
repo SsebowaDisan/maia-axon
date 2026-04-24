@@ -6,6 +6,7 @@ import { X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useDialogDismiss } from "@/hooks/useDialogDismiss";
 
 export function DeleteConfirmDialog({
   open,
@@ -27,6 +28,15 @@ export function DeleteConfirmDialog({
   onConfirm: () => Promise<void> | void;
 }) {
   const [deleteText, setDeleteText] = useState("");
+  const {
+    handleOpenChange,
+    handlePointerDownOutside,
+    handleEscapeKeyDown,
+    handleFocusOutside,
+    handleInteractOutside,
+    requestClose,
+  } =
+    useDialogDismiss(() => onOpenChange(false));
 
   useEffect(() => {
     if (!open) {
@@ -35,13 +45,16 @@ export function DeleteConfirmDialog({
   }, [open]);
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" />
+        <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" onDoubleClick={requestClose} />
         <Dialog.Content
           aria-describedby={undefined}
           className="fixed left-1/2 top-1/2 z-[80] w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
-          onPointerDownOutside={() => onOpenChange(false)}
+          onPointerDownOutside={handlePointerDownOutside}
+          onEscapeKeyDown={handleEscapeKeyDown}
+          onFocusOutside={handleFocusOutside}
+          onInteractOutside={handleInteractOutside}
         >
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -50,15 +63,14 @@ export function DeleteConfirmDialog({
               </Dialog.Title>
               <div className="mt-2 text-sm leading-6 text-muted">{description}</div>
             </div>
-            <Dialog.Close asChild>
-              <button
-                type="button"
-                className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
-                aria-label="Close delete dialog"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </Dialog.Close>
+            <button
+              type="button"
+              className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
+              aria-label="Close delete dialog"
+              onClick={requestClose}
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
 
           <div className="mt-5 space-y-3">
@@ -70,11 +82,9 @@ export function DeleteConfirmDialog({
               />
             ) : null}
             <div className="flex gap-3">
-              <Dialog.Close asChild>
-                <Button type="button" variant="secondary" className="flex-1">
-                  Cancel
-                </Button>
-              </Dialog.Close>
+              <Button type="button" variant="secondary" className="flex-1" onClick={requestClose}>
+                Cancel
+              </Button>
               <Button
                 type="button"
                 variant="danger"

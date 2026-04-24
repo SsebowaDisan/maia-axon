@@ -6,6 +6,7 @@ import { PencilLine, Plus, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useDialogDismiss } from "@/hooks/useDialogDismiss";
 import type { Group } from "@/lib/types";
 import { useGroupStore } from "@/stores/groupStore";
 
@@ -27,6 +28,28 @@ export function GroupManager({
   const [deleteTarget, setDeleteTarget] = useState<Group | null>(null);
   const [deleteText, setDeleteText] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
+  const {
+    handleOpenChange: handleProjectOpenChange,
+    handlePointerDownOutside: handleProjectPointerDownOutside,
+    handleEscapeKeyDown: handleProjectEscapeKeyDown,
+    handleFocusOutside: handleProjectFocusOutside,
+    handleInteractOutside: handleProjectInteractOutside,
+    requestClose: requestProjectClose,
+  } = useDialogDismiss(() => {
+      setProjectDialogOpen(false);
+      resetProjectDraft();
+    });
+  const {
+    handleOpenChange: handleDeleteOpenChange,
+    handlePointerDownOutside: handleDeletePointerDownOutside,
+    handleEscapeKeyDown: handleDeleteEscapeKeyDown,
+    handleFocusOutside: handleDeleteFocusOutside,
+    handleInteractOutside: handleDeleteInteractOutside,
+    requestClose: requestDeleteClose,
+  } = useDialogDismiss(() => {
+      setDeleteTarget(null);
+      setDeleteText("");
+    });
 
   function resetProjectDraft() {
     setDraft({ name: "", description: "" });
@@ -163,19 +186,17 @@ export function GroupManager({
 
       <Dialog.Root
         open={projectDialogOpen}
-        onOpenChange={(open) => {
-          setProjectDialogOpen(open);
-          if (!open) {
-            resetProjectDraft();
-          }
-        }}
+        onOpenChange={handleProjectOpenChange}
       >
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" />
+          <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" onDoubleClick={requestProjectClose} />
           <Dialog.Content
             aria-describedby={undefined}
             className="fixed left-1/2 top-1/2 z-[80] w-[min(460px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
-            onPointerDownOutside={() => setProjectDialogOpen(false)}
+            onPointerDownOutside={handleProjectPointerDownOutside}
+            onEscapeKeyDown={handleProjectEscapeKeyDown}
+            onFocusOutside={handleProjectFocusOutside}
+            onInteractOutside={handleProjectInteractOutside}
           >
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -188,15 +209,14 @@ export function GroupManager({
                     : "Add a group name and description before uploading PDFs for RAG."}
                 </p>
               </div>
-              <Dialog.Close asChild>
-                <button
-                  type="button"
-                  className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
-                  aria-label="Close group dialog"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </Dialog.Close>
+              <button
+                type="button"
+                className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
+                aria-label="Close group dialog"
+                onClick={requestProjectClose}
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
 
             <div className="mt-5 space-y-3">
@@ -223,22 +243,17 @@ export function GroupManager({
 
       <Dialog.Root
         open={deleteTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setDeleteTarget(null);
-            setDeleteText("");
-          }
-        }}
+        onOpenChange={handleDeleteOpenChange}
       >
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" />
+          <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" onDoubleClick={requestDeleteClose} />
           <Dialog.Content
             aria-describedby={undefined}
             className="fixed left-1/2 top-1/2 z-[80] w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
-            onPointerDownOutside={() => {
-              setDeleteTarget(null);
-              setDeleteText("");
-            }}
+            onPointerDownOutside={handleDeletePointerDownOutside}
+            onEscapeKeyDown={handleDeleteEscapeKeyDown}
+            onFocusOutside={handleDeleteFocusOutside}
+            onInteractOutside={handleDeleteInteractOutside}
           >
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -250,15 +265,14 @@ export function GroupManager({
                   <span className="font-semibold text-ink">{deleteTarget?.name ?? "this group"}</span>.
                 </p>
               </div>
-              <Dialog.Close asChild>
-                <button
-                  type="button"
-                  className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
-                  aria-label="Close delete dialog"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </Dialog.Close>
+              <button
+                type="button"
+                className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
+                aria-label="Close delete dialog"
+                onClick={requestDeleteClose}
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
 
             <div className="mt-5 space-y-3">
@@ -268,11 +282,9 @@ export function GroupManager({
                 onChange={(event) => setDeleteText(event.target.value)}
               />
               <div className="flex gap-3">
-                <Dialog.Close asChild>
-                  <Button type="button" variant="secondary" className="flex-1">
-                    Cancel
-                  </Button>
-                </Dialog.Close>
+                <Button type="button" variant="secondary" className="flex-1" onClick={requestDeleteClose}>
+                  Cancel
+                </Button>
                 <Button
                   type="button"
                   variant="danger"

@@ -133,13 +133,13 @@ export function MessageList({
     return <WelcomeCanvas />;
   }
 
-  return (
-    <div className="mx-auto flex w-full max-w-[1220px] flex-col gap-12 px-2 pb-10 pt-2 md:px-4">
-      {messages.map((message) => (
-        <MessageBubble key={message.id} message={message} />
-      ))}
-    </div>
-  );
+    return (
+      <div className="mx-auto flex w-full max-w-[1480px] flex-col gap-12 px-2 pb-10 pt-2 md:px-4">
+        {messages.map((message) => (
+          <MessageBubble key={message.id} message={message} />
+        ))}
+      </div>
+    );
 }
 
 function WelcomeCanvas() {
@@ -148,59 +148,27 @@ function WelcomeCanvas() {
   const setDraftMode = useChatStore((state) => state.setDraftMode);
   const setWelcomeStreaming = useChatStore((state) => state.setWelcomeStreaming);
   const [welcome, setWelcome] = useState<WelcomePayload>(FALLBACK_WELCOME);
-  const [loading, setLoading] = useState(true);
-  const [displayedMarkdown, setDisplayedMarkdown] = useState("");
+  const [displayedMarkdown, setDisplayedMarkdown] = useState(
+    buildWelcomeMarkdown(FALLBACK_WELCOME.intro_markdown),
+  );
 
   useEffect(() => {
     let cancelled = false;
-    let timer: number | null = null;
 
     async function loadWelcome() {
-      setLoading(true);
-      setDisplayedMarkdown("");
-      setWelcomeStreaming(true);
+      setWelcome(FALLBACK_WELCOME);
+      setDisplayedMarkdown(buildWelcomeMarkdown(FALLBACK_WELCOME.intro_markdown));
+      setWelcomeStreaming(false);
       try {
         const payload = await api.getWelcome(activeGroupId);
         if (!cancelled) {
           setWelcome(payload);
-          const fullMarkdown = buildWelcomeMarkdown(payload.intro_markdown);
-          let index = 0;
-          const typeNext = () => {
-            if (cancelled) {
-              return;
-            }
-            index += 3;
-            setDisplayedMarkdown(fullMarkdown.slice(0, index));
-            if (index < fullMarkdown.length) {
-              timer = window.setTimeout(typeNext, 12);
-              return;
-            }
-            setWelcomeStreaming(false);
-          };
-          typeNext();
+          setDisplayedMarkdown(buildWelcomeMarkdown(payload.intro_markdown));
         }
       } catch {
         if (!cancelled) {
           setWelcome(FALLBACK_WELCOME);
-          const fullMarkdown = buildWelcomeMarkdown(FALLBACK_WELCOME.intro_markdown);
-          let index = 0;
-          const typeNext = () => {
-            if (cancelled) {
-              return;
-            }
-            index += 3;
-            setDisplayedMarkdown(fullMarkdown.slice(0, index));
-            if (index < fullMarkdown.length) {
-              timer = window.setTimeout(typeNext, 12);
-              return;
-            }
-            setWelcomeStreaming(false);
-          };
-          typeNext();
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
+          setDisplayedMarkdown(buildWelcomeMarkdown(FALLBACK_WELCOME.intro_markdown));
         }
       }
     }
@@ -210,9 +178,6 @@ function WelcomeCanvas() {
     return () => {
       cancelled = true;
       setWelcomeStreaming(false);
-      if (timer) {
-        window.clearTimeout(timer);
-      }
     };
   }, [activeGroupId, setWelcomeStreaming]);
 
@@ -226,11 +191,10 @@ function WelcomeCanvas() {
           Maia AI
         </p>
         <div className="mt-6 max-w-[820px]">
-          {loading ? (
-            <p className="text-base leading-8 text-muted">Preparing your workspace briefing...</p>
-          ) : (
-            <MarkdownRenderer content={displayedMarkdown || buildWelcomeMarkdown(welcome.intro_markdown)} citations={[]} />
-          )}
+          <MarkdownRenderer
+            content={displayedMarkdown || buildWelcomeMarkdown(welcome.intro_markdown)}
+            citations={[]}
+          />
         </div>
         {!!welcome.suggested_questions.length && (
           <div className="mt-8">
