@@ -12,10 +12,9 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models.chunk import Chunk
-from app.models.company import Company, CompanyUser
+from app.models.company import Company
 from app.models.conversation import Conversation, Message
 from app.models.document import Document
-from app.models.group import GroupAssignment
 from app.models.project import Project
 from app.models.user import User
 from app.api.endpoints.groups import _check_group_access
@@ -82,12 +81,6 @@ async def welcome(
         group = await _check_group_access(group_id, user, db)
         group_name = group.name
         document_query = document_query.where(Document.group_id == group_id, Document.status == "ready")
-    elif not user.is_admin:
-        document_query = (
-            document_query
-            .join(GroupAssignment, GroupAssignment.group_id == Document.group_id)
-            .where(GroupAssignment.user_id == user.id, Document.status == "ready")
-        )
     else:
         document_query = document_query.where(Document.status == "ready")
 
@@ -239,29 +232,14 @@ async def chat(
     if body.mode in GOOGLE_MODES and body.company_id is None:
         raise HTTPException(status_code=400, detail="Company is required for Google data chat")
 
-    # Verify group access
-    if body.group_id and not user.is_admin:
-        result = await db.execute(
-            select(GroupAssignment).where(
-                GroupAssignment.group_id == body.group_id,
-                GroupAssignment.user_id == user.id,
-            )
-        )
-        if result.scalar_one_or_none() is None:
-            raise HTTPException(status_code=403, detail="No access to this group")
+    if body.group_id:
+        await _check_group_access(body.group_id, user, db)
 
     company = None
     if body.mode in GOOGLE_MODES:
-        if user.is_admin:
-            company = await db.scalar(select(Company).where(Company.id == body.company_id))
-        else:
-            company = await db.scalar(
-                select(Company)
-                .join(CompanyUser, CompanyUser.company_id == Company.id)
-                .where(Company.id == body.company_id, CompanyUser.user_id == user.id)
-            )
+        company = await db.scalar(select(Company).where(Company.id == body.company_id))
         if company is None:
-            raise HTTPException(status_code=403, detail="No access to this company")
+            raise HTTPException(status_code=404, detail="Company not found")
 
     # Get or create conversation
     if body.conversation_id:

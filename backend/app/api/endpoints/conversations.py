@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models.conversation import Conversation, Message
-from app.models.group import GroupAssignment
+from app.models.group import Group
 from app.models.project import Project
 from app.models.user import User
 from app.schemas.conversation import (
@@ -70,15 +70,10 @@ async def create_conversation(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    if body.group_id and not user.is_admin:
-        result = await db.execute(
-            select(GroupAssignment).where(
-                GroupAssignment.group_id == body.group_id,
-                GroupAssignment.user_id == user.id,
-            )
-        )
-        if result.scalar_one_or_none() is None:
-            raise HTTPException(status_code=403, detail="No access to this group")
+    if body.group_id:
+        group = await db.scalar(select(Group).where(Group.id == body.group_id))
+        if group is None:
+            raise HTTPException(status_code=404, detail="Group not found")
 
     conv = Conversation(user_id=user.id, project_id=body.project_id, group_id=body.group_id)
     db.add(conv)

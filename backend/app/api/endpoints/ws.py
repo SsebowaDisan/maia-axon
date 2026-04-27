@@ -23,9 +23,9 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.core.database import async_session
 from app.core.security import decode_access_token
-from app.models.company import Company, CompanyUser
+from app.models.company import Company
 from app.models.conversation import Conversation, Message
-from app.models.group import GroupAssignment
+from app.models.group import Group
 from app.models.project import Project
 from app.models.user import User
 from app.services.answer_engine import (
@@ -220,33 +220,20 @@ async def websocket_chat(websocket: WebSocket):
                     )
                     continue
 
-                # Verify group access
-                if group_id and not user.is_admin:
-                    result = await db.execute(
-                        select(GroupAssignment).where(
-                            GroupAssignment.group_id == group_id,
-                            GroupAssignment.user_id == user.id,
-                        )
-                    )
-                    if result.scalar_one_or_none() is None:
+                if group_id:
+                    group = await db.scalar(select(Group).where(Group.id == group_id))
+                    if group is None:
                         await websocket.send_json(
-                            {"type": "error", "message": "No access to this group"}
+                            {"type": "error", "message": "Group not found"}
                         )
                         continue
 
                 company = None
                 if mode in GOOGLE_MODES:
-                    if user.is_admin:
-                        company = await db.scalar(select(Company).where(Company.id == company_id))
-                    else:
-                        company = await db.scalar(
-                            select(Company)
-                            .join(CompanyUser, CompanyUser.company_id == Company.id)
-                            .where(Company.id == company_id, CompanyUser.user_id == user.id)
-                        )
+                    company = await db.scalar(select(Company).where(Company.id == company_id))
                     if company is None:
                         await websocket.send_json(
-                            {"type": "error", "message": "No access to this company"}
+                            {"type": "error", "message": "Company not found"}
                         )
                         continue
 

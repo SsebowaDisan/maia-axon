@@ -9,9 +9,9 @@ from app.schemas.user import LoginRequest, TokenResponse, UserCreate, UserRespon
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-DEFAULT_ADMIN_NAME = "admin"
+DEFAULT_ADMIN_NAME = "Admin"
 DEFAULT_ADMIN_EMAIL = "admin@maia.local"
-DEFAULT_ADMIN_PASSWORD = "admin"
+DEFAULT_ADMIN_PASSWORD = "1A2d3m4i5n"
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)

@@ -32,20 +32,10 @@ async def _get_group_or_404(group_id: UUID, db: AsyncSession) -> Group:
 
 async def _check_group_access(group_id: UUID, user: User, db: AsyncSession) -> Group:
     group = await _get_group_or_404(group_id, db)
-    if user.is_admin:
-        return group
-    result = await db.execute(
-        select(GroupAssignment).where(
-            GroupAssignment.group_id == group_id,
-            GroupAssignment.user_id == user.id,
-        )
-    )
-    if result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=403, detail="No access to this group")
     return group
 
 
-# --- # command: list groups for current user ---
+# --- # command: list shared groups ---
 
 
 @router.get("", response_model=list[GroupResponse])
@@ -53,16 +43,8 @@ async def list_groups(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Serves the # command: list groups the user has access to."""
-    if user.is_admin:
-        query = select(Group)
-    else:
-        query = (
-            select(Group)
-            .join(GroupAssignment, GroupAssignment.group_id == Group.id)
-            .where(GroupAssignment.user_id == user.id)
-        )
-
+    """Serves the # command: list groups available in the shared workspace."""
+    query = select(Group)
     result = await db.execute(query.order_by(Group.name))
     groups = result.scalars().all()
 

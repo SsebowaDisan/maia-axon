@@ -23,7 +23,7 @@ from app.core.storage import (
     uses_browser_direct_upload,
 )
 from app.models.document import Document, Page
-from app.models.group import Group, GroupAssignment
+from app.models.group import Group
 from app.models.user import User
 from app.schemas.document import (
     DocumentResponse,
@@ -283,16 +283,6 @@ async def _check_group_access(group_id: UUID, user: User, db: AsyncSession) -> G
     group = result.scalar_one_or_none()
     if group is None:
         raise HTTPException(status_code=404, detail="Group not found")
-    if user.is_admin:
-        return group
-    result = await db.execute(
-        select(GroupAssignment).where(
-            GroupAssignment.group_id == group_id,
-            GroupAssignment.user_id == user.id,
-        )
-    )
-    if result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=403, detail="No access to this group")
     return group
 
 

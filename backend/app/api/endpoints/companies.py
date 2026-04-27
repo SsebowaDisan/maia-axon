@@ -32,15 +32,7 @@ async def list_companies(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if user.is_admin:
-        query = select(Company)
-    else:
-        query = (
-            select(Company)
-            .join(CompanyUser, CompanyUser.company_id == Company.id)
-            .where(CompanyUser.user_id == user.id)
-        )
-
+    query = select(Company)
     result = await db.execute(query.order_by(Company.name))
     return result.scalars().all()
 
