@@ -1,5 +1,108 @@
 # Maia Axon on Google Cloud
 
+## Current Maia Axon Deployment
+
+Use this section for normal redeploys.
+
+Project:
+
+- Project ID: `ai-agent-suite-488510`
+- Project number: `681709382043`
+- Region: `europe-west3`
+
+Cloud Run:
+
+- API service: `maia-axon-api`
+- API URL: `https://maia-axon-api-681709382043.europe-west3.run.app`
+- Frontend service: `maia-axon-frontend`
+- Frontend URL: `https://maia-axon-frontend-681709382043.europe-west3.run.app`
+
+Managed resources:
+
+- Artifact Registry repository: `maia-axon`
+- Cloud SQL instance: `maia-axon-db`
+- Cloud SQL version: PostgreSQL 16
+- Cloud SQL region: `europe-west3-c`
+- Memorystore Redis instance: `maia-axon-redis`
+- Redis host: `10.192.213.251`
+- Redis port: `6379`
+- Storage bucket for app documents: `ai-agent-suite-488510-maia-docs`
+- Cloud Build bucket: `ai-agent-suite-488510_cloudbuild`
+
+### Fast Redeploy From Cloud Shell
+
+Run these commands in Google Cloud Shell.
+
+```bash
+cd ~/maia-axon
+git pull origin main
+
+export PROJECT_ID=ai-agent-suite-488510
+export PROJECT_NUMBER=681709382043
+export REGION=europe-west3
+export REPO=maia-axon
+
+export API_IMAGE=$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/maia-axon-api:latest
+export FRONTEND_IMAGE=$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/maia-axon-frontend:latest
+
+export API_URL=https://maia-axon-api-$PROJECT_NUMBER.$REGION.run.app
+export FRONTEND_URL=https://maia-axon-frontend-$PROJECT_NUMBER.$REGION.run.app
+
+gcloud config set project $PROJECT_ID
+gcloud config set compute/region $REGION
+gcloud auth configure-docker $REGION-docker.pkg.dev
+```
+
+Build and deploy the backend:
+
+```bash
+docker build -f backend/Dockerfile.prod -t $API_IMAGE backend
+docker push $API_IMAGE
+
+gcloud run deploy maia-axon-api \
+  --image $API_IMAGE \
+  --region $REGION \
+  --platform managed \
+  --allow-unauthenticated
+```
+
+Build and deploy the frontend:
+
+```bash
+docker build \
+  --build-arg NEXT_PUBLIC_API_URL=$API_URL/api \
+  --build-arg NEXT_PUBLIC_WS_URL=wss://maia-axon-api-$PROJECT_NUMBER.$REGION.run.app/ws/chat \
+  -t $FRONTEND_IMAGE \
+  frontend
+
+docker push $FRONTEND_IMAGE
+
+gcloud run deploy maia-axon-frontend \
+  --image $FRONTEND_IMAGE \
+  --region $REGION \
+  --platform managed \
+  --allow-unauthenticated
+```
+
+Verify:
+
+```bash
+curl $API_URL/health
+echo $FRONTEND_URL
+```
+
+Expected API health response:
+
+```json
+{"status":"ok","service":"Maia Axon"}
+```
+
+Notes:
+
+- The backend image must use `backend/Dockerfile.prod`.
+- `backend/start-prod.sh` runs `alembic upgrade head` on startup, so new migrations apply when the API revision starts.
+- Do not commit real `.env`, API keys, database passwords, HMAC keys, or service account JSON files.
+
 This setup targets the managed deployment you chose:
 
 - `frontend` on Cloud Run
