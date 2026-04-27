@@ -5,7 +5,7 @@ WebSocket streaming is handled in ws.py.
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -299,7 +299,15 @@ async def chat(
     result = await db.execute(
         select(Message)
         .where(Message.conversation_id == conversation.id)
-        .order_by(Message.created_at)
+        .order_by(
+            Message.created_at,
+            case(
+                (Message.role == "user", 0),
+                (Message.role == "assistant", 1),
+                else_=2,
+            ),
+            Message.id,
+        )
     )
     history = [{"role": m.role, "content": m.content} for m in result.scalars().all()]
 

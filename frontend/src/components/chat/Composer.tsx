@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, Building2, Hash, Layers3, Paperclip, Plus, Send, X } from "lucide-react";
+import { BarChart3, Building2, Check, ChevronDown, Hash, Layers3, Paperclip, Plus, Send, X } from "lucide-react";
 
 import { CompanySelector } from "@/components/chat/CompanySelector";
 import { ComposerMenu } from "@/components/chat/ComposerMenu";
@@ -62,6 +62,7 @@ export function Composer() {
   const composerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const modeMenuRef = useRef<HTMLDivElement | null>(null);
+  const outputMenuRef = useRef<HTMLDivElement | null>(null);
   const groupSelectorRef = useRef<HTMLDivElement | null>(null);
   const documentSelectorRef = useRef<HTMLDivElement | null>(null);
   const companySelectorRef = useRef<HTMLDivElement | null>(null);
@@ -82,8 +83,10 @@ export function Composer() {
   const promptAttachments = useChatStore((state) => state.promptAttachments);
   const addPromptAttachments = useChatStore((state) => state.addPromptAttachments);
   const removePromptAttachment = useChatStore((state) => state.removePromptAttachment);
+  const includeDashboard = useChatStore((state) => state.includeDashboard);
+  const setIncludeDashboard = useChatStore((state) => state.setIncludeDashboard);
   const draftMode = useChatStore((state) => state.draftMode);
-  const setDraftMode = useChatStore((state) => state.setDraftMode);
+  const cancelEditingUserMessage = useChatStore((state) => state.cancelEditingUserMessage);
   const mode = useChatStore((state) => state.mode);
   const setMode = useChatStore((state) => state.setMode);
   const sendMessage = useChatStore((state) => state.sendMessage);
@@ -94,6 +97,7 @@ export function Composer() {
   const fetchConversations = useConversationStore((state) => state.fetchConversations);
 
   const [showModeMenu, setShowModeMenu] = useState(false);
+  const [showOutputMenu, setShowOutputMenu] = useState(false);
   const [groupQuery, setGroupQuery] = useState("");
   const [documentQuery, setDocumentQuery] = useState("");
   const [companyQuery, setCompanyQuery] = useState("");
@@ -149,6 +153,14 @@ export function Composer() {
   const showCompanySelector = isGoogleMode(mode) && forceCompanyOpen;
 
   useEffect(() => {
+    if (!isGoogleMode(mode)) {
+      if (includeDashboard) {
+        setIncludeDashboard(false);
+      }
+    }
+  }, [includeDashboard, mode, setIncludeDashboard]);
+
+  useEffect(() => {
     const element = textareaRef.current;
     if (!element) {
       return;
@@ -186,8 +198,10 @@ export function Composer() {
         showDocumentSelector && !documentSelectorRef.current?.contains(target);
       const closeCompanySelector =
         showCompanySelector && !companySelectorRef.current?.contains(target);
+      const closeOutputMenu =
+        showOutputMenu && !outputMenuRef.current?.contains(target);
 
-      if (!closeModeMenu && !closeGroupSelector && !closeDocumentSelector && !closeCompanySelector) {
+      if (!closeModeMenu && !closeGroupSelector && !closeDocumentSelector && !closeCompanySelector && !closeOutputMenu) {
         return;
       }
 
@@ -204,6 +218,9 @@ export function Composer() {
         if (closeCompanySelector) {
           setForceCompanyOpen(false);
         }
+        if (closeOutputMenu) {
+          setShowOutputMenu(false);
+        }
       });
     }
 
@@ -214,7 +231,7 @@ export function Composer() {
         window.cancelAnimationFrame(frame);
       }
     };
-  }, [showCompanySelector, showDocumentSelector, showGroupSelector, showModeMenu]);
+  }, [showCompanySelector, showDocumentSelector, showGroupSelector, showModeMenu, showOutputMenu]);
 
   const selectedDocuments = documents.filter((document) => selectedDocumentIds.includes(document.id));
   const isExpandedComposer = value.includes("\n") || value.length > 180;
@@ -265,7 +282,6 @@ export function Composer() {
     }
     const message = value.trim();
     setDraft("");
-    setDraftMode("compose");
     setForceGroupOpen(false);
     setForceDocumentOpen(false);
     setForceCompanyOpen(false);
@@ -395,11 +411,11 @@ export function Composer() {
             type="button"
             className="text-[11px] font-medium text-muted transition hover:text-black"
             onClick={() => {
-              setDraftMode("compose");
+              cancelEditingUserMessage();
               textareaRef.current?.focus();
             }}
           >
-            Keep editing
+            Cancel edit
           </button>
         </div>
       ) : null}
@@ -458,6 +474,13 @@ export function Composer() {
             <Paperclip className="h-3.5 w-3.5" />
           </button>
 
+          {isGoogleMode(mode) && includeDashboard ? (
+            <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-black/[0.08] bg-black px-2.5 text-[11px] font-medium text-white">
+              <BarChart3 className="h-3.5 w-3.5" />
+              Dashboard
+            </span>
+          ) : null}
+
           {promptAttachments.map((attachment) => (
             <span
               key={attachment.id}
@@ -501,9 +524,6 @@ export function Composer() {
             value={value}
             onChange={(event) => {
               setDraft(event.target.value);
-              if (draftMode === "compose") {
-                setDraftMode("compose");
-              }
               if (!groupRegex.test(event.target.value)) {
                 setGroupQuery("");
                 setForceGroupOpen(false);
@@ -522,12 +542,52 @@ export function Composer() {
                 setForceGroupOpen(false);
                 setForceDocumentOpen(false);
                 setShowModeMenu(false);
+                if (isEditingUserMessage) {
+                  cancelEditingUserMessage();
+                }
               }
             }}
             className={`min-h-[36px] flex-1 border-0 bg-transparent px-1 py-[7px] pr-2 text-[16px] leading-6 tracking-[-0.02em] shadow-none placeholder:text-muted/85 focus:border-0 focus:ring-0 ${
               isExpandedComposer ? "max-h-[190px] overflow-y-auto scrollbar-thin" : ""
             }`}
           />
+
+          {isGoogleMode(mode) ? (
+            <div ref={outputMenuRef} className="relative ml-auto shrink-0">
+              <button
+                type="button"
+                className="inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[12px] font-medium text-muted transition hover:bg-black/[0.04] hover:text-black"
+                onClick={() => setShowOutputMenu((current) => !current)}
+                disabled={streaming || welcomeStreaming}
+                aria-haspopup="menu"
+                aria-expanded={showOutputMenu}
+              >
+                Output
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+              {showOutputMenu ? (
+                <div className="absolute bottom-11 right-0 z-30 w-[230px] rounded-[18px] border border-black/[0.08] bg-white p-2 shadow-[0_18px_50px_rgba(15,23,42,0.14)]">
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-3 rounded-[12px] px-3 py-2.5 text-left text-sm text-ink transition hover:bg-black/[0.04]"
+                    onClick={() => {
+                      setIncludeDashboard(!includeDashboard);
+                      setShowOutputMenu(false);
+                    }}
+                  >
+                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/[0.04] text-black">
+                      <BarChart3 className="h-3.5 w-3.5" />
+                    </span>
+                    <span className="flex-1">
+                      <span className="block text-[13px] font-medium">Dashboard</span>
+                      <span className="block text-[11px] leading-4 text-muted">Include charts and tables.</span>
+                    </span>
+                    {includeDashboard ? <Check className="h-4 w-4" /> : null}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <Button
           type="button"

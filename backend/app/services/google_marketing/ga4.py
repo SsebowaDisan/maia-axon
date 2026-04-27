@@ -12,7 +12,11 @@ import openai
 from app.core.config import settings
 from app.models.company import Company
 from app.services.answer_engine import AnswerResponse, AnswerSection
-from app.services.google_marketing.narrative import build_marketing_narrative
+from app.services.google_marketing.date_ranges import parse_date_range
+from app.services.google_marketing.narrative import (
+    build_dashboard_visualizations_with_llm,
+    build_marketing_narrative,
+)
 
 GA4_READONLY_SCOPE = "https://www.googleapis.com/auth/analytics.readonly"
 logger = logging.getLogger(__name__)
@@ -89,27 +93,7 @@ GA4_PLAN_REGISTRY: dict[str, GA4Plan] = {
 
 
 def _parse_date_range(query: str) -> tuple[str, str, str]:
-    normalized = query.lower()
-    if "today" in normalized:
-        return "today", "today", "today"
-    if "yesterday" in normalized:
-        return "yesterday", "yesterday", "yesterday"
-
-    explicit = re.search(r"last\s+(\d{1,3})\s+days?", normalized)
-    if explicit:
-        days = explicit.group(1)
-        return f"{days}daysAgo", "today", f"last {days} days"
-
-    if "last week" in normalized:
-        return "7daysAgo", "today", "last 7 days"
-    if "last quarter" in normalized:
-        return "90daysAgo", "today", "last 90 days"
-    if "last month" in normalized:
-        return "30daysAgo", "today", "last 30 days"
-    if "this month" in normalized:
-        return "30daysAgo", "today", "this month"
-
-    return "30daysAgo", "today", "last 30 days"
+    return parse_date_range(query)
 
 
 def _fallback_plan_for_query(query: str) -> GA4Plan:
@@ -390,6 +374,24 @@ def generate_ga4_answer(query: str, company: Company) -> AnswerResponse:
         dimension_name=dimension_name,
         metric_names=metric_names,
         rows=viz_rows,
+    )
+    visualizations = build_dashboard_visualizations_with_llm(
+        source_name="Google Analytics",
+        source_mode="google_analytics",
+        report_title=plan.title,
+        company_name=company.name,
+        date_range=label,
+        user_query=query,
+        x_key=dimension_name,
+        metric_keys=metric_names,
+        rows=viz_rows,
+        base_meta={
+            "company_name": company.name,
+            "source_mode": "google_analytics",
+            "date_range": label,
+            "property_id": company.ga4_property_id,
+        },
+        fallback_visualizations=visualizations,
     )
 
     return AnswerResponse(

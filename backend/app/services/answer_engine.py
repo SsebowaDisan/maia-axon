@@ -25,6 +25,26 @@ from app.services.sandbox import execute_calculation
 logger = logging.getLogger(__name__)
 AXON_GROUP_URL = "https://axongroup.com/"
 
+AVA_PROFILE = {
+    "name": "Ava Behrouzian",
+    "company": "Axon Group",
+    "role": "Project Manager | Mechanical & Process Engineer",
+    "location": "Mouscron, Walloon Region, Belgium",
+    "about": (
+        "Ava is a Mechanical and Process Engineer with a project-manager mindset: "
+        "practical, curious, and drawn to industrial projects where technical ideas "
+        "become real operational solutions. She has a strong interest in technical "
+        "applications, entrepreneurial thinking, and new technologies, and she is "
+        "known for learning fast, improving continuously, and bringing structure to "
+        "complex work without making it feel heavier than it needs to be. In short: "
+        "she is the kind of person who can turn a messy project into a plan before "
+        "the coffee has finished cooling."
+    ),
+    "fun_facts": [
+        "In only 8 days, she picked up website development and Figma design. Most people need a course, a calendar, and three existential crises; Ava apparently just needed a week and a bit of focus.",
+    ],
+}
+
 TITLE_ICON_OPTIONS = {
     "brain": "Reasoning, concepts, AI, learning, analysis",
     "sigma": "Math, formulas, calculations, engineering quantities",
@@ -699,6 +719,27 @@ def classify_intent(
     return intent
 
 
+def classify_ava_question(query: str, conversation_history: list[dict] | None = None) -> bool:
+    """Detect questions about Ava Behrouzian from Maia's internal people knowledge."""
+    normalized = query.lower()
+    if re.search(r"\bava(?:\s+behrouzian)?\b", normalized):
+        return True
+
+    recent_context = " ".join(
+        str(message.get("content", ""))
+        for message in (conversation_history or [])[-4:]
+    ).lower()
+    if "ava" not in recent_context:
+        return False
+
+    return bool(
+        re.search(
+            r"\b(?:who is she|what does she do|what is her role|where is she|her job|her position|does she)\b",
+            normalized,
+        )
+    )
+
+
 def classify_identity_question(query: str) -> bool:
     """Use the LLM to detect identity/about/capability questions about Maia/Axon."""
     client = _get_client()
@@ -820,6 +861,54 @@ def axon_group_agent(query: str, conversation_history: list[dict]) -> AnswerResp
         text=answer_text,
         sections=[AnswerSection(type="explanation", content=answer_text, grounded=True)],
         citations=[citation],
+    )
+
+
+def ava_agent(query: str, conversation_history: list[dict]) -> AnswerResponse:
+    """Answer questions about Ava Behrouzian from the internal profile provided to Maia."""
+    client = _get_client()
+    language_instruction = language_instruction_for_query(query)
+    messages = []
+    for msg in conversation_history[-6:]:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    messages.append({"role": "user", "content": query})
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        max_tokens=500,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are Maia Axon. Answer questions about Ava Behrouzian using only the internal profile below. "
+                    f"{language_instruction} "
+                    "If the user asks who Ava is, explain her role at Axon Group and summarize her professional background. "
+                    "If the user asks what she does, describe her as a Project Manager and Mechanical & Process Engineer. "
+                    "Make the phrasing polished, catchy, and human, while staying professional. "
+                    "Use a funny, witty tone when it fits naturally, but keep it respectful, kind, and workplace-appropriate. "
+                    "A good answer can include one or two playful lines about her fast learning, project-manager energy, curiosity, or technical mindset. "
+                    "Do not make jokes about appearance, nationality, personal life, stereotypes, or anything sensitive. "
+                    "If the user asks for details not present in the profile, say that Maia only has the current profile details. "
+                    "Do not invent career history, contact details, personal information, or claims beyond the profile. "
+                    "Do not use citations. Keep the answer concise, professional, and useful.\n\n"
+                    f"AVA PROFILE:\n"
+                    f"Name: {AVA_PROFILE['name']}\n"
+                    f"Company: {AVA_PROFILE['company']}\n"
+                    f"Role: {AVA_PROFILE['role']}\n"
+                    f"Location: {AVA_PROFILE['location']}\n"
+                    f"About: {AVA_PROFILE['about']}\n"
+                    f"Fun facts: {'; '.join(AVA_PROFILE['fun_facts'])}"
+                ),
+            },
+            *messages,
+        ],
+    )
+
+    answer_text = response.choices[0].message.content or ""
+    return AnswerResponse(
+        text=answer_text,
+        sections=[AnswerSection(type="explanation", content=answer_text, grounded=False)],
+        citations=[],
     )
 
 
@@ -1412,6 +1501,11 @@ async def generate_answer(
     3. Build mindmap
     4. Return structured response
     """
+    if classify_ava_question(query, conversation_history):
+        answer = ava_agent(query, conversation_history)
+        answer.mindmap = _build_mindmap(answer)
+        return answer
+
     if classify_axon_group_question(query):
         answer = axon_group_agent(query, conversation_history)
         answer.mindmap = _build_mindmap(answer)

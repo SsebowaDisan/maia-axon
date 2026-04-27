@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     google_service_account_email: str = ""
     google_service_account_key_path: str = ""
     google_ads_developer_token: str = ""
+    evidence_browser_user_data_dir: str = ""
+    evidence_browser_channel: str = "chrome"
 
     # GLM-OCR
     glmocr_api_key: str = ""

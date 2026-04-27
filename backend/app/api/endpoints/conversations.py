@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -104,3 +104,40 @@ async def delete_conversation(
 ):
     conv = await _check_conversation_access(conversation_id, user, db)
     await db.delete(conv)
+
+
+@router.post("/{conversation_id}/messages/{message_id}/truncate", response_model=ConversationDetailResponse)
+async def truncate_conversation_from_message(
+    conversation_id: UUID,
+    message_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    conv = await _check_conversation_access(conversation_id, user, db)
+    result = await db.execute(
+        select(Message)
+        .where(Message.conversation_id == conv.id)
+        .order_by(
+            Message.created_at,
+            case(
+                (Message.role == "user", 0),
+                (Message.role == "assistant", 1),
+                else_=2,
+            ),
+            Message.id,
+        )
+    )
+    messages = list(result.scalars().all())
+    target_index = next((index for index, message in enumerate(messages) if message.id == message_id), -1)
+    if target_index < 0:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    if messages[target_index].role != "user":
+        raise HTTPException(status_code=400, detail="Only user messages can be edited")
+
+    for message in messages[target_index:]:
+        await db.delete(message)
+
+    await db.flush()
+    await db.refresh(conv, attribute_names=["messages"])
+    return conv

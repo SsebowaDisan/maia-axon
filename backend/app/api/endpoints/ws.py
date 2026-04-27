@@ -16,7 +16,7 @@ from uuid import UUID
 
 import openai
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -35,6 +35,8 @@ from app.services.answer_engine import (
     _build_mindmap,
     _format_sources_for_prompt,
     axon_group_agent,
+    ava_agent,
+    classify_ava_question,
     classify_axon_group_question,
     classify_intent,
     classify_identity_question,
@@ -188,6 +190,7 @@ async def websocket_chat(websocket: WebSocket):
             attachment_ids = data.get("attachment_ids", []) or []
             mode = data.get("mode", "library")
             message = data["message"]
+            include_dashboard = bool(data.get("include_dashboard"))
             conversation_id = UUID(data["conversation_id"]) if data.get("conversation_id") else None
 
             async with async_session() as db:
@@ -287,7 +290,15 @@ async def websocket_chat(websocket: WebSocket):
                 result = await db.execute(
                     select(Message)
                     .where(Message.conversation_id == conversation.id)
-                    .order_by(Message.created_at)
+                    .order_by(
+                        Message.created_at,
+                        case(
+                            (Message.role == "user", 0),
+                            (Message.role == "assistant", 1),
+                            else_=2,
+                        ),
+                        Message.id,
+                    )
                 )
                 history = [{"role": m.role, "content": m.content} for m in result.scalars().all()]
                 attachments = [
@@ -302,6 +313,31 @@ async def websocket_chat(websocket: WebSocket):
                         "The user attached files for direct analysis. Treat the attached material as first-class input.\n\n"
                         f"{attachment_context}"
                     )
+
+                if classify_ava_question(message, history):
+                    await websocket.send_json({"type": "status", "status": "reasoning"})
+                    answer = ava_agent(message, history)
+                    answer.mindmap = _build_mindmap(answer)
+
+                    await websocket.send_json({"type": "token", "content": answer.text})
+                    await websocket.send_json({"type": "citations", "data": []})
+                    await websocket.send_json({"type": "visualizations", "data": answer.visualizations})
+                    await websocket.send_json({
+                        "type": "mindmap",
+                        "data": _serialize_mindmap(answer.mindmap),
+                    })
+                    await _persist_assistant_message(
+                        db,
+                        conversation,
+                        message,
+                        mode,
+                        answer.text,
+                        [],
+                        answer.visualizations,
+                        _serialize_mindmap(answer.mindmap),
+                    )
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
+                    continue
 
                 if classify_axon_group_question(message):
                     await websocket.send_json({"type": "status", "status": "reasoning"})
@@ -337,6 +373,8 @@ async def websocket_chat(websocket: WebSocket):
                     await websocket.send_json({"type": "token", "content": answer.text})
                     await websocket.send_json({"type": "citations", "data": []})
                     await websocket.send_json({"type": "visualizations", "data": answer.visualizations})
+                    if answer.warnings:
+                        await websocket.send_json({"type": "warnings", "data": answer.warnings})
                     await websocket.send_json({
                         "type": "mindmap",
                         "data": _serialize_mindmap(answer.mindmap),
@@ -360,11 +398,15 @@ async def websocket_chat(websocket: WebSocket):
                         answer = generate_ga4_answer(effective_message, company)
                     else:
                         answer = generate_google_ads_answer(effective_message, company)
+                    if not include_dashboard:
+                        answer.visualizations = []
                     answer.mindmap = _build_mindmap(answer)
 
                     await websocket.send_json({"type": "token", "content": answer.text})
                     await websocket.send_json({"type": "citations", "data": []})
                     await websocket.send_json({"type": "visualizations", "data": answer.visualizations})
+                    if answer.warnings:
+                        await websocket.send_json({"type": "warnings", "data": answer.warnings})
                     await websocket.send_json({
                         "type": "mindmap",
                         "data": _serialize_mindmap(answer.mindmap),

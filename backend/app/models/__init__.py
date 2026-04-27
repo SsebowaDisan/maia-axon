@@ -2,6 +2,7 @@ from app.models.company import Company, CompanyUser, UserExportDestination
 from app.models.chunk import Chunk, ChunkEmbedding
 from app.models.conversation import Conversation, Message
 from app.models.document import Document, Page
+from app.models.feedback import FeatureIdea, MessageFeedback
 from app.models.group import Group, GroupAssignment
 from app.models.project import Project
 from app.models.user import User
@@ -20,4 +21,6 @@ __all__ = [
     "ChunkEmbedding",
     "Conversation",
     "Message",
+    "MessageFeedback",
+    "FeatureIdea",
 ]

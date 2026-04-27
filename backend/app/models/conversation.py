@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, String, Text, case, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -38,7 +38,15 @@ class Conversation(Base):
     group = relationship("Group", back_populates="conversations")
     messages = relationship(
         "Message", back_populates="conversation", cascade="all, delete-orphan",
-        order_by="Message.created_at",
+        order_by=lambda: (
+            Message.created_at,
+            case(
+                (Message.role == "user", 0),
+                (Message.role == "assistant", 1),
+                else_=2,
+            ),
+            Message.id,
+        ),
     )
 
 
@@ -61,7 +69,9 @@ class Message(Base):
     mindmap: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     search_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
     )
 
     # Relationships

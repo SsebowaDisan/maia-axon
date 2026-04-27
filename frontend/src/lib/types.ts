@@ -253,6 +253,46 @@ export interface PromptAttachment {
   size_bytes: number;
 }
 
+export type MessageFeedbackRating = "up" | "down";
+export type FeatureIdeaPriority = "nice_to_have" | "important" | "blocking";
+export type FeatureIdeaStatus = "new" | "reviewed" | "planned" | "done";
+
+export interface MessageFeedback {
+  id: string;
+  message_id: string;
+  conversation_id: string;
+  user_id: string;
+  rating: MessageFeedbackRating;
+  tags: string[] | null;
+  comment: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminMessageFeedback extends MessageFeedback {
+  user_name: string;
+  user_email: string;
+  message_content: string;
+  conversation_title: string | null;
+}
+
+export interface FeatureIdea {
+  id: string;
+  user_id: string;
+  category: string;
+  title: string | null;
+  description: string;
+  priority: FeatureIdeaPriority;
+  status: FeatureIdeaStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminFeatureIdea extends FeatureIdea {
+  user_name: string;
+  user_email: string;
+}
+
 export interface ChatQueryPayload {
   type: "query";
   project_id: string | null;
@@ -260,6 +300,7 @@ export interface ChatQueryPayload {
   company_id: string | null;
   document_ids: string[];
   attachment_ids: string[];
+  include_dashboard?: boolean;
   mode: SearchMode;
   message: string;
   conversation_id: string | null;

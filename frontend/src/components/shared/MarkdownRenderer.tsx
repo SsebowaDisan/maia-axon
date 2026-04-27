@@ -103,6 +103,16 @@ export function MarkdownRenderer({
         p({ children }) {
           return <p className="my-5 text-[16px] leading-9 text-ink">{children}</p>;
         },
+        img({ src, alt }) {
+          return (
+            <img
+              src={src ?? ""}
+              alt={alt ?? ""}
+              className="my-6 max-h-[620px] w-full rounded-[18px] border border-black/8 object-contain shadow-[0_18px_50px_rgba(15,23,42,0.08)]"
+              loading="lazy"
+            />
+          );
+        },
         blockquote({ children }) {
           return (
             <blockquote className="my-6 rounded-[24px] border border-black/8 bg-black/[0.025] px-5 py-4 text-ink/80">

@@ -8,6 +8,7 @@ import { chatSocket } from "@/lib/ws";
 import type {
   ChatMessage,
   ChatQueryPayload,
+  MessageResponse,
   PromptAttachment,
   SearchMode,
 } from "@/lib/types";
@@ -43,12 +44,42 @@ function makeMessage(
   };
 }
 
+function mapServerMessage(message: MessageResponse): ChatMessage {
+  const citations = message.citations?.citations ?? [];
+  return {
+    id: message.id,
+    role: message.role === "assistant" ? "assistant" : "user",
+    content: message.content,
+    attachments: [],
+    createdAt: message.created_at,
+    citations,
+    visualizations: message.visualizations ?? [],
+    mindmap: message.mindmap,
+    warnings: [],
+    searchMode: message.search_mode ?? "library",
+    isStreaming: false,
+    status: "done",
+    needsClarification:
+      message.role === "assistant" && citations.length === 0 && /\?$/.test(message.content.trim()),
+  };
+}
+
+interface SendMessageOptions {
+  editMessageId?: string;
+  editMessageIndex?: number;
+  mode?: SearchMode;
+  promptAttachments?: PromptAttachment[];
+  requireConversationId?: boolean;
+}
+
 interface ChatState {
   messages: ChatMessage[];
   messageCacheByConversation: Record<string, ChatMessage[]>;
   draft: string;
   promptAttachments: PromptAttachment[];
+  includeDashboard: boolean;
   draftMode: "compose" | "user_edit" | "assistant_edit";
+  editingMessageId: string | null;
   mode: SearchMode;
   streaming: boolean;
   welcomeStreaming: boolean;
@@ -64,12 +95,16 @@ interface ChatState {
   addPromptAttachments: (files: FileList | File[]) => Promise<void>;
   removePromptAttachment: (attachmentId: string) => void;
   clearPromptAttachments: () => void;
+  setIncludeDashboard: (include: boolean) => void;
   setDraftMode: (draftMode: "compose" | "user_edit" | "assistant_edit") => void;
+  startEditingUserMessage: (messageId: string, content: string) => void;
+  cancelEditingUserMessage: () => void;
   updateMessageContent: (messageId: string, content: string) => void;
   clearChat: () => void;
   hydrateMessages: (messages: ChatMessage[], conversationId?: string | null) => void;
   getCachedMessagesForConversation: (conversationId: string) => ChatMessage[] | null;
-  sendMessage: (message: string) => Promise<void>;
+  sendMessage: (message: string, options?: SendMessageOptions) => Promise<void>;
+  sendEditedUserMessage: (messageId: string, content: string) => Promise<void>;
 }
 
 function lastAssistantIndex(messages: ChatMessage[]) {
@@ -109,7 +144,9 @@ export const useChatStore = create<ChatState>()(
   messageCacheByConversation: {},
   draft: "",
   promptAttachments: [],
+  includeDashboard: false,
   draftMode: "compose",
+  editingMessageId: null,
   mode: "library",
   streaming: false,
   welcomeStreaming: false,
@@ -241,6 +278,20 @@ export const useChatStore = create<ChatState>()(
           void useConversationStore.getState().fetchConversations();
           set((state) => withConversationCache(state, state.messages, event.conversation_id));
           set({ streaming: false });
+          void (async () => {
+            try {
+              const detail = await useConversationStore.getState().loadConversation(event.conversation_id);
+              if (useConversationStore.getState().activeConversationId !== event.conversation_id) {
+                return;
+              }
+              const serverMessages = detail.messages.map(mapServerMessage);
+              set((state) => withConversationCache(state, serverMessages, event.conversation_id));
+              const lastAssistant = [...serverMessages].reverse().find((message) => message.role === "assistant");
+              useMindmapStore.getState().setMindmapData(lastAssistant?.mindmap ?? null);
+            } catch {
+              // Keep the streamed messages if the post-stream refresh fails.
+            }
+          })();
           break;
         case "error":
           flushTokenBuffer();
@@ -287,8 +338,25 @@ export const useChatStore = create<ChatState>()(
   clearPromptAttachments() {
     set({ promptAttachments: [] });
   },
+  setIncludeDashboard(includeDashboard) {
+    set({ includeDashboard });
+  },
   setDraftMode(draftMode) {
-    set({ draftMode });
+    set({ draftMode, editingMessageId: draftMode === "user_edit" ? get().editingMessageId : null });
+  },
+  startEditingUserMessage(messageId, content) {
+    set({
+      draft: content,
+      draftMode: "user_edit",
+      editingMessageId: messageId,
+    });
+  },
+  cancelEditingUserMessage() {
+    set({
+      draft: "",
+      draftMode: "compose",
+      editingMessageId: null,
+    });
   },
   updateMessageContent(messageId, content) {
     set((state) => ({
@@ -305,7 +373,7 @@ export const useChatStore = create<ChatState>()(
   },
   clearChat() {
     useMindmapStore.getState().clearMindmap();
-    set({ messages: [], streaming: false, draft: "", draftMode: "compose", promptAttachments: [] });
+    set({ messages: [], streaming: false, draft: "", draftMode: "compose", editingMessageId: null, promptAttachments: [] });
   },
       hydrateMessages(messages, conversationId) {
     set((state) => withConversationCache(state, messages, conversationId));
@@ -315,8 +383,13 @@ export const useChatStore = create<ChatState>()(
   getCachedMessagesForConversation(conversationId) {
     return get().messageCacheByConversation[conversationId] ?? null;
   },
-  async sendMessage(content) {
-    const { mode, promptAttachments } = get();
+  async sendMessage(content, options) {
+    const state = get();
+    const mode = options?.mode ?? state.mode;
+    const promptAttachments = options?.promptAttachments ?? state.promptAttachments;
+    const includeDashboard = state.includeDashboard;
+    const editingMessageId = options?.editMessageId ?? state.editingMessageId;
+    const isEditingUserMessage = !!options?.editMessageId || state.draftMode === "user_edit";
     const token = useAuthStore.getState().token;
     const companyState = useCompanyStore.getState();
     const groupState = useGroupStore.getState();
@@ -341,20 +414,55 @@ export const useChatStore = create<ChatState>()(
       )?.project_id ??
       null;
     const conversationId =
-      conversationState.activeConversationId && activeConversationProjectId === projectState.activeProjectId
+      isEditingUserMessage && conversationState.activeConversationId
+        ? conversationState.activeConversationId
+        : conversationState.activeConversationId && activeConversationProjectId === projectState.activeProjectId
         ? conversationState.activeConversationId
         : null;
 
-    if (
-      !token ||
-      ((mode === "library" || mode === "deep_search") && !groupId) ||
-      ((mode === "google_analytics" || mode === "google_ads") && !companyId) ||
-      (!content.trim() && promptAttachments.length === 0)
-    ) {
-      return;
+    if (!token) {
+      throw new Error("Authentication token missing");
+    }
+    if ((mode === "library" || mode === "deep_search") && !groupId) {
+      throw new Error("Select a group before sending this message.");
+    }
+    if ((mode === "google_analytics" || mode === "google_ads") && !companyId) {
+      throw new Error("Select a company before resending this message.");
+    }
+    if (!content.trim() && promptAttachments.length === 0) {
+      throw new Error("Message cannot be empty.");
+    }
+    if (options?.requireConversationId && !conversationId) {
+      throw new Error("Load the saved conversation before editing a previous message.");
     }
 
     get().initialize();
+
+    let baseMessages = get().messages;
+    if (isEditingUserMessage && editingMessageId) {
+      let editIndex =
+        typeof options?.editMessageIndex === "number"
+          ? options.editMessageIndex
+          : baseMessages.findIndex((message) => message.id === editingMessageId);
+      if (editIndex >= 0) {
+        const conversationIdForEdit = conversationState.activeConversationId;
+        let serverEditMessageId = editingMessageId;
+        if (conversationIdForEdit) {
+          const detail = await useConversationStore.getState().loadConversation(conversationIdForEdit);
+          const serverMessages = detail.messages.map(mapServerMessage);
+          const serverTarget = serverMessages[editIndex];
+          if (serverTarget?.role === "user") {
+            serverEditMessageId = serverTarget.id;
+            baseMessages = serverMessages;
+          } else {
+            editIndex = baseMessages.findIndex((message) => message.id === editingMessageId);
+          }
+          await api.truncateConversationFromMessage(conversationIdForEdit, serverEditMessageId);
+        }
+        baseMessages = baseMessages.slice(0, editIndex);
+        set((state) => withConversationCache(state, baseMessages, conversationIdForEdit));
+      }
+    }
 
     if (mode !== "standard" && groupId) {
       const documentsInGroup = documentState.documentsByGroup[groupId] ?? [];
@@ -389,12 +497,15 @@ export const useChatStore = create<ChatState>()(
     set((state) => ({
       ...withConversationCache(
         state,
-        [...state.messages, userMessage, assistantMessage],
+        [...baseMessages, userMessage, assistantMessage],
         conversationId,
       ),
       streaming: true,
       connectionError: null,
-      promptAttachments: [],
+      promptAttachments: options?.promptAttachments ? state.promptAttachments : [],
+      includeDashboard: false,
+      draftMode: "compose",
+      editingMessageId: null,
       autoScrollNonce: state.autoScrollNonce + 1,
     }));
 
@@ -405,6 +516,7 @@ export const useChatStore = create<ChatState>()(
       company_id: companyId,
       document_ids: documentIds,
       attachment_ids: promptAttachments.map((attachment) => attachment.id),
+      include_dashboard: includeDashboard,
       mode,
       message: content,
       conversation_id: conversationId,
@@ -428,6 +540,18 @@ export const useChatStore = create<ChatState>()(
       }));
       throw error;
     }
+  },
+  async sendEditedUserMessage(messageId, content) {
+    const messages = get().messages;
+    const editMessageIndex = messages.findIndex((message) => message.id === messageId);
+    const target = editMessageIndex >= 0 ? messages[editMessageIndex] : undefined;
+    await get().sendMessage(content, {
+      editMessageId: messageId,
+      editMessageIndex,
+      mode: target?.searchMode,
+      promptAttachments: target?.attachments ?? [],
+      requireConversationId: true,
+    });
   },
 }),
   {

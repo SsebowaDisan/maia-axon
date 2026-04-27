@@ -1,7 +1,6 @@
 import os
 import re
 from dataclasses import dataclass
-from datetime import date, timedelta
 
 import httpx
 from google.auth.transport.requests import Request
@@ -10,7 +9,11 @@ from google.oauth2 import service_account
 from app.core.config import settings
 from app.models.company import Company
 from app.services.answer_engine import AnswerResponse, AnswerSection
-from app.services.google_marketing.narrative import build_marketing_narrative
+from app.services.google_marketing.date_ranges import parse_date_range
+from app.services.google_marketing.narrative import (
+    build_dashboard_visualizations_with_llm,
+    build_marketing_narrative,
+)
 
 GOOGLE_ADS_SCOPE = "https://www.googleapis.com/auth/adwords"
 GOOGLE_ADS_API_VERSION = "v24"
@@ -31,33 +34,7 @@ def _normalized_customer_id(value: str | None) -> str:
 
 
 def _parse_date_range(query: str) -> tuple[str, str, str]:
-    normalized = query.lower()
-    today = date.today()
-
-    if "today" in normalized:
-        return today.isoformat(), today.isoformat(), "today"
-    if "yesterday" in normalized:
-        day = today - timedelta(days=1)
-        return day.isoformat(), day.isoformat(), "yesterday"
-
-    explicit = re.search(r"last\s+(\d{1,3})\s+days?", normalized)
-    if explicit:
-        days = int(explicit.group(1))
-        start = today - timedelta(days=max(days - 1, 0))
-        return start.isoformat(), today.isoformat(), f"last {days} days"
-
-    if "last week" in normalized:
-        start = today - timedelta(days=6)
-        return start.isoformat(), today.isoformat(), "last 7 days"
-    if "last month" in normalized:
-        start = today - timedelta(days=29)
-        return start.isoformat(), today.isoformat(), "last 30 days"
-    if "last quarter" in normalized:
-        start = today - timedelta(days=89)
-        return start.isoformat(), today.isoformat(), "last 90 days"
-
-    start = today - timedelta(days=29)
-    return start.isoformat(), today.isoformat(), "last 30 days"
+    return parse_date_range(query)
 
 
 def _plan_for_query(query: str) -> GoogleAdsPlan:
@@ -369,15 +346,43 @@ def generate_google_ads_answer(query: str, company: Company) -> AnswerResponse:
         top_rows=summary_rows,
     )
 
+    fallback_visualizations = _dashboard_visualizations(
+        plan=plan,
+        company_name=company.name,
+        customer_id=company.google_ads_customer_id,
+        label=label,
+        dimension_key=dimension_key,
+        rows=viz_rows,
+    )
+    visualizations = build_dashboard_visualizations_with_llm(
+        source_name="Google Ads",
+        source_mode="google_ads",
+        report_title=plan.title,
+        company_name=company.name,
+        date_range=label,
+        user_query=query,
+        x_key=dimension_key,
+        metric_keys=[
+            "impressions",
+            "clicks",
+            "cost",
+            "conversions",
+            "conversion_value",
+            "ctr_percent",
+            "avg_cpc",
+        ],
+        rows=viz_rows,
+        base_meta={
+            "company_name": company.name,
+            "source_mode": "google_ads",
+            "date_range": label,
+            "customer_id": company.google_ads_customer_id,
+        },
+        fallback_visualizations=fallback_visualizations,
+    )
+
     return AnswerResponse(
         text=text,
         sections=[AnswerSection(type="explanation", content=text, grounded=False)],
-        visualizations=_dashboard_visualizations(
-            plan=plan,
-            company_name=company.name,
-            customer_id=company.google_ads_customer_id,
-            label=label,
-            dimension_key=dimension_key,
-            rows=viz_rows,
-        ),
+        visualizations=visualizations,
     )

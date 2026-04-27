@@ -1,5 +1,7 @@
 import type {
   AuthTokenResponse,
+  AdminFeatureIdea,
+  AdminMessageFeedback,
   Company,
   CompanyUserAssignment,
   ConversationDetail,
@@ -10,8 +12,12 @@ import type {
   ExportDestination,
   ExportDestinationInfo,
   ExportWriteResponse,
+  FeatureIdea,
+  FeatureIdeaPriority,
   Group,
   GroupAssignment,
+  MessageFeedback,
+  MessageFeedbackRating,
   PageData,
   Project,
   PromptAttachment,
@@ -452,6 +458,11 @@ export const api = {
   deleteConversation(conversationId: string) {
     return request<void>(`/conversations/${conversationId}`, { method: "DELETE" });
   },
+  truncateConversationFromMessage(conversationId: string, messageId: string) {
+    return request<ConversationDetail>(`/conversations/${conversationId}/messages/${messageId}/truncate`, {
+      method: "POST",
+    });
+  },
   getWelcome(groupId?: string | null) {
     const suffix = groupId ? `?group_id=${groupId}` : "";
     return request<WelcomePayload>(`/chat/welcome${suffix}`);
@@ -483,6 +494,40 @@ export const api = {
       const formData = new FormData();
       formData.append("file", file);
       xhr.send(formData);
+    });
+  },
+  submitMessageFeedback(payload: {
+    message_id: string;
+    rating: MessageFeedbackRating;
+    tags?: string[];
+    comment?: string | null;
+  }) {
+    return request<MessageFeedback>("/feedback/messages", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  submitFeatureIdea(payload: {
+    category: string;
+    title?: string | null;
+    description: string;
+    priority: FeatureIdeaPriority;
+  }) {
+    return request<FeatureIdea>("/feedback/ideas", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  listMessageFeedback() {
+    return request<AdminMessageFeedback[]>("/feedback/admin/messages");
+  },
+  listFeatureIdeas() {
+    return request<AdminFeatureIdea[]>("/feedback/admin/ideas");
+  },
+  updateFeatureIdeaStatus(ideaId: string, status: FeatureIdea["status"]) {
+    return request<FeatureIdea>(`/feedback/admin/ideas/${ideaId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
     });
   },
 };

@@ -7,6 +7,7 @@ from app.api.endpoints import (
     conversations,
     documents,
     export_destinations,
+    feedback,
     groups,
     projects,
     users,
@@ -39,6 +40,9 @@ api_router.include_router(conversations.router)
 
 # Chat (REST)
 api_router.include_router(chat.router)
+
+# Feedback
+api_router.include_router(feedback.router)
 
 # WebSocket (mounted at root level, not under /api)
 ws_router = ws.router

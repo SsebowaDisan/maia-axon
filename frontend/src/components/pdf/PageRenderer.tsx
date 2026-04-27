@@ -200,6 +200,7 @@ export function PageRenderer({
     }
 
     let cancelled = false;
+    const controller = new AbortController();
 
     async function loadImage() {
       const token = getStoredToken();
@@ -229,32 +230,42 @@ export function PageRenderer({
         }
       }
 
-      const response = await fetch(imageUrl, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        cache: "force-cache",
-      });
+      try {
+        const response = await fetch(imageUrl, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          cache: "force-cache",
+          signal: controller.signal,
+        });
 
-      if (!response.ok) {
-        setImageSrc(page.image_url);
-        return;
-      }
-
-      if (typeof window !== "undefined" && "caches" in window) {
-        try {
-          const cache = await window.caches.open(IMAGE_CACHE_NAME);
-          await cache.put(cacheKeyRequest, response.clone());
-        } catch {
-          // Ignore cache write failures.
+        if (!response.ok) {
+          if (!cancelled) {
+            setImageSrc(page.image_url);
+          }
+          return;
         }
-      }
 
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      imageBlobUrlCache.set(cacheKey, objectUrl);
-      if (!cancelled) {
-        setImageSrc(objectUrl);
+        if (typeof window !== "undefined" && "caches" in window) {
+          try {
+            const cache = await window.caches.open(IMAGE_CACHE_NAME);
+            await cache.put(cacheKeyRequest, response.clone());
+          } catch {
+            // Ignore cache write failures.
+          }
+        }
+
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        imageBlobUrlCache.set(cacheKey, objectUrl);
+        if (!cancelled) {
+          setImageSrc(objectUrl);
+        }
+      } catch (error) {
+        if (controller.signal.aborted || cancelled) {
+          return;
+        }
+        setImageSrc(page.image_url);
       }
     }
 
@@ -262,6 +273,7 @@ export function PageRenderer({
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [page.document_id, page.image_url, page.page_number, shouldLoadImage]);
 

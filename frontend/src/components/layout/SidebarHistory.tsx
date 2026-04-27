@@ -14,6 +14,7 @@ import {
   FolderOpen,
   Globe,
   History,
+  Lightbulb,
   LogOut,
   MessageSquareMore,
   Plus,
@@ -31,7 +32,9 @@ import {
 import { DocumentUploader } from "@/components/admin/DocumentUploader";
 import { GroupManager } from "@/components/admin/GroupManager";
 import { CompanyManager } from "@/components/admin/CompanyManager";
+import { FeedbackManager } from "@/components/admin/FeedbackManager";
 import { UserAssignment } from "@/components/admin/UserAssignment";
+import { FeatureIdeaDialog } from "@/components/chat/FeatureIdeaDialog";
 import { DestinationManagerDialog } from "@/components/settings/DestinationManagerDialog";
 import { DeleteConfirmDialog } from "@/components/shared/DeleteConfirmDialog";
 import { Badge } from "@/components/ui/badge";
@@ -84,7 +87,7 @@ function AdminWorkspaceView() {
   const activeGroupId = useGroupStore((state) => state.activeGroupId);
   const companies = useCompanyStore((state) => state.companies);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(groups[0]?.id ?? null);
-  const [adminTab, setAdminTab] = useState<"people" | "companies">("people");
+  const [adminTab, setAdminTab] = useState<"people" | "companies" | "feedback">("people");
 
   useEffect(() => {
     if (!selectedGroupId && groups[0]?.id) {
@@ -99,6 +102,8 @@ function AdminWorkspaceView() {
     (company) => !!company.ga4_property_id || !!company.google_ads_customer_id,
   ).length;
   const isPeopleTab = adminTab === "people";
+  const isFeedbackTab = adminTab === "feedback";
+  const panelIcon = isPeopleTab ? <Users className="h-[18px] w-[18px]" /> : isFeedbackTab ? <MessageSquareMore className="h-[18px] w-[18px]" /> : <Building2 className="h-[18px] w-[18px]" />;
 
   return (
     <div className="grid h-full min-h-0 gap-5 lg:grid-cols-[292px_minmax(0,1fr)]">
@@ -106,24 +111,26 @@ function AdminWorkspaceView() {
         <div className="rounded-[28px] border border-black/[0.05] bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(248,248,247,0.9))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.88)]">
           <div className="flex items-center gap-3">
             <span className="inline-flex h-11 w-11 items-center justify-center rounded-[18px] border border-black/[0.05] bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(241,241,239,0.92))] text-ink shadow-[0_10px_24px_rgba(17,17,17,0.04)]">
-              {isPeopleTab ? <Users className="h-[18px] w-[18px]" /> : <Building2 className="h-[18px] w-[18px]" />}
+              {panelIcon}
             </span>
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted">
-                {isPeopleTab ? "People access" : "Company access"}
+                {isPeopleTab ? "People access" : isFeedbackTab ? "Feedback loop" : "Company access"}
               </p>
               <p className="mt-1 text-sm font-medium text-muted">
-                {isPeopleTab ? "Roles, users, and workspace visibility" : "Google source ownership and availability"}
+                {isPeopleTab ? "Roles, users, and workspace visibility" : isFeedbackTab ? "Ratings, ideas, and product signals" : "Google source ownership and availability"}
               </p>
             </div>
           </div>
           <p className="mt-5 font-display text-[1.7rem] font-semibold tracking-[-0.05em] text-ink">
-            {isPeopleTab ? "User control" : "Source catalog"}
+            {isPeopleTab ? "User control" : isFeedbackTab ? "User signals" : "Source catalog"}
           </p>
           <p className="mt-2 text-sm leading-6 text-muted">
             {isPeopleTab
               ? "Create Maia users, assign them to groups, and manage workspace access."
-              : "Register company source records here. Google setup stays separate from projects and chat structure."}
+              : isFeedbackTab
+                ? "Review response ratings and collect feature ideas from Maia users."
+                : "Register company source records here. Google setup stays separate from projects and chat structure."}
           </p>
         </div>
 
@@ -131,24 +138,24 @@ function AdminWorkspaceView() {
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-[20px] bg-white/88 px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.82)]">
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
-                {isPeopleTab ? "Groups" : "Companies"}
+                {isPeopleTab ? "Groups" : isFeedbackTab ? "Ratings" : "Companies"}
               </p>
               <p className="mt-2 text-[1.75rem] font-semibold tracking-[-0.05em] text-ink">
-                {isPeopleTab ? groups.length : companies.length}
+                {isPeopleTab ? groups.length : isFeedbackTab ? "Live" : companies.length}
               </p>
             </div>
             <div className="rounded-[20px] bg-white/88 px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.82)]">
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
-                {isPeopleTab ? "Active" : "Configured"}
+                {isPeopleTab ? "Active" : isFeedbackTab ? "Ideas" : "Configured"}
               </p>
               <p className="mt-2 text-[1.75rem] font-semibold tracking-[-0.05em] text-ink">
-                {isPeopleTab ? (activeGroup ? "1" : "0") : configuredCompanyCount}
+                {isPeopleTab ? (activeGroup ? "1" : "0") : isFeedbackTab ? "Open" : configuredCompanyCount}
               </p>
             </div>
           </div>
         </div>
 
-        {!isPeopleTab ? (
+        {!isPeopleTab && !isFeedbackTab ? (
           <div className="mt-3 flex flex-wrap gap-2">
             <span className="rounded-full border border-black/[0.05] bg-white/92 px-3 py-1.5 text-xs font-medium text-ink">
               {ga4ConnectedCount} GA4 linked
@@ -182,6 +189,32 @@ function AdminWorkspaceView() {
               <span className="block text-[15px] font-semibold tracking-[-0.02em]">People</span>
               <span className="mt-0.5 block text-xs leading-5 text-muted">
                 Create Maia users and assign them to groups.
+              </span>
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className={`mt-2 flex w-full items-center gap-3 rounded-[20px] px-3.5 py-3.5 text-left transition ${
+              adminTab === "feedback"
+                ? "bg-white text-ink shadow-[0_12px_28px_rgba(17,17,17,0.06)]"
+                : "text-ink/90 hover:bg-white/75"
+            }`}
+            onClick={() => setAdminTab("feedback")}
+          >
+            <span
+              className={`inline-flex h-11 w-11 items-center justify-center rounded-[16px] border ${
+                adminTab === "feedback"
+                  ? "border-black/[0.06] bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(242,242,240,0.92))] text-ink shadow-[0_10px_22px_rgba(17,17,17,0.05)]"
+                  : "border-transparent bg-black/[0.04] text-muted"
+              }`}
+            >
+              <MessageSquareMore className="h-[18px] w-[18px]" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[15px] font-semibold tracking-[-0.02em]">Feedback</span>
+              <span className="mt-0.5 block text-xs leading-5 text-muted">
+                Review ratings and feature ideas.
               </span>
             </span>
           </button>
@@ -223,6 +256,16 @@ function AdminWorkspaceView() {
               User assignment applies to the selected library group.
             </p>
           </div>
+        ) : isFeedbackTab ? (
+          <div className="mt-auto rounded-[26px] border border-black/[0.05] bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(247,247,246,0.9))] p-5 shadow-[0_10px_24px_rgba(17,17,17,0.03)]">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Product loop</p>
+            <p className="mt-3 text-[1.05rem] font-semibold tracking-[-0.03em] text-ink">
+              User-rated Maia responses
+            </p>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              Use this to find exceptional answers, poor responses, and ideas worth building.
+            </p>
+          </div>
         ) : (
           <div className="mt-auto rounded-[26px] border border-black/[0.05] bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(247,247,246,0.9))] p-5 shadow-[0_10px_24px_rgba(17,17,17,0.03)]">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Company setup</p>
@@ -240,14 +283,16 @@ function AdminWorkspaceView() {
         <div className="mb-5 flex items-start justify-between gap-4 border-b border-black/[0.06] pb-4">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
-              {adminTab === "companies" ? "Company management" : "People management"}
+              {adminTab === "companies" ? "Company management" : adminTab === "feedback" ? "Feedback review" : "People management"}
             </p>
             <p className="mt-2 font-display text-[1.55rem] font-semibold tracking-[-0.04em] text-ink">
-              {adminTab === "companies" ? "Company sources" : "Users and assignment"}
+              {adminTab === "companies" ? "Company sources" : adminTab === "feedback" ? "Ratings and ideas" : "Users and assignment"}
             </p>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
               {adminTab === "companies"
                 ? "Create company source records, attach GA4 and Google Ads IDs, and control which users can select them in chat."
+                : adminTab === "feedback"
+                ? "Review thumbs up/down signals, comments, and feature ideas submitted by Maia users."
                 : "Create Maia users and assign them to the library groups they should access."}
             </p>
           </div>
@@ -256,6 +301,8 @@ function AdminWorkspaceView() {
         <div className="min-h-0 h-[calc(100%-5.25rem)] overflow-y-auto scrollbar-thin">
           {adminTab === "companies" ? (
             <CompanyManager />
+          ) : adminTab === "feedback" ? (
+            <FeedbackManager />
           ) : selectedGroupId ? (
             <UserAssignment groupId={selectedGroupId} />
           ) : (
@@ -650,6 +697,7 @@ export function SidebarHistory({
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [ideaOpen, setIdeaOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [destinationsOpen, setDestinationsOpen] = useState(false);
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
@@ -779,6 +827,7 @@ export function SidebarHistory({
   const hasOpenModal =
     settingsOpen ||
     destinationsOpen ||
+    ideaOpen ||
     libraryOpen ||
     adminOpen ||
     createProjectOpen ||
@@ -1072,6 +1121,26 @@ export function SidebarHistory({
       <button
         type="button"
         className="mt-4 flex items-center justify-between rounded-[22px] bg-black/[0.03] px-4 py-4 text-left transition hover:bg-black/[0.05]"
+        onClick={() => setIdeaOpen(true)}
+        aria-label="Suggest an idea"
+      >
+        <div className="flex items-center gap-3">
+          <span className="rounded-full bg-white p-2.5 text-ink shadow-[0_4px_12px_rgba(17,17,17,0.06)]">
+            <Lightbulb className="h-3.5 w-3.5" />
+          </span>
+          <div>
+            <p className="font-medium text-ink">Suggest idea</p>
+            <p className="text-xs uppercase tracking-[0.18em] text-muted">Feedback</p>
+          </div>
+        </div>
+        <span className="rounded-full bg-black p-2 text-white">
+          <Plus className="h-4 w-4" />
+        </span>
+      </button>
+
+      <button
+        type="button"
+        className="mt-3 flex items-center justify-between rounded-[22px] bg-black/[0.03] px-4 py-4 text-left transition hover:bg-black/[0.05]"
         onClick={() => setSettingsOpen(true)}
         aria-label="Open settings"
       >
@@ -1114,6 +1183,8 @@ export function SidebarHistory({
           logout();
         }}
       />
+
+      <FeatureIdeaDialog open={ideaOpen} onOpenChange={setIdeaOpen} />
 
       <DestinationManagerDialog
         open={destinationsOpen}
