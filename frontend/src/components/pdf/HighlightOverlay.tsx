@@ -15,7 +15,7 @@ export function HighlightOverlay({
   renderedWidth: number;
   renderedHeight: number;
 }) {
-  if (!coordinateWidth || !coordinateHeight || !citations.length) {
+  if (!coordinateWidth || !coordinateHeight || !renderedWidth || !renderedHeight || !citations.length) {
     return null;
   }
 

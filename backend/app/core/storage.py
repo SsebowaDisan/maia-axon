@@ -128,6 +128,9 @@ def to_public_url(url: str) -> str:
     internal_base = settings.s3_endpoint_url.rstrip("/")
     if url.startswith(internal_base):
         return f"{public_base}{url[len(internal_base):]}"
+    local_minio_internal_base = "http://minio:9000"
+    if public_base.startswith("http://localhost:") and url.startswith(local_minio_internal_base):
+        return f"{public_base}{url[len(local_minio_internal_base):]}"
     return url
 
 

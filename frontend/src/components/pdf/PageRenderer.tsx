@@ -147,15 +147,18 @@ export function PageRenderer({
   highlights,
   scrollMode = "contained",
   onNavigateToExactPage,
+  onHighlightReady,
 }: {
   page: PageData;
   zoom: number;
   highlights: Citation[];
   scrollMode?: "contained" | "natural";
   onNavigateToExactPage?: (pageNumber: number) => void;
+  onHighlightReady?: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
+  const highlightNotificationKeyRef = useRef<string | null>(null);
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
   const [renderedSize, setRenderedSize] = useState({ width: 0, height: 0 });
   const [imageSrc, setImageSrc] = useState(page.image_url);
@@ -166,6 +169,23 @@ export function PageRenderer({
   const regionJumpLinks = useMemo(() => parseRegionJumpLinks(page.regions), [page.regions]);
   const showRegionLinks = regionJumpLinks.length > 0 && coordinateWidth > 0 && coordinateHeight > 0;
   const showOutlineLinks = !showRegionLinks && outlineLinks.length > 0;
+  const hasHighlightBoxes = useMemo(
+    () =>
+      highlights.some(
+        (citation) =>
+          citation.boxes?.some((box) => Array.isArray(box) && box.length === 4) ||
+          (citation.bbox && citation.bbox.length === 4),
+      ),
+    [highlights],
+  );
+  const highlightKey = useMemo(
+    () =>
+      highlights
+        .map((citation) => citation.id)
+        .sort()
+        .join(","),
+    [highlights],
+  );
 
   useEffect(() => {
     setImageSrc(page.image_url);
@@ -311,6 +331,32 @@ export function PageRenderer({
       observer.disconnect();
     };
   }, [imageSrc, zoom]);
+
+  useEffect(() => {
+    if (
+      hasHighlightBoxes &&
+      coordinateWidth > 0 &&
+      coordinateHeight > 0 &&
+      renderedSize.width > 0 &&
+      renderedSize.height > 0
+    ) {
+      const notificationKey = `${page.document_id}:${page.page_number}:${highlightKey}`;
+      if (highlightNotificationKeyRef.current !== notificationKey) {
+        highlightNotificationKeyRef.current = notificationKey;
+        window.requestAnimationFrame(() => onHighlightReady?.());
+      }
+    }
+  }, [
+    coordinateHeight,
+    coordinateWidth,
+    hasHighlightBoxes,
+    highlightKey,
+    onHighlightReady,
+    page.document_id,
+    page.page_number,
+    renderedSize.height,
+    renderedSize.width,
+  ]);
 
   return (
     <div

@@ -596,7 +596,7 @@ async def get_page_image(
         .where(Page.document_id == document_id, Page.page_number == page_number)
         .order_by(Page.created_at.desc(), Page.id.desc())
     )
-    if result.scalar_one_or_none() is None:
+    if result.scalars().first() is None:
         raise HTTPException(status_code=404, detail="Page not found")
 
     key = f"documents/{document_id}/pages/{page_number}.png"

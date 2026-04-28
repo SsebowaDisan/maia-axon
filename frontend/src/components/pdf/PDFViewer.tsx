@@ -119,6 +119,7 @@ export function PDFViewer() {
   const loadPage = usePDFViewerStore((state) => state.loadPage);
   const prefetchPages = usePDFViewerStore((state) => state.prefetchPages);
   const [visibleRange, setVisibleRange] = useState({ start: 1, end: 0 });
+  const [highlightReadyNonce, setHighlightReadyNonce] = useState(0);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const lastScrollTargetRef = useRef<string | null>(null);
@@ -178,6 +179,7 @@ export function PDFViewer() {
 
     setVisibleRange(buildInitialWindow(currentPage, currentDocument.page_count));
     lastScrollTargetRef.current = null;
+    setHighlightReadyNonce(0);
   }, [currentDocument, currentPage]);
 
   useEffect(() => {
@@ -214,6 +216,10 @@ export function PDFViewer() {
     [currentDocument, currentPage, highlights, loadPage],
   );
 
+  const handleCurrentHighlightReady = useCallback(() => {
+    setHighlightReadyNonce((current) => current + 1);
+  }, []);
+
   const loadedPages = useMemo(() => {
     if (!currentDocument || visibleRange.end < visibleRange.start) {
       return [];
@@ -239,7 +245,7 @@ export function PDFViewer() {
       .map((citation) => citation.id)
       .sort()
       .join(",");
-    const targetKey = `${currentDocument.id}:${currentPage}:${highlightKey}`;
+    const targetKey = `${currentDocument.id}:${currentPage}:${highlightKey}:${highlightReadyNonce}`;
     if (lastScrollTargetRef.current === targetKey) {
       return;
     }
@@ -284,7 +290,7 @@ export function PDFViewer() {
     };
 
     scrollToEvidence();
-  }, [currentDocument, currentPage, highlights, loadedPages]);
+  }, [currentDocument, currentPage, highlightReadyNonce, highlights, loadedPages]);
 
   if (currentWebCitation) {
     return (
@@ -449,6 +455,11 @@ export function PDFViewer() {
                       onNavigateToExactPage={(nextPage) => {
                         void handleOpenPage(nextPage);
                       }}
+                      onHighlightReady={
+                        pageNumber === currentPage
+                          ? handleCurrentHighlightReady
+                          : undefined
+                      }
                     />
                   ) : (
                     <div className="mx-auto max-w-[940px] border border-black/[0.08] bg-white px-6 py-10 text-center text-sm text-muted">
