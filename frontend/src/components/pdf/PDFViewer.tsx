@@ -26,6 +26,12 @@ function buildInitialWindow(currentPage: number, pageCount: number | null) {
   return { start, end };
 }
 
+function buildCitationWindow(currentPage: number, pageCount: number | null) {
+  const total = Math.max(pageCount ?? currentPage, 1);
+  const page = Math.min(Math.max(currentPage, 1), total);
+  return { start: page, end: page };
+}
+
 function PageThumbnail({
   document,
   pageNumber,
@@ -118,6 +124,7 @@ export function PDFViewer() {
   const clearHighlights = usePDFViewerStore((state) => state.clearHighlights);
   const loadPage = usePDFViewerStore((state) => state.loadPage);
   const prefetchPages = usePDFViewerStore((state) => state.prefetchPages);
+  const hasEvidenceHighlights = highlights.length > 0;
   const [visibleRange, setVisibleRange] = useState({ start: 1, end: 0 });
   const [highlightReadyNonce, setHighlightReadyNonce] = useState(0);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -177,10 +184,14 @@ export function PDFViewer() {
       return;
     }
 
-    setVisibleRange(buildInitialWindow(currentPage, currentDocument.page_count));
+    setVisibleRange(
+      hasEvidenceHighlights
+        ? buildCitationWindow(currentPage, currentDocument.page_count)
+        : buildInitialWindow(currentPage, currentDocument.page_count),
+    );
     lastScrollTargetRef.current = null;
     setHighlightReadyNonce(0);
-  }, [currentDocument, currentPage]);
+  }, [currentDocument, currentPage, hasEvidenceHighlights]);
 
   useEffect(() => {
     if (!currentDocument || visibleRange.end < visibleRange.start) {

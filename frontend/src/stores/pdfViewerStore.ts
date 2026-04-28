@@ -126,9 +126,14 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
         updated_at: "",
       } satisfies Document);
 
-    const prefetchWindow = [citation.page - 1, citation.page, citation.page + 1];
-    void get().prefetchPages(fallbackDocument, prefetchWindow);
     await get().loadPage(fallbackDocument, citation.page, [citation]);
+    const prefetchWindow = [
+      citation.page - 2,
+      citation.page - 1,
+      citation.page + 1,
+      citation.page + 2,
+    ];
+    void get().prefetchPages(fallbackDocument, prefetchWindow);
   },
   async loadPage(document, pageNumber, highlightCitations = []) {
     const key = pageKey(document.id, pageNumber);
