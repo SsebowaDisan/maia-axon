@@ -1,7 +1,7 @@
 "use client";
 
 import { type ClipboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, Building2, Check, ChevronDown, Hash, Layers3, Paperclip, Plus, Send, X } from "lucide-react";
+import { BarChart3, Building2, Check, ChevronDown, Hash, Layers3, Paperclip, Plus, Send, Square, X } from "lucide-react";
 
 import { CompanySelector } from "@/components/chat/CompanySelector";
 import { ComposerMenu } from "@/components/chat/ComposerMenu";
@@ -110,6 +110,7 @@ export function Composer() {
   const mode = useChatStore((state) => state.mode);
   const setMode = useChatStore((state) => state.setMode);
   const sendMessage = useChatStore((state) => state.sendMessage);
+  const stopStreaming = useChatStore((state) => state.stopStreaming);
   const streaming = useChatStore((state) => state.streaming);
   const welcomeStreaming = useChatStore((state) => state.welcomeStreaming);
   const clearChat = useChatStore((state) => state.clearChat);
@@ -637,10 +638,18 @@ export function Composer() {
           type="button"
           size="icon"
           className="h-14 w-14 shrink-0 rounded-full bg-black text-white shadow-[0_16px_36px_rgba(15,23,42,0.14)] transition hover:scale-[1.01] hover:bg-black/92 disabled:bg-black disabled:text-white disabled:opacity-100 disabled:hover:scale-100"
-          onClick={() => void handleSend()}
-          disabled={!canSend}
+          onClick={() => {
+            if (streaming) {
+              stopStreaming();
+              return;
+            }
+            void handleSend();
+          }}
+          disabled={!streaming && !canSend}
+          aria-label={streaming ? "Stop response" : "Send message"}
+          title={streaming ? "Stop response" : "Send message"}
         >
-          <Send className="h-4.5 w-4.5" />
+          {streaming ? <Square className="h-3.5 w-3.5 fill-current" /> : <Send className="h-4.5 w-4.5" />}
         </Button>
       </div>
 

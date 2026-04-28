@@ -101,6 +101,7 @@ interface ChatState {
   cancelEditingUserMessage: () => void;
   updateMessageContent: (messageId: string, content: string) => void;
   clearChat: () => void;
+  stopStreaming: () => void;
   hydrateMessages: (messages: ChatMessage[], conversationId?: string | null) => void;
   getCachedMessagesForConversation: (conversationId: string) => ChatMessage[] | null;
   sendMessage: (message: string, options?: SendMessageOptions) => Promise<void>;
@@ -374,6 +375,22 @@ export const useChatStore = create<ChatState>()(
   clearChat() {
     useMindmapStore.getState().clearMindmap();
     set({ messages: [], streaming: false, draft: "", draftMode: "compose", editingMessageId: null, promptAttachments: [] });
+  },
+  stopStreaming() {
+    chatSocket.close();
+    set((state) => ({
+      streaming: false,
+      messages: state.messages.map((message, index) =>
+        index === state.messages.length - 1 && message.role === "assistant" && message.isStreaming
+          ? {
+              ...message,
+              isStreaming: false,
+              status: "done",
+              content: message.content.trim() ? message.content : "Response stopped.",
+            }
+          : message,
+      ),
+    }));
   },
       hydrateMessages(messages, conversationId) {
     set((state) => withConversationCache(state, messages, conversationId));
