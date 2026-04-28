@@ -1,15 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, X } from "lucide-react";
 
 import { MindmapCanvas } from "@/components/mindmap/MindmapCanvas";
 import { PDFViewer } from "@/components/pdf/PDFViewer";
 import { Button } from "@/components/ui/button";
 import { useMindmapStore } from "@/stores/mindmapStore";
+import { usePDFViewerStore } from "@/stores/pdfViewerStore";
 
 export function DocumentPanel() {
   const mindmap = useMindmapStore((state) => state.data);
+  const closeViewer = usePDFViewerStore((state) => state.close);
   const [mindmapCollapsed, setMindmapCollapsed] = useState(true);
 
   return (
@@ -21,9 +23,21 @@ export function DocumentPanel() {
             type="button"
             variant="ghost"
             size="icon"
+            title={mindmapCollapsed ? "Show mindmap" : "Hide mindmap"}
+            aria-label={mindmapCollapsed ? "Show mindmap" : "Hide mindmap"}
             onClick={() => setMindmapCollapsed((current) => !current)}
           >
             {mindmapCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            title="Close sources"
+            aria-label="Close sources"
+            onClick={closeViewer}
+          >
+            <X className="h-4 w-4" />
           </Button>
         </div>
       </div>

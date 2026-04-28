@@ -67,6 +67,9 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
   const [savedFeedbackRating, setSavedFeedbackRating] = useState<MessageFeedbackRating | null>(null);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const feedbackTimerRef = useRef<number | null>(null);
+  const assistantActionsVisibilityClass = isInlineEditing
+    ? "opacity-100"
+    : "pointer-events-none invisible opacity-0 group-hover/assistant:pointer-events-auto group-hover/assistant:visible group-hover/assistant:opacity-100";
 
   useEffect(() => {
     if (!isInlineEditing) {
@@ -360,130 +363,134 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
                   </>
                 )}
               </div>
-              <div className="mt-8 flex flex-wrap items-center justify-end gap-2 border-t border-black/[0.06] pt-4">
-                {isInlineEditing ? (
-                  <>
+              {!message.isStreaming && message.status === "done" ? (
+                <div
+                  className={`mt-8 flex flex-wrap items-center justify-end gap-2 border-t border-black/[0.06] pt-4 transition-opacity duration-150 ${assistantActionsVisibilityClass}`}
+                >
+                  {isInlineEditing ? (
+                    <>
+                      <button
+                        type="button"
+                        className="inline-flex h-9 items-center gap-2 rounded-full border border-black/8 bg-white px-3 text-[12px] font-medium text-black/72 transition hover:border-black/12 hover:bg-black hover:text-white"
+                        aria-label="Cancel edit"
+                        title="Cancel"
+                        onClick={cancelInlineEdit}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex h-9 items-center gap-2 rounded-full border border-black/8 bg-black px-3 text-[12px] font-medium text-white transition hover:bg-black/88"
+                        aria-label="Save edit"
+                        title="Save"
+                        onClick={() => void saveInlineEdit()}
+                      >
+                        Save
+                      </button>
+                    </>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={`inline-flex h-9 items-center gap-2 rounded-full border px-3 text-[12px] font-medium transition ${
+                      savedFeedbackRating === "up"
+                        ? "border-black bg-black text-white"
+                        : "border-black/8 bg-white text-black/72 hover:border-black/12 hover:bg-black hover:text-white"
+                    }`}
+                    aria-label="Mark response as helpful"
+                    title="Helpful"
+                    onClick={() => setFeedbackDialogRating("up")}
+                  >
+                    <ThumbsUp className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    className={`inline-flex h-9 items-center gap-2 rounded-full border px-3 text-[12px] font-medium transition ${
+                      savedFeedbackRating === "down"
+                        ? "border-black bg-black text-white"
+                        : "border-black/8 bg-white text-black/72 hover:border-black/12 hover:bg-black hover:text-white"
+                    }`}
+                    aria-label="Mark response as poor"
+                    title="Poor"
+                    onClick={() => setFeedbackDialogRating("down")}
+                  >
+                    <ThumbsDown className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    className={`inline-flex h-9 items-center gap-2 rounded-full border px-3 text-[12px] font-medium transition ${
+                      actionFeedback === "copy"
+                        ? "border-black bg-black text-white"
+                        : "border-black/8 bg-white text-black/72 hover:border-black/12 hover:bg-black hover:text-white"
+                    }`}
+                    aria-label="Copy response"
+                    title="Copy"
+                    onClick={() => void copyMessage()}
+                  >
+                    {actionFeedback === "copy" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    {actionFeedback === "copy" ? "Copied" : "Copy"}
+                  </button>
+                  <div ref={moreMenuRef} className="relative">
                     <button
                       type="button"
                       className="inline-flex h-9 items-center gap-2 rounded-full border border-black/8 bg-white px-3 text-[12px] font-medium text-black/72 transition hover:border-black/12 hover:bg-black hover:text-white"
-                      aria-label="Cancel edit"
-                      title="Cancel"
-                      onClick={cancelInlineEdit}
+                      aria-label="More response actions"
+                      title="More"
+                      onClick={() => setShowMoreMenu((current) => !current)}
                     >
-                      Cancel
+                      <MoreHorizontal className="h-3.5 w-3.5" />
+                      More
                     </button>
-                    <button
-                      type="button"
-                      className="inline-flex h-9 items-center gap-2 rounded-full border border-black/8 bg-black px-3 text-[12px] font-medium text-white transition hover:bg-black/88"
-                      aria-label="Save edit"
-                      title="Save"
-                      onClick={() => void saveInlineEdit()}
-                    >
-                      Save
-                    </button>
-                  </>
-                ) : null}
-                <button
-                  type="button"
-                  className={`inline-flex h-9 items-center gap-2 rounded-full border px-3 text-[12px] font-medium transition ${
-                    savedFeedbackRating === "up"
-                      ? "border-black bg-black text-white"
-                      : "border-black/8 bg-white text-black/72 hover:border-black/12 hover:bg-black hover:text-white"
-                  }`}
-                  aria-label="Mark response as helpful"
-                  title="Helpful"
-                  onClick={() => setFeedbackDialogRating("up")}
-                >
-                  <ThumbsUp className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  className={`inline-flex h-9 items-center gap-2 rounded-full border px-3 text-[12px] font-medium transition ${
-                    savedFeedbackRating === "down"
-                      ? "border-black bg-black text-white"
-                      : "border-black/8 bg-white text-black/72 hover:border-black/12 hover:bg-black hover:text-white"
-                  }`}
-                  aria-label="Mark response as poor"
-                  title="Poor"
-                  onClick={() => setFeedbackDialogRating("down")}
-                >
-                  <ThumbsDown className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  className={`inline-flex h-9 items-center gap-2 rounded-full border px-3 text-[12px] font-medium transition ${
-                    actionFeedback === "copy"
-                      ? "border-black bg-black text-white"
-                      : "border-black/8 bg-white text-black/72 hover:border-black/12 hover:bg-black hover:text-white"
-                  }`}
-                  aria-label="Copy response"
-                  title="Copy"
-                  onClick={() => void copyMessage()}
-                >
-                  {actionFeedback === "copy" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                  {actionFeedback === "copy" ? "Copied" : "Copy"}
-                </button>
-                <div ref={moreMenuRef} className="relative">
-                  <button
-                    type="button"
-                    className="inline-flex h-9 items-center gap-2 rounded-full border border-black/8 bg-white px-3 text-[12px] font-medium text-black/72 transition hover:border-black/12 hover:bg-black hover:text-white"
-                    aria-label="More response actions"
-                    title="More"
-                    onClick={() => setShowMoreMenu((current) => !current)}
-                  >
-                    <MoreHorizontal className="h-3.5 w-3.5" />
-                    More
-                  </button>
-                  {showMoreMenu ? (
-                    <div className="absolute bottom-11 right-0 z-20 w-[210px] rounded-[18px] border border-black/[0.08] bg-white p-2 shadow-[0_18px_50px_rgba(15,23,42,0.14)]">
-                      <button
-                        type="button"
-                        className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2.5 text-left text-sm font-medium text-ink transition hover:bg-black/[0.04]"
-                        onClick={() => {
-                          setShowMoreMenu(false);
-                          startInlineEdit();
-                        }}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                        Edit response
-                      </button>
-                      <button
-                        type="button"
-                        className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2.5 text-left text-sm font-medium text-ink transition hover:bg-black/[0.04]"
-                        onClick={() => {
-                          setShowMoreMenu(false);
-                          void shareMessage();
-                        }}
-                      >
-                        <Share2 className="h-3.5 w-3.5" />
-                        Share
-                      </button>
-                      <button
-                        type="button"
-                        className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2.5 text-left text-sm font-medium text-ink transition hover:bg-black/[0.04]"
-                        onClick={() => {
-                          setShowMoreMenu(false);
-                          setDocsDialogOpen(true);
-                        }}
-                      >
-                        <FileText className="h-3.5 w-3.5" />
-                        Write to Docs
-                      </button>
-                      <button
-                        type="button"
-                        className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2.5 text-left text-sm font-medium text-ink transition hover:bg-black/[0.04]"
-                        onClick={() => {
-                          setShowMoreMenu(false);
-                          setSheetsDialogOpen(true);
-                        }}
-                      >
-                        <TableProperties className="h-3.5 w-3.5" />
-                        Write to Sheets
-                      </button>
-                    </div>
-                  ) : null}
+                    {showMoreMenu ? (
+                      <div className="absolute bottom-11 right-0 z-20 w-[210px] rounded-[18px] border border-black/[0.08] bg-white p-2 shadow-[0_18px_50px_rgba(15,23,42,0.14)]">
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2.5 text-left text-sm font-medium text-ink transition hover:bg-black/[0.04]"
+                          onClick={() => {
+                            setShowMoreMenu(false);
+                            startInlineEdit();
+                          }}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          Edit response
+                        </button>
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2.5 text-left text-sm font-medium text-ink transition hover:bg-black/[0.04]"
+                          onClick={() => {
+                            setShowMoreMenu(false);
+                            void shareMessage();
+                          }}
+                        >
+                          <Share2 className="h-3.5 w-3.5" />
+                          Share
+                        </button>
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2.5 text-left text-sm font-medium text-ink transition hover:bg-black/[0.04]"
+                          onClick={() => {
+                            setShowMoreMenu(false);
+                            setDocsDialogOpen(true);
+                          }}
+                        >
+                          <FileText className="h-3.5 w-3.5" />
+                          Write to Docs
+                        </button>
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2.5 text-left text-sm font-medium text-ink transition hover:bg-black/[0.04]"
+                          onClick={() => {
+                            setShowMoreMenu(false);
+                            setSheetsDialogOpen(true);
+                          }}
+                        >
+                          <TableProperties className="h-3.5 w-3.5" />
+                          Write to Sheets
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
+              ) : null}
             </>
           )}
         </div>
