@@ -1,5 +1,6 @@
 import os
 import re
+import logging
 from dataclasses import dataclass
 
 import httpx
@@ -17,6 +18,7 @@ from app.services.google_marketing.narrative import (
 
 GOOGLE_ADS_SCOPE = "https://www.googleapis.com/auth/adwords"
 GOOGLE_ADS_API_VERSION = "v24"
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -254,6 +256,7 @@ def generate_google_ads_answer(query: str, company: Company) -> AnswerResponse:
     try:
         rows = _query_google_ads(company, gaql)
     except Exception as exc:
+        logger.exception("Google Ads query failed for %s", company.name)
         return AnswerResponse(
             text=f"I could not query Google Ads for **{company.name}** right now.",
             warnings=[str(exc)],

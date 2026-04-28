@@ -308,6 +308,7 @@ def generate_ga4_answer(query: str, company: Company) -> AnswerResponse:
             )
         )
     except Exception as exc:
+        logger.exception("Google Analytics query failed for %s", company.name)
         return AnswerResponse(
             text=f"I could not query Google Analytics for **{company.name}** right now.",
             warnings=[str(exc)],
