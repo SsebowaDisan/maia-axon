@@ -2,11 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  Archive,
   History,
+  Lightbulb,
   MessageSquareText,
   Network,
-  PanelLeftOpen,
-  X,
+  Settings2,
 } from "lucide-react";
 import {
   Panel,
@@ -156,7 +157,7 @@ export function AppShell() {
 
   return (
     <ErrorBoundary>
-      <div className="relative h-screen bg-bg px-3 py-3 app-grid">
+      <div className="relative h-screen bg-bg py-3 pl-[84px] pr-3 app-grid">
         <div className="relative h-[calc(100vh-1.5rem)] rounded-[28px] bg-panel/70 p-1 shadow-[0_20px_45px_rgba(15,23,42,0.05)]">
           <PanelGroup direction="horizontal" className="h-full min-h-0">
             <Panel defaultSize={56} minSize={40}>
@@ -177,47 +178,78 @@ export function AppShell() {
           </PanelGroup>
         </div>
         <div
-          className="absolute inset-y-3 left-0 z-20 w-16"
+          className={cn(
+            "absolute inset-y-3 left-3 z-30 flex max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[24px] border border-black/8 bg-panel shadow-[0_24px_50px_rgba(15,23,42,0.12)] transition-[width] duration-200 ease-out",
+            historyDrawerOpen ? "w-[360px]" : "w-[64px]",
+          )}
           onMouseEnter={openHistoryDrawer}
           onMouseLeave={scheduleCloseDrawer}
+          onFocus={openHistoryDrawer}
         >
-          <button
-            type="button"
-            onMouseEnter={openHistoryDrawer}
-            onFocus={openHistoryDrawer}
-            onClick={openHistoryDrawer}
-            className="absolute left-0 top-1/2 flex h-12 w-12 -translate-y-1/2 items-center justify-center rounded-r-xl border border-black/10 border-l-0 bg-white text-ink shadow-[0_10px_24px_rgba(15,23,42,0.08)] transition hover:bg-black hover:text-white"
-            aria-label="Open workspace drawer"
-            title="Open workspace"
-          >
-            <PanelLeftOpen className="h-4 w-4" />
-          </button>
-        </div>
-        {historyDrawerOpen ? (
           <div
-            className="absolute inset-y-3 left-3 z-30 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[24px] border border-black/8 bg-panel shadow-[0_24px_50px_rgba(15,23,42,0.12)]"
-            onMouseEnter={cancelCloseDrawer}
-            onMouseLeave={scheduleCloseDrawer}
+            className={cn(
+              "flex h-full w-[64px] shrink-0 flex-col items-center border-black/[0.06] px-2 py-4 transition-opacity",
+              historyDrawerOpen ? "pointer-events-none absolute opacity-0" : "opacity-100",
+            )}
           >
-              <div className="flex items-center justify-between gap-3 border-b border-black/[0.06] px-4 py-3">
-                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
-                  <History className="h-4 w-4" />
-                  Workspace
-                </div>
+            {[
+              { label: "Workspace", icon: History, active: true },
+              { label: "Chat", icon: MessageSquareText },
+              { label: "Library", icon: Archive },
+              { label: "Sources", icon: Network },
+            ].map((item) => {
+              const Icon = item.icon;
+              return (
                 <button
+                  key={item.label}
                   type="button"
-                  className="rounded-lg border border-black/10 bg-white p-2 text-ink transition hover:bg-black hover:text-white"
-                  aria-label="Close workspace drawer"
-                  onClick={() => setHistoryDrawerOpen(false)}
+                  className={cn(
+                    "mb-2 inline-flex h-11 w-11 items-center justify-center rounded-full transition",
+                    item.active
+                      ? "bg-black text-white shadow-[0_12px_26px_rgba(15,23,42,0.16)]"
+                      : "text-muted hover:bg-black/[0.05] hover:text-ink",
+                  )}
+                  onClick={openHistoryDrawer}
+                  aria-label={item.label}
+                  title={item.label}
                 >
-                  <X className="h-4 w-4" />
+                  <Icon className="h-5 w-5" />
                 </button>
-              </div>
-              <div className="min-h-0 flex-1 overflow-hidden">
-                <SidebarHistory onModalStateChange={setHistoryModalOpen} />
-              </div>
+              );
+            })}
+
+            <div className="mt-auto flex flex-col items-center gap-2">
+              {[
+                { label: "Suggest idea", icon: Lightbulb },
+                { label: "Settings", icon: Settings2 },
+              ].map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.label}
+                    type="button"
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-full text-muted transition hover:bg-black/[0.05] hover:text-ink"
+                    onClick={openHistoryDrawer}
+                    aria-label={item.label}
+                    title={item.label}
+                  >
+                    <Icon className="h-5 w-5" />
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        ) : null}
+
+          <div
+            className={cn(
+              "h-full min-h-0 w-[360px] overflow-hidden transition-opacity duration-150",
+              historyDrawerOpen ? "opacity-100" : "pointer-events-none opacity-0",
+            )}
+            onMouseEnter={cancelCloseDrawer}
+          >
+            <SidebarHistory onModalStateChange={setHistoryModalOpen} />
+          </div>
+        </div>
       </div>
     </ErrorBoundary>
   );
