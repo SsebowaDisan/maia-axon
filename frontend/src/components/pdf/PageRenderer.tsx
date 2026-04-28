@@ -159,7 +159,7 @@ export function PageRenderer({
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
   const [renderedSize, setRenderedSize] = useState({ width: 0, height: 0 });
   const [imageSrc, setImageSrc] = useState(page.image_url);
-  const [shouldLoadImage, setShouldLoadImage] = useState(false);
+  const [shouldLoadImage, setShouldLoadImage] = useState(scrollMode === "natural");
   const coordinateWidth = page.page_width || naturalSize.width;
   const coordinateHeight = page.page_height || naturalSize.height;
   const outlineLinks = useMemo(() => parsePersistedPageJumpLinks(page.regions), [page.regions]);
@@ -168,6 +168,16 @@ export function PageRenderer({
   const showOutlineLinks = !showRegionLinks && outlineLinks.length > 0;
 
   useEffect(() => {
+    setImageSrc(page.image_url);
+    setShouldLoadImage(scrollMode === "natural");
+  }, [page.document_id, page.image_url, page.page_number, scrollMode]);
+
+  useEffect(() => {
+    if (scrollMode === "natural") {
+      setShouldLoadImage(true);
+      return;
+    }
+
     const element = containerRef.current;
     if (!element) {
       return;
@@ -185,7 +195,7 @@ export function PageRenderer({
 
     observer.observe(element);
     return () => observer.disconnect();
-  }, [page.document_id, page.page_number]);
+  }, [page.document_id, page.page_number, scrollMode]);
 
   useEffect(() => {
     if (!shouldLoadImage) {
@@ -235,7 +245,7 @@ export function PageRenderer({
           headers: {
             Authorization: `Bearer ${token}`,
           },
-          cache: "force-cache",
+          cache: "no-store",
           signal: controller.signal,
         });
 
