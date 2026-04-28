@@ -6,7 +6,7 @@ import { Composer } from "@/components/chat/Composer";
 import { MessageList } from "@/components/chat/MessageList";
 import { useChatStore } from "@/stores/chatStore";
 
-export function ChatPanel() {
+export function ChatPanel({ workspaceDrawerOpen = false }: { workspaceDrawerOpen?: boolean }) {
   const messages = useChatStore((state) => state.messages);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -19,7 +19,13 @@ export function ChatPanel() {
         <MessageList messages={messages} scrollContainerRef={scrollContainerRef} />
       </div>
       <div className="sticky bottom-0 bg-panel pt-2">
-        <div className="mx-auto w-full max-w-[1480px] px-2">
+        <div
+          className={`mx-auto w-full px-2 transition-[max-width,margin-left] duration-200 ease-out ${
+            workspaceDrawerOpen
+              ? "ml-auto max-w-[calc(100vw-420px)]"
+              : "max-w-[1480px]"
+          }`}
+        >
           <Composer />
         </div>
       </div>

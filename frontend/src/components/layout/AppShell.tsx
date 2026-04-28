@@ -162,7 +162,7 @@ export function AppShell() {
           <PanelGroup direction="horizontal" className="h-full min-h-0">
             <Panel defaultSize={56} minSize={40}>
               <div className="h-full min-h-0 overflow-hidden rounded-[24px] bg-panel">
-                <ChatPanel />
+                <ChatPanel workspaceDrawerOpen={historyDrawerOpen} />
               </div>
             </Panel>
             {showSourcesPanel ? (
