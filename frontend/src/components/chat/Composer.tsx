@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ClipboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { BarChart3, Building2, Check, ChevronDown, Hash, Layers3, Paperclip, Plus, Send, X } from "lucide-react";
 
 import { CompanySelector } from "@/components/chat/CompanySelector";
@@ -47,6 +47,26 @@ function isDocumentMode(mode: SearchMode) {
 
 function isGoogleMode(mode: SearchMode): mode is Extract<SearchMode, "google_analytics" | "google_ads"> {
   return mode === "google_analytics" || mode === "google_ads";
+}
+
+function imageExtensionFromMime(type: string) {
+  if (type === "image/jpeg") {
+    return "jpg";
+  }
+  if (type === "image/webp") {
+    return "webp";
+  }
+  if (type === "image/gif") {
+    return "gif";
+  }
+  return "png";
+}
+
+function fileFromClipboardImage(file: File, index: number) {
+  const extension = imageExtensionFromMime(file.type);
+  const fallbackName = `pasted-image-${new Date().toISOString().replace(/[:.]/g, "-")}-${index + 1}.${extension}`;
+  const filename = file.name && file.name !== "image.png" ? file.name : fallbackName;
+  return new File([file], filename, { type: file.type || "image/png", lastModified: Date.now() });
 }
 
 function getAvailableCompanies(
@@ -288,7 +308,7 @@ export function Composer() {
     await sendMessage(message);
   }
 
-  async function handleAttachFiles(files: FileList | null) {
+  async function handleAttachFiles(files: FileList | File[] | null) {
     if (!files?.length) {
       return;
     }
@@ -301,6 +321,29 @@ export function Composer() {
         fileInputRef.current.value = "";
       }
     }
+  }
+
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (streaming || welcomeStreaming) {
+      return;
+    }
+
+    const clipboardItems = Array.from(event.clipboardData.items ?? []);
+    const imageFiles = clipboardItems
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null)
+      .map(fileFromClipboardImage);
+
+    if (!imageFiles.length) {
+      return;
+    }
+
+    if (!event.clipboardData.getData("text/plain")) {
+      event.preventDefault();
+    }
+
+    void handleAttachFiles(imageFiles);
   }
 
   const placeholder = needsProjectSelection
@@ -547,6 +590,7 @@ export function Composer() {
                 }
               }
             }}
+            onPaste={handlePaste}
             className={`min-h-[36px] flex-1 border-0 bg-transparent px-1 py-[7px] pr-2 text-[16px] leading-6 tracking-[-0.02em] shadow-none placeholder:text-muted/85 focus:border-0 focus:ring-0 ${
               isExpandedComposer ? "max-h-[190px] overflow-y-auto scrollbar-thin" : ""
             }`}
