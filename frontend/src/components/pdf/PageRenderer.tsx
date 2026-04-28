@@ -398,7 +398,7 @@ export function PageRenderer({
           <img
             ref={imageRef}
             src={imageSrc}
-            alt={`Page ${page.page_number}`}
+            alt={`PDF page ${page.page_number}`}
             className="block h-auto w-full"
             loading="lazy"
             decoding="async"

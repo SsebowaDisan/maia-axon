@@ -88,7 +88,7 @@ function PageThumbnail({
         {cachedPage ? (
           <img
             src={cachedPage.image_url}
-            alt={`Page ${cachedPage.printed_page_label ?? pageNumber}`}
+            alt={`PDF page ${pageNumber}`}
             className="h-full w-full object-cover object-top"
             loading="lazy"
             decoding="async"
@@ -106,7 +106,7 @@ function PageThumbnail({
             : "border-black/[0.10] bg-white text-muted"
         }`}
       >
-        {cachedPage?.printed_page_label ?? pageNumber}
+        {pageNumber}
       </span>
     </button>
   );
@@ -377,9 +377,7 @@ export function PDFViewer() {
       <div className="flex items-center justify-between border-b border-line px-4 py-2 text-[11px] text-muted">
         <span>
           {highlights.length ? "Evidence on " : ""}
-          {pageData?.printed_page_label
-            ? `page ${pageData.printed_page_label} (PDF ${currentPage})`
-            : `page ${currentPage}`}
+          PDF page {currentPage}
         </span>
         {highlights.length ? (
           <button type="button" className="text-accent" onClick={clearHighlights}>

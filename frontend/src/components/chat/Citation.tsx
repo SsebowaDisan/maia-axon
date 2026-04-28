@@ -38,7 +38,7 @@ export function CitationChip({
           >
             <p className="font-semibold">{citation.document_name || citation.title || "Source"}</p>
             <p className="mt-1 text-muted">
-              {citation.source_type === "pdf" ? `Page ${citation.page}` : citation.url}
+              {citation.source_type === "pdf" ? `PDF page ${citation.page}` : citation.url}
             </p>
             {citation.snippet ? <p className="mt-2 line-clamp-4 text-ink/85">{citation.snippet}</p> : null}
           </Tooltip.Content>

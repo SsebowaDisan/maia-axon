@@ -72,7 +72,7 @@ function PreviewThumbnail({
         {cachedPage ? (
           <img
             src={cachedPage.image_url}
-            alt={`Page ${cachedPage.printed_page_label ?? pageNumber}`}
+            alt={`PDF page ${pageNumber}`}
             className="h-full w-full object-cover object-top"
             loading="lazy"
             decoding="async"
@@ -90,7 +90,7 @@ function PreviewThumbnail({
             : "border-black/[0.10] bg-white text-muted"
         }`}
       >
-        {cachedPage?.printed_page_label ?? pageNumber}
+        {pageNumber}
       </span>
     </button>
   );
