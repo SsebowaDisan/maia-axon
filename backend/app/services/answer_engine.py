@@ -264,6 +264,63 @@ def _normalize_inline_citation_labels(text: str) -> str:
     return normalized
 
 
+def _extract_citation_reference_indices(text: str) -> list[int]:
+    normalized = _normalize_inline_citation_labels(text)
+    ordered_unique: list[int] = []
+    seen: set[int] = set()
+    for match in re.finditer(r"\[(\d+)\]", normalized):
+        index = int(match.group(1))
+        if index < 1 or index in seen:
+            continue
+        seen.add(index)
+        ordered_unique.append(index)
+    return ordered_unique
+
+
+def _coerce_source_indices(indices: list[int] | list[object] | object, max_index: int) -> list[int]:
+    if not isinstance(indices, list):
+        return []
+
+    ordered_unique: list[int] = []
+    seen: set[int] = set()
+    for raw_index in indices:
+        try:
+            index = int(str(raw_index).strip())
+        except Exception:
+            continue
+        if index < 1 or index > max_index or index in seen:
+            continue
+        seen.add(index)
+        ordered_unique.append(index)
+    return ordered_unique
+
+
+def _merge_source_indices(*groups: list[int]) -> list[int]:
+    ordered_unique: list[int] = []
+    seen: set[int] = set()
+    for group in groups:
+        for index in group:
+            if index in seen:
+                continue
+            seen.add(index)
+            ordered_unique.append(index)
+    return ordered_unique
+
+
+def _remove_unresolved_citation_references(text: str, citations: list[Citation]) -> str:
+    max_index = len(citations)
+
+    def replace(match: re.Match[str]) -> str:
+        index = int(match.group(1))
+        return match.group(0) if 1 <= index <= max_index else ""
+
+    cleaned = re.sub(r"\[(\d+)\]", replace, _normalize_inline_citation_labels(text))
+    cleaned = re.sub(r"\s+([,.;:)])", r"\1", cleaned)
+    cleaned = re.sub(r"\(\s*\)", "", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned.strip()
+
+
 def _strip_empty_missing_information_section(text: str) -> str:
     patterns = [
         r"(?is)\n{0,2}##\s*Missing information\s*\n+"
@@ -1053,23 +1110,33 @@ def qa_agent(
         used_sources = []
         unsupported_claims = []
 
+    used_sources = _merge_source_indices(
+        _coerce_source_indices(used_sources, len(all_citations)),
+        _coerce_source_indices(_extract_citation_reference_indices(answer_text), len(all_citations)),
+    )
     answer_text, citations = _reindex_citation_references(answer_text, all_citations, used_sources)
+    verification_source_indices = used_sources or list(range(1, len(sources) + 1))
     verified_sources, verifier_unsupported_claims = _verify_grounded_answer(
         query=query,
         answer_text=answer_text,
         sources=[
             sources[index - 1]
-            for index in used_sources
+            for index in verification_source_indices
             if isinstance(index, int) and 1 <= index <= len(sources)
         ] or sources,
         search_mode=search_mode,
     )
     if verified_sources:
+        verified_sources = _merge_source_indices(
+            _coerce_source_indices(verified_sources, len(citations)),
+            _coerce_source_indices(_extract_citation_reference_indices(answer_text), len(citations)),
+        )
         answer_text, citations = _reindex_citation_references(answer_text, citations, verified_sources)
     unsupported_claims.extend(
         claim for claim in verifier_unsupported_claims if claim not in unsupported_claims
     )
     answer_text, citations = _deduplicate_citation_references(answer_text, citations)
+    answer_text = _remove_unresolved_citation_references(answer_text, citations)
     answer_text = ensure_inline_citation_references(answer_text, citations)
 
     # Check for OCR warnings

@@ -86,7 +86,7 @@ export function documentProgressLabel(current?: number | null, total?: number | 
 export function transformCitationLinks(content: string, citations: Citation[]) {
   const toCitationLink = (rawNumber: string) => {
     const index = Number(rawNumber) - 1;
-    const citation = citations[index];
+    const citation = citations[index] ?? citations.find((item) => item.id === `cite-${rawNumber}`);
     if (!citation) {
       return `[${rawNumber}]`;
     }
