@@ -387,7 +387,7 @@ export function PageRenderer({
                 >
                   <span className="min-w-0 truncate text-[12px] text-ink">{entry.label}</span>
                   <span className="shrink-0 border border-black/[0.10] bg-[#f5f4f1] px-2 py-1 text-[10px] font-medium tracking-[0.12em] text-muted">
-                    PDF {entry.pageNumber}
+                    Page {entry.pageLabel ?? entry.pageNumber}
                   </span>
                 </button>
               ))}
@@ -426,8 +426,8 @@ export function PageRenderer({
                   <button
                     key={`region-link-${page.page_number}-${entry.pageNumber}-${entry.label}`}
                     type="button"
-                    aria-label={`${entry.label}, PDF page ${entry.pageNumber}`}
-                    title={`${entry.label} -> PDF page ${entry.pageNumber}`}
+                    aria-label={`${entry.label}, page ${entry.pageLabel ?? entry.pageNumber}`}
+                    title={`${entry.label} -> page ${entry.pageLabel ?? entry.pageNumber}`}
                     onClick={() => onNavigateToExactPage?.(entry.pageNumber)}
                     className="pointer-events-auto absolute border border-transparent bg-transparent transition hover:border-black/15 hover:bg-[#f0e2a0]/20 focus:border-black/20 focus:bg-[#f0e2a0]/24 focus:outline-none"
                     style={{
