@@ -9,7 +9,7 @@ import { useChatStore } from "@/stores/chatStore";
 export function ChatPanel() {
   const messages = useChatStore((state) => state.messages);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
-  const contentColumnClass = "ml-auto w-full max-w-[calc(100vw-468px)] min-w-0 px-2";
+  const contentColumnClass = "mx-auto w-full max-w-[1120px] min-w-0 px-2";
 
   return (
     <div className="grid h-full min-h-0 grid-rows-[auto,minmax(0,1fr),auto] overflow-hidden px-3 py-3">
