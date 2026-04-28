@@ -84,9 +84,18 @@ export function documentProgressLabel(current?: number | null, total?: number | 
 }
 
 export function transformCitationLinks(content: string, citations: Citation[]) {
+  const citationByReferenceNumber = (rawNumber: string) =>
+    citations.find((item) => {
+      if (item.id === rawNumber || item.id === `cite-${rawNumber}` || item.id === `source-${rawNumber}`) {
+        return true;
+      }
+      const semanticIdMatch = item.id.match(/^(?:cite|source)[-_]?(\d+)$/i);
+      return semanticIdMatch?.[1] === rawNumber;
+    });
+
   const toCitationLink = (rawNumber: string) => {
     const index = Number(rawNumber) - 1;
-    const citation = citations[index] ?? citations.find((item) => item.id === `cite-${rawNumber}`);
+    const citation = citations[index] ?? citationByReferenceNumber(rawNumber);
     if (!citation) {
       return `[${rawNumber}]`;
     }
