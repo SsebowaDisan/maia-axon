@@ -49,6 +49,7 @@ class Settings(BaseSettings):
 
     # Retrieval
     retrieval_top_k: int = 80
+    vector_ivfflat_probes: int = 30
     rerank_top_k: int = 12
     llm_rerank_candidate_k: int = 24
     neighbor_window_pages: int = 1

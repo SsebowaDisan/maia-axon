@@ -7,3 +7,4 @@ ventilatoren-sample.pdf
 __pycache__/
 *.pyc
 .DS_Store
+deploy/gcp/.last-deploy-local.env

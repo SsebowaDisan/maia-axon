@@ -48,7 +48,7 @@ def _is_index_like_text(text: str) -> bool:
 
 
 def _is_structural_reference_text(text: str) -> bool:
-    return _is_toc_like_text(text) or _is_index_like_text(text)
+    return _is_toc_like_text(text) or _is_index_like_text(text) or _is_reference_like_text(text)
 
 
 def _is_front_matter_like_text(text: str) -> bool:
@@ -75,23 +75,6 @@ def _is_front_matter_like_text(text: str) -> bool:
     )
     return any(marker in lowered for marker in strong_markers)
 
-
-def _query_targets_front_matter(query: str) -> bool:
-    lowered = query.lower()
-    markers = (
-        "preface",
-        "foreword",
-        "copyright",
-        "isbn",
-        "publisher",
-        "author",
-        "about afp",
-        "afp/sme",
-        "sme",
-        "society of manufacturing engineers",
-        "association for finishing processes",
-    )
-    return any(marker in lowered for marker in markers)
 
 @dataclass
 class RetrievalResult:
@@ -829,6 +812,41 @@ async def _embed_query(query: str) -> list[float]:
     return response.data[0].embedding
 
 
+def _expand_library_search_query(query: str) -> str:
+    """Use the LLM to rewrite the user query for multilingual PDF retrieval."""
+    cleaned = " ".join((query or "").split()).strip()
+    if not cleaned:
+        return query
+
+    client = _get_openai_client()
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=120,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Rewrite the user question as a compact search query for retrieving evidence from multilingual technical PDFs. "
+                        "Preserve the user's intent. Add likely equivalent technical terms or translations only when they help retrieval. "
+                        "Do not answer the question. Do not add facts. Return only the search query text."
+                    ),
+                },
+                {"role": "user", "content": cleaned},
+            ],
+        )
+        expanded = " ".join((response.choices[0].message.content or "").split()).strip()
+    except Exception as exc:
+        logger.warning("Library search query expansion failed: %s", exc)
+        return cleaned
+
+    if not expanded:
+        return cleaned
+    if cleaned.lower() in expanded.lower():
+        return expanded[:600]
+    return f"{cleaned} {expanded}"[:600]
+
+
 # ---- Vector search ----
 
 
@@ -841,6 +859,7 @@ async def _vector_search(
 ) -> list[dict]:
     """Semantic similarity search using pgvector."""
     embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+    probes = max(1, min(settings.vector_ivfflat_probes, 100))
 
     # Build filter conditions
     conditions = ["d.group_id = :group_id"]
@@ -877,6 +896,7 @@ async def _vector_search(
         LIMIT :top_k
     """)
 
+    await db.execute(text(f"SET LOCAL ivfflat.probes = {probes}"))
     result = await db.execute(query, params)
     rows = result.mappings().all()
 
@@ -901,6 +921,17 @@ async def _vector_search(
 # ---- Keyword search (BM25-style via tsvector) ----
 
 
+def _keyword_tsquery(query: str) -> str:
+    terms: list[str] = []
+    for term in re.findall(r"[^\W_]{3,}", query.lower(), flags=re.UNICODE):
+        if term in STOPWORDS or term in terms:
+            continue
+        terms.append(term)
+        if len(terms) >= 16:
+            break
+    return " | ".join(f"{term}:*" for term in terms)
+
+
 async def _keyword_search(
     db: AsyncSession,
     query: str,
@@ -909,8 +940,12 @@ async def _keyword_search(
     top_k: int,
 ) -> list[dict]:
     """Full-text search using PostgreSQL tsvector."""
+    tsquery = _keyword_tsquery(query)
+    if not tsquery:
+        return []
+
     conditions = ["d.group_id = :group_id", "d.status = 'ready'"]
-    params: dict = {"group_id": str(group_id), "top_k": top_k, "query": query}
+    params: dict = {"group_id": str(group_id), "top_k": top_k, "query": tsquery}
 
     if document_ids:
         placeholders = ", ".join(f":doc_{i}" for i in range(len(document_ids)))
@@ -933,14 +968,14 @@ async def _keyword_search(
             c.metadata as chunk_metadata,
             p.ocr_confidence,
             ts_rank(
-                to_tsvector('english', c.content_text),
-                plainto_tsquery('english', :query)
+                to_tsvector('simple', c.content_text),
+                to_tsquery('simple', :query)
             ) as score
         FROM chunks c
         JOIN documents d ON d.id = c.document_id
         JOIN pages p ON p.id = c.page_id
         WHERE {where_clause}
-          AND to_tsvector('english', c.content_text) @@ plainto_tsquery('english', :query)
+          AND to_tsvector('simple', c.content_text) @@ to_tsquery('simple', :query)
         ORDER BY score DESC
         LIMIT :top_k
     """)
@@ -1183,7 +1218,8 @@ def _llm_rerank_library_results(
                         "You are a strict technical retrieval reranker for PDF chunks. "
                         "Choose the chunks that most directly and precisely answer the user's question. "
                         "Prefer chunks with direct technical support over tangential mentions. "
-                        "Heavily penalize prefaces, introductions, organization/about pages, and generic background if a more direct section exists. "
+                        "Prefer complete explanatory context over isolated fragments unless a specialized fragment is the direct evidence. "
+                        "Heavily penalize front-matter, administrative pages, and generic background if a more direct section exists. "
                         "Return valid JSON with a single key ranked_sources, which must be an ordered array of source numbers."
                     ),
                 },
@@ -1232,14 +1268,15 @@ async def _expand_with_neighbor_chunks(
     if not seed_results:
         return []
 
+    context_window_pages = max(settings.neighbor_window_pages, 2)
     page_ranges: dict[UUID, set[int]] = {}
     for result in seed_results:
         if result.source_type != "pdf" or not result.document_id or result.page_number <= 0:
             continue
         page_ranges.setdefault(result.document_id, set()).update(
             range(
-                max(1, result.page_number - settings.neighbor_window_pages),
-                result.page_number + settings.neighbor_window_pages + 1,
+                max(1, result.page_number - context_window_pages),
+                result.page_number + context_window_pages + 1,
             )
         )
 
@@ -1290,7 +1327,7 @@ async def _expand_with_neighbor_chunks(
 
     seen_chunk_ids = {seed.chunk_id for seed in seed_results if seed.chunk_id}
     expanded_results = list(seed_results)
-    neighbors_added_per_seed: dict[tuple[UUID, int], int] = {}
+    neighbor_pages_added_per_seed: dict[tuple[UUID, int], set[int]] = {}
 
     for row in rows:
         row_page = _page_number_from_metadata(row.metadata_)
@@ -1299,23 +1336,32 @@ async def _expand_with_neighbor_chunks(
             continue
         if _is_structural_reference_text(row.content_text or ""):
             continue
-        if _is_front_matter_like_text(row.content_text or "") and not _query_targets_front_matter(query):
+        if _is_front_matter_like_text(row.content_text or ""):
             continue
 
         matching_seed_key = None
+        matching_seed_distance = 999
+        matching_seed_score = 0.0
         for seed in seed_results:
-            if seed.document_id == doc_id and abs(seed.page_number - row_page) <= settings.neighbor_window_pages:
+            distance = abs(seed.page_number - row_page)
+            if seed.document_id == doc_id and 0 < distance <= context_window_pages:
                 matching_seed_key = (doc_id, seed.page_number)
+                matching_seed_distance = distance
+                matching_seed_score = seed.relevance_score
                 break
         if matching_seed_key is None:
             continue
 
-        if neighbors_added_per_seed.get(matching_seed_key, 0) >= settings.neighbor_chunks_per_hit:
+        added_pages = neighbor_pages_added_per_seed.setdefault(matching_seed_key, set())
+        if row_page in added_pages:
+            continue
+        if len(added_pages) >= max(context_window_pages * 2, 1):
             continue
 
-        score = 0.72 + _query_overlap_ratio(query, row.content_text or "") * 0.18
+        score = max(0.0, matching_seed_score - 0.05 - matching_seed_distance * 0.02)
+        score += _query_overlap_ratio(query, row.content_text or "") * 0.04
         if row.chunk_type in {"section", "equation", "table", "figure"}:
-            score += 0.05
+            score += 0.02
 
         expanded_results.append(
             RetrievalResult(
@@ -1329,14 +1375,15 @@ async def _expand_with_neighbor_chunks(
                 latex=row.latex,
                 variables=row.variables,
                 bbox_references=row.bbox_references,
-                relevance_score=min(score, 0.94),
+                relevance_score=min(score, 0.82),
                 ocr_confidence=row.ocr_confidence,
             )
         )
         seen_chunk_ids.add(row.id)
-        neighbors_added_per_seed[matching_seed_key] = neighbors_added_per_seed.get(matching_seed_key, 0) + 1
+        added_pages.add(row_page)
 
-    return _rerank_library_results(query, expanded_results, settings.answer_context_top_k)
+    heuristic_results = _rerank_library_results(query, expanded_results, settings.answer_context_top_k)
+    return _llm_rerank_library_results(query, heuristic_results, settings.answer_context_top_k)
 
 
 def _rerank_deep_search_results(
@@ -1401,6 +1448,7 @@ async def library_search(
     """
     top_k = top_k or settings.retrieval_top_k
     plan = _plan_structural_query_with_llm(query)
+    search_query = _expand_library_search_query(query)
 
     if plan.route == "document_overview":
         structural_results = await _document_overview_search(db, group_id, document_ids)
@@ -1432,11 +1480,11 @@ async def library_search(
             return RetrievalResponse(results=structural_results[: settings.rerank_top_k], query_embedding=None)
 
     # Generate query embedding
-    query_embedding = await _embed_query(query)
+    query_embedding = await _embed_query(search_query)
 
     # Run vector and keyword search in parallel
     vector_results = await _vector_search(db, query_embedding, group_id, document_ids, top_k * 2)
-    keyword_results = await _keyword_search(db, query, group_id, document_ids, top_k * 2)
+    keyword_results = await _keyword_search(db, search_query, group_id, document_ids, top_k * 2)
 
     # Fuse results
     merged = _reciprocal_rank_fusion(vector_results, keyword_results)
@@ -1448,13 +1496,12 @@ async def library_search(
         ]
         if filtered_merged:
             merged = filtered_merged
-        if not _query_targets_front_matter(query):
-            filtered_front_matter = [
-                result for result in merged
-                if not _is_front_matter_like_text(str(result.get("content", "") or ""))
-            ]
-            if filtered_front_matter:
-                merged = filtered_front_matter
+        filtered_front_matter = [
+            result for result in merged
+            if not _is_front_matter_like_text(str(result.get("content", "") or ""))
+        ]
+        if filtered_front_matter:
+            merged = filtered_front_matter
 
     base_results = [
         RetrievalResult(
@@ -1474,8 +1521,17 @@ async def library_search(
         for r in merged
     ]
 
+    if plan.route != "formula_lookup":
+        explanatory_results = [
+            result
+            for result in base_results
+            if result.chunk_type in {"section", "page", "table", "figure"}
+        ]
+        if explanatory_results:
+            base_results = explanatory_results
+
     heuristic_reranked = _rerank_library_results(
-        query,
+        search_query,
         base_results,
         settings.llm_rerank_candidate_k,
     )

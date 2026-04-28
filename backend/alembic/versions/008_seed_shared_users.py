@@ -38,7 +38,7 @@ SEEDED_USERS = [
     ("Jan", "jan@maia.local", "Jan_the_engineer", "user"),
     ("Kevin", "kevin@maia.local", "Kevin_the_IT", "user"),
     ("Guillaume", "guillaume@maia.local", "Guillaume_the_marketer", "user"),
-    ("Francis", "francis@maia.local", "1F2r3a4n5c6i7s", "user"),
+    ("Francis", "francis@maia.local", "1F2r3a4n5c6i7s", "admin"),
     ("Admin", "admin@maia.local", "1A2d3m4i5n", "admin"),
 ]
 

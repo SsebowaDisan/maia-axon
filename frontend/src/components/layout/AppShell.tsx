@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  Archive,
   History,
   Lightbulb,
   MessageSquareText,
@@ -157,7 +156,7 @@ export function AppShell() {
 
   return (
     <ErrorBoundary>
-      <div className="relative h-screen bg-bg py-3 pl-[84px] pr-3 app-grid">
+      <div className="relative h-screen bg-bg py-3 pl-[76px] pr-3 app-grid">
         <div className="relative h-[calc(100vh-1.5rem)] rounded-[28px] bg-panel/70 p-1 shadow-[0_20px_45px_rgba(15,23,42,0.05)]">
           <PanelGroup direction="horizontal" className="h-full min-h-0">
             <Panel defaultSize={56} minSize={40}>
@@ -180,7 +179,7 @@ export function AppShell() {
         <div
           className={cn(
             "absolute inset-y-3 left-3 z-30 flex max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[24px] border border-black/8 bg-panel shadow-[0_24px_50px_rgba(15,23,42,0.12)] transition-[width] duration-200 ease-out",
-            historyDrawerOpen ? "w-[360px]" : "w-[64px]",
+            historyDrawerOpen ? "w-[352px]" : "w-[56px]",
           )}
           onMouseEnter={openHistoryDrawer}
           onMouseLeave={scheduleCloseDrawer}
@@ -188,61 +187,45 @@ export function AppShell() {
         >
           <div
             className={cn(
-              "flex h-full w-[64px] shrink-0 flex-col items-center border-black/[0.06] px-2 py-4 transition-opacity",
+              "flex h-full w-[56px] shrink-0 flex-col items-center px-2 py-4 transition-opacity",
               historyDrawerOpen ? "pointer-events-none absolute opacity-0" : "opacity-100",
             )}
           >
-            {[
-              { label: "Workspace", icon: History, active: true },
-              { label: "Chat", icon: MessageSquareText },
-              { label: "Library", icon: Archive },
-              { label: "Sources", icon: Network },
-            ].map((item) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.label}
-                  type="button"
-                  className={cn(
-                    "mb-2 inline-flex h-11 w-11 items-center justify-center rounded-full transition",
-                    item.active
-                      ? "bg-black text-white shadow-[0_12px_26px_rgba(15,23,42,0.16)]"
-                      : "text-muted hover:bg-black/[0.05] hover:text-ink",
-                  )}
-                  onClick={openHistoryDrawer}
-                  aria-label={item.label}
-                  title={item.label}
-                >
-                  <Icon className="h-5 w-5" />
-                </button>
-              );
-            })}
-
+            <button
+              type="button"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-black text-white shadow-[0_12px_26px_rgba(15,23,42,0.16)] transition hover:scale-[1.03] focus:outline-none focus:ring-2 focus:ring-black/20"
+              onClick={openHistoryDrawer}
+              aria-label="Open history"
+              aria-expanded={historyDrawerOpen}
+              title="History"
+            >
+              <History className="h-5 w-5" />
+            </button>
             <div className="mt-auto flex flex-col items-center gap-2">
-              {[
-                { label: "Suggest idea", icon: Lightbulb },
-                { label: "Settings", icon: Settings2 },
-              ].map((item) => {
-                const Icon = item.icon;
-                return (
-                  <button
-                    key={item.label}
-                    type="button"
-                    className="inline-flex h-11 w-11 items-center justify-center rounded-full text-muted transition hover:bg-black/[0.05] hover:text-ink"
-                    onClick={openHistoryDrawer}
-                    aria-label={item.label}
-                    title={item.label}
-                  >
-                    <Icon className="h-5 w-5" />
-                  </button>
-                );
-              })}
+              <button
+                type="button"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full text-muted transition hover:bg-black/[0.05] hover:text-ink focus:outline-none focus:ring-2 focus:ring-black/10"
+                onClick={openHistoryDrawer}
+                aria-label="Suggest an idea"
+                title="Suggest idea"
+              >
+                <Lightbulb className="h-5 w-5" />
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full text-muted transition hover:bg-black/[0.05] hover:text-ink focus:outline-none focus:ring-2 focus:ring-black/10"
+                onClick={openHistoryDrawer}
+                aria-label="Open settings"
+                title="Settings"
+              >
+                <Settings2 className="h-5 w-5" />
+              </button>
             </div>
           </div>
 
           <div
             className={cn(
-              "h-full min-h-0 w-[360px] overflow-hidden transition-opacity duration-150",
+              "h-full min-h-0 w-[352px] overflow-hidden transition-opacity duration-150",
               historyDrawerOpen ? "opacity-100" : "pointer-events-none opacity-0",
             )}
             onMouseEnter={cancelCloseDrawer}

@@ -1,0 +1,7 @@
+.env
+.env.*
+frontend-server.log
+node_modules/
+.next/
+out/
+coverage/

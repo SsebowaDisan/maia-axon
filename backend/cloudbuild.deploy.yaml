@@ -1,0 +1,15 @@
+substitutions:
+  _IMAGE: ""
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.prod
+      - -t
+      - ${_IMAGE}
+      - .
+
+images:
+  - ${_IMAGE}

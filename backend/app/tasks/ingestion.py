@@ -153,9 +153,51 @@ def _document_page_rows(db: Session, doc_id: str) -> list[Page]:
     return (
         db.query(Page)
         .filter(Page.document_id == uuid.UUID(doc_id))
-        .order_by(Page.page_number.asc())
+        .order_by(Page.page_number.asc(), Page.created_at.desc(), Page.id.desc())
         .all()
     )
+
+
+def _page_completeness_score(page: Page) -> tuple[int, int, int]:
+    return (
+        1 if _is_page_ocr_complete(page) else 0,
+        1 if _is_page_caption_complete(page) else 0,
+        len(page.regions or []),
+    )
+
+
+def _deduplicate_document_pages(db: Session, doc_id: str) -> int:
+    pages = _document_page_rows(db, doc_id)
+    by_page_number: dict[int, list[Page]] = {}
+    for page in pages:
+        by_page_number.setdefault(page.page_number, []).append(page)
+
+    duplicate_ids: list[uuid.UUID] = []
+    for page_number, candidates in by_page_number.items():
+        if len(candidates) <= 1:
+            continue
+        keep = max(candidates, key=_page_completeness_score)
+        duplicate_ids.extend(page.id for page in candidates if page.id != keep.id)
+        logger.warning(
+            "[%s] Removing %s duplicate page rows for page %s",
+            doc_id,
+            len(candidates) - 1,
+            page_number,
+        )
+
+    if not duplicate_ids:
+        return 0
+
+    duplicate_chunk_ids = [
+        row[0]
+        for row in db.query(Chunk.id).filter(Chunk.page_id.in_(duplicate_ids)).all()
+    ]
+    if duplicate_chunk_ids:
+        db.execute(delete(ChunkEmbedding).where(ChunkEmbedding.chunk_id.in_(duplicate_chunk_ids)))
+        db.execute(delete(Chunk).where(Chunk.id.in_(duplicate_chunk_ids)))
+    db.execute(delete(Page).where(Page.id.in_(duplicate_ids)))
+    db.commit()
+    return len(duplicate_ids)
 
 
 def _progress_log(doc_id: str, stage: str, current: int, total: int):
@@ -1125,6 +1167,7 @@ def split_document(self, doc_id: str):
         doc.page_count = page_count
         db.commit()
 
+        _deduplicate_document_pages(db, doc_id)
         existing_pages = {page.page_number: page for page in _document_page_rows(db, doc_id)}
         completed = sum(1 for page in existing_pages.values() if _is_page_split_complete(page))
         _start_stage(db, doc_id, "splitting", total=page_count, current=completed)
@@ -1176,6 +1219,7 @@ def run_ocr_stage(self, doc_id: str):
     pdf_doc = None
     try:
         logger.info("[%s] Stage 2: Extracting text with OCR fallback", doc_id)
+        _deduplicate_document_pages(db, doc_id)
         pages = _document_page_rows(db, doc_id)
         total = len(pages)
         if total == 0:
@@ -1240,6 +1284,7 @@ def caption_document(self, doc_id: str):
     db = SyncSession()
     try:
         logger.info("[%s] Stage 3: Captioning figures and extracting variables", doc_id)
+        _deduplicate_document_pages(db, doc_id)
         pages = _document_page_rows(db, doc_id)
         total = len(pages)
         completed = sum(1 for page in pages if _is_page_caption_complete(page))
@@ -1283,6 +1328,7 @@ def embed_document(self, doc_id: str):
     db = SyncSession()
     try:
         logger.info("[%s] Stage 4: Creating chunks and generating embeddings", doc_id)
+        _deduplicate_document_pages(db, doc_id)
         pages = _document_page_rows(db, doc_id)
         if not pages:
             split_document.delay(doc_id)

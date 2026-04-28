@@ -66,24 +66,7 @@ body {
 }
 
 .answer-workspace {
-  display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
-  align-items: start;
-  column-gap: 1.25rem;
-}
-
-.answer-workspace-rail {
-  position: sticky;
-  top: 0.5rem;
-  display: flex;
-  justify-content: center;
-  padding-top: 1.2rem;
-}
-
-.answer-workspace-botmark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
 }
 
 .answer-workspace-surface {
@@ -149,17 +132,6 @@ body {
 }
 
 @media (max-width: 768px) {
-  .answer-workspace {
-    grid-template-columns: 1fr;
-    row-gap: 0.8rem;
-  }
-
-  .answer-workspace-rail {
-    position: static;
-    justify-content: flex-start;
-    padding-top: 0;
-  }
-
   .answer-workspace-surface {
     border-left: 0;
     padding-left: 0;
