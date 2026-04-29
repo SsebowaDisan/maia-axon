@@ -59,12 +59,14 @@ TITLE_ICON_OPTIONS = {
 STRUCTURED_RESPONSE_GUIDANCE = (
     "Always answer in the same natural language the user used in the current question, unless the user explicitly asks for translation or another language. "
     "Write polished Markdown with the voice of a mathematician, scientist, and engineer. "
+    "Use sentence-style capitalization for Markdown headings and titles: capitalize only the first word and proper nouns, company names, product names, or acronyms. "
+    "For example, write 'Google ads report for Coateq', not 'Google Ads Report for Coateq'. "
     "Be precise, analytical, technically disciplined, and professionally explanatory. "
     "Make assumptions explicit, respect units and definitions, and prefer defensible reasoning over casual phrasing. "
     "Default to depth unless the user explicitly asks for brevity. "
     "Start with a short direct answer. "
-    "Then use clear sections when helpful, such as ## Answer, ## Key Points, "
-    "## Explanation, ## Example, ## Calculation, ## Notes, or ## Next Step. "
+    "Then use clear sections when helpful, such as ## Answer, ## Key points, "
+    "## Explanation, ## Example, ## Calculation, ## Notes, or ## Next step. "
     "After the direct answer, explain the idea in enough detail that a serious user understands "
     "what it is, how it works, why it matters, and where it applies. "
     "Do not stop at naming items; explain each item with at least one concrete detail, implication, or example. "
@@ -79,6 +81,67 @@ STRUCTURED_RESPONSE_GUIDANCE = (
     "Do not invent document facts or citations. "
     "Attach inline citations as numbered references like [1], [2], or [3] immediately after the factual sentence or clause they support."
 )
+
+
+def _sentence_style_title(text: str) -> str:
+    """Convert short Markdown titles to sentence-style capitalization."""
+    if not text.strip():
+        return text
+
+    word_seen = False
+
+    def replace_word(match: re.Match[str]) -> str:
+        nonlocal word_seen
+        word = match.group(0)
+        if len(word) > 1 and word.isupper():
+            word_seen = True
+            return word
+        if any(char.isupper() for char in word[1:]):
+            word_seen = True
+            return word
+        lowered = word.lower()
+        if not word_seen:
+            word_seen = True
+            return lowered[:1].upper() + lowered[1:]
+        word_seen = True
+        return lowered
+
+    return re.sub(r"[A-Za-zÀ-ÖØ-öø-ÿ]+", replace_word, text)
+
+
+def _apply_sentence_style_markdown(markdown: str) -> str:
+    """Normalize Markdown headings and compact bold labels without touching body prose."""
+    if not markdown:
+        return markdown
+
+    lines: list[str] = []
+    heading_pattern = re.compile(r"^(#{1,6}\s+)(.*?)(\s+#*)?$")
+    bold_label_pattern = re.compile(r"^(\s*(?:[-*+]|\d+\.)\s+\*\*)([^*\n:]{2,80})(:\*\*)(.*)$")
+
+    for line in markdown.splitlines():
+        heading_match = heading_pattern.match(line)
+        if heading_match:
+            prefix, title, suffix = heading_match.groups()
+            lines.append(f"{prefix}{_sentence_style_title(title.strip())}{suffix or ''}")
+            continue
+
+        bold_match = bold_label_pattern.match(line)
+        if bold_match:
+            prefix, label, suffix, rest = bold_match.groups()
+            lines.append(f"{prefix}{_sentence_style_title(label.strip())}{suffix}{rest}")
+            continue
+
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
+def _style_answer_response(answer: "AnswerResponse") -> "AnswerResponse":
+    answer.text = _apply_sentence_style_markdown(answer.text)
+    for section in answer.sections:
+        if section.content:
+            section.content = _apply_sentence_style_markdown(section.content)
+    return answer
 
 
 @dataclass
@@ -1285,6 +1348,7 @@ def calculation_agent(
                         "Do not claim a calculation can proceed if the setup is not sufficient. "
                         "Keep the tone professional and specific. "
                         "Use clear Markdown headings when helpful. "
+                        "Use sentence-style capitalization for Markdown headings and titles: capitalize only the first word and proper nouns, company names, product names, or acronyms. "
                         "Only add a final section about missing information if the user must still provide concrete missing inputs. "
                         "If there is no missing user input, do not add a 'Missing information' section. "
                         "If there is an internal execution blocker, explain it briefly in professional prose instead of creating a separate missing-information heading. "
@@ -1407,6 +1471,7 @@ def calculation_agent(
                 "one quick comparison, sensitivity note, or sanity check. "
                 "Be detailed enough that a technical user can follow the reasoning without guessing missing steps. "
                 "Use clean Markdown headings and bullets so the response feels polished and easy to scan. "
+                "Use sentence-style capitalization for Markdown headings and titles: capitalize only the first word and proper nouns, company names, product names, or acronyms. "
                 "Do not invent fallback formulas, illustrative numbers, or hypothetical examples unless they are explicitly labeled illustrative and clearly separated from the grounded result. "
                 "If the setup is incomplete, say so directly instead of padding the answer. "
                 "End with a short section titled '## Missing information' only if specific user-supplied inputs are truly missing. "
@@ -1483,7 +1548,8 @@ def clarification_agent(
                 "Do not stop with a standalone clarification question. "
                 "Give the user the best useful answer you can from the sources right now. "
                 "Then, only if narrowing would improve precision, add a final short section titled "
-                "'## If you want, I can narrow this further' with one concise follow-up question or option."
+                "'## If you want, I can narrow this further' with one concise follow-up question or option. "
+                "Use sentence-style capitalization for any other Markdown headings."
             ),
         }, {
             "role": "user",
@@ -1525,6 +1591,7 @@ def standard_agent(
             "Always sound like a mathematician, scientist, and engineer. "
             "This mode does not use retrieval, so do not invent citations or claim document grounding. "
             "Use polished Markdown. Default to detailed explanations unless the user asks for brevity. "
+            "Use sentence-style capitalization for Markdown headings and titles: capitalize only the first word and proper nouns, company names, product names, or acronyms. "
             "Start with a direct answer, then explain the concept in depth: what it is, how it works, why it matters, "
             "common applications, limitations, and practical implications when relevant. "
             "Do not give shallow label-only bullet lists. "
@@ -1571,29 +1638,29 @@ async def generate_answer(
     if classify_ava_question(query, conversation_history):
         answer = ava_agent(query, conversation_history)
         answer.mindmap = _build_mindmap(answer)
-        return answer
+        return _style_answer_response(answer)
 
     if classify_axon_group_question(query):
         answer = axon_group_agent(query, conversation_history)
         answer.mindmap = _build_mindmap(answer)
-        return answer
+        return _style_answer_response(answer)
 
     if classify_identity_question(query):
         answer = identity_agent(query, conversation_history)
         answer.mindmap = _build_mindmap(answer)
-        return answer
+        return _style_answer_response(answer)
 
     if search_mode == "standard":
         answer = standard_agent(query, conversation_history)
         answer.mindmap = _build_mindmap(answer)
-        return answer
+        return _style_answer_response(answer)
 
     if not sources:
-        return AnswerResponse(
+        return _style_answer_response(AnswerResponse(
             text="I couldn't find any relevant information in the selected group's documents. "
             "Try rephrasing your question or selecting a different group.",
             warnings=["No sources found for this query."],
-        )
+        ))
 
     # Step 1: Classify intent
     intent = classify_intent(query, sources)
@@ -1611,7 +1678,7 @@ async def generate_answer(
     if not answer.needs_clarification:
         answer.mindmap = _build_mindmap(answer)
 
-    return answer
+    return _style_answer_response(answer)
 
 
 def _build_mindmap(answer: AnswerResponse) -> MindmapNode:

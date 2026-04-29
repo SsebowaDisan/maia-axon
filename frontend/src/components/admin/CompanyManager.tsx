@@ -456,6 +456,8 @@ export function CompanyManager() {
   const [editing, setEditing] = useState<Company | null>(null);
   const [companyDialogOpen, setCompanyDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Company | null>(null);
+  const [companySaveError, setCompanySaveError] = useState<string | null>(null);
+  const [savingCompany, setSavingCompany] = useState(false);
   const [deletingCompany, setDeletingCompany] = useState(false);
 
   useEffect(() => {
@@ -508,6 +510,8 @@ export function CompanyManager() {
       google_ads_login_customer_id: "",
     });
     setEditing(null);
+    setCompanySaveError(null);
+    setSavingCompany(false);
   }
 
   function closeCompanyDialog() {
@@ -521,6 +525,7 @@ export function CompanyManager() {
   }
 
   function openEditDialog(company: Company) {
+    setCompanySaveError(null);
     setEditing(company);
     setDraft({
       name: company.name,
@@ -542,8 +547,12 @@ export function CompanyManager() {
 
   async function handleSubmit() {
     if (!draft.name.trim()) {
+      setCompanySaveError("Company name is required.");
       return;
     }
+
+    setSavingCompany(true);
+    setCompanySaveError(null);
 
     const payload = {
       name: draft.name.trim(),
@@ -552,15 +561,21 @@ export function CompanyManager() {
       google_ads_login_customer_id: draft.google_ads_login_customer_id.trim() || null,
     };
 
-    if (editing) {
-      await updateCompany(editing.id, payload);
-      setDetailCompanyId(editing.id);
-    } else {
-      const company = await createCompany(payload);
-      setDetailCompanyId(company.id);
-    }
+    try {
+      if (editing) {
+        const company = await updateCompany(editing.id, payload);
+        setDetailCompanyId(company.id);
+      } else {
+        const company = await createCompany(payload);
+        setDetailCompanyId(company.id);
+      }
 
-    closeCompanyDialog();
+      closeCompanyDialog();
+    } catch (error) {
+      setCompanySaveError(error instanceof Error ? error.message : "Could not save this company.");
+    } finally {
+      setSavingCompany(false);
+    }
   }
 
   return (
@@ -804,9 +819,19 @@ export function CompanyManager() {
                   }))
                 }
               />
-              <Button type="button" className="w-full" onClick={() => void handleSubmit()}>
+              {companySaveError ? (
+                <p className="rounded-[18px] border border-danger/20 bg-danger/5 px-4 py-3 text-sm font-medium text-danger">
+                  {companySaveError}
+                </p>
+              ) : null}
+              <Button
+                type="button"
+                className="w-full"
+                disabled={savingCompany}
+                onClick={() => void handleSubmit()}
+              >
                 <Plus className="h-4 w-4" />
-                {editing ? "Save company" : "Create company"}
+                {savingCompany ? "Saving..." : editing ? "Save company" : "Create company"}
               </Button>
             </div>
           </Dialog.Content>

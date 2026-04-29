@@ -34,6 +34,7 @@ from app.services.answer_engine import (
     _build_citations,
     _build_mindmap,
     _format_sources_for_prompt,
+    _style_answer_response,
     axon_group_agent,
     ava_agent,
     classify_ava_question,
@@ -62,12 +63,14 @@ router = APIRouter()
 STRUCTURED_RESPONSE_GUIDANCE = (
     "Always answer in the same natural language the user used in the current question, unless the user explicitly asks for translation or another language. "
     "Write polished Markdown with the voice of a mathematician, scientist, and engineer. "
+    "Use sentence-style capitalization for Markdown headings and titles: capitalize only the first word and proper nouns, company names, product names, or acronyms. "
+    "For example, write 'Core concept', 'How it works', and 'Data collection', not 'Core Concept', 'How It Works', or 'Data Collection'. "
     "Be precise, analytical, technically disciplined, and professionally explanatory. "
     "Make assumptions explicit, respect units and definitions, and prefer defensible reasoning over casual phrasing. "
     "Default to depth unless the user explicitly asks for brevity. "
     "Start with a short direct answer. "
-    "Then use clear sections when helpful, such as ## Answer, ## Key Points, "
-    "## Explanation, ## Example, ## Calculation, ## Notes, or ## Next Step. "
+    "Then use clear sections when helpful, such as ## Answer, ## Key points, "
+    "## Explanation, ## Example, ## Calculation, ## Notes, or ## Next step. "
     "After the direct answer, explain the idea in enough detail that a serious user understands "
     "what it is, how it works, why it matters, and where it applies. "
     "Do not stop at naming items; explain each item with at least one concrete detail, implication, or example. "
@@ -304,6 +307,7 @@ async def websocket_chat(websocket: WebSocket):
                 if classify_ava_question(message, history):
                     await websocket.send_json({"type": "status", "status": "reasoning"})
                     answer = ava_agent(message, history)
+                    answer = _style_answer_response(answer)
                     answer.mindmap = _build_mindmap(answer)
 
                     await websocket.send_json({"type": "token", "content": answer.text})
@@ -329,6 +333,7 @@ async def websocket_chat(websocket: WebSocket):
                 if classify_axon_group_question(message):
                     await websocket.send_json({"type": "status", "status": "reasoning"})
                     answer = axon_group_agent(message, history)
+                    answer = _style_answer_response(answer)
                     answer.mindmap = _build_mindmap(answer)
 
                     await websocket.send_json({"type": "token", "content": answer.text})
@@ -355,6 +360,7 @@ async def websocket_chat(websocket: WebSocket):
                 if classify_identity_question(message):
                     await websocket.send_json({"type": "status", "status": "reasoning"})
                     answer = identity_agent(message, history)
+                    answer = _style_answer_response(answer)
                     answer.mindmap = _build_mindmap(answer)
 
                     await websocket.send_json({"type": "token", "content": answer.text})
@@ -385,6 +391,7 @@ async def websocket_chat(websocket: WebSocket):
                         answer = generate_ga4_answer(effective_message, company)
                     else:
                         answer = generate_google_ads_answer(effective_message, company)
+                    answer = _style_answer_response(answer)
                     if not include_dashboard:
                         answer.visualizations = []
                     answer.mindmap = _build_mindmap(answer)
@@ -427,6 +434,7 @@ async def websocket_chat(websocket: WebSocket):
                             f"{language_instruction} "
                             "to the user. This mode does not use retrieval, so do not invent citations. "
                             "Use polished Markdown. Default to detailed explanations unless the user asks for brevity. "
+                            "Use sentence-style capitalization for Markdown headings and short bold labels: write 'Core concept', 'How it works', and 'Data collection', not title case. "
                             "Start with a direct answer, then explain the concept in depth: what it is, how it works, "
                             "why it matters, common applications, limitations, and practical implications when relevant. "
                             "Do not give shallow label-only bullet lists. "
@@ -451,17 +459,17 @@ async def websocket_chat(websocket: WebSocket):
                         delta = chunk.choices[0].delta if chunk.choices else None
                         if delta and delta.content:
                             full_text += delta.content
-                            await websocket.send_json({"type": "token", "content": delta.content})
 
-                    mindmap = _build_mindmap(
+                    answer = _style_answer_response(
                         AnswerResponse(
                             text=full_text,
-                            sections=[
-                                AnswerSection(type="explanation", content=full_text, grounded=False)
-                            ],
+                            sections=[AnswerSection(type="explanation", content=full_text, grounded=False)],
                             citations=[],
                         )
                     )
+                    full_text = answer.text
+                    await websocket.send_json({"type": "token", "content": full_text})
+                    mindmap = _build_mindmap(answer)
 
                     await websocket.send_json({"type": "citations", "data": []})
                     await websocket.send_json({"type": "visualizations", "data": []})
@@ -511,6 +519,7 @@ async def websocket_chat(websocket: WebSocket):
 
                 if is_structural_listing_sources(sources):
                     answer = structural_listing_agent(sources)
+                    answer = _style_answer_response(answer)
                     citations = [_serialize_citation(c) for c in answer.citations]
                     answer.mindmap = _build_mindmap(answer)
 
@@ -542,6 +551,7 @@ async def websocket_chat(websocket: WebSocket):
                 # --- Stage 3: Handle non-streaming agents (calc, clarification) ---
                 if intent == "ambiguous":
                     answer = clarification_agent(effective_message, sources)
+                    answer = _style_answer_response(answer)
                     citations = [_serialize_citation(c) for c in answer.citations]
                     await websocket.send_json({
                         "type": "token",
@@ -570,6 +580,7 @@ async def websocket_chat(websocket: WebSocket):
                 if intent == "calculation":
                     await websocket.send_json({"type": "status", "status": "calculating"})
                     answer = calculation_agent(effective_message, sources, history)
+                    answer = _style_answer_response(answer)
 
                     # Send full calculation answer
                     await websocket.send_json({"type": "token", "content": answer.text})
@@ -657,23 +668,23 @@ async def websocket_chat(websocket: WebSocket):
                     delta = chunk.choices[0].delta if chunk.choices else None
                     if delta and delta.content:
                         full_text += delta.content
-                        await websocket.send_json({"type": "token", "content": delta.content})
 
                 final_text = ensure_inline_citation_references(full_text, citations_list)
-                if final_text != full_text:
-                    await websocket.send_json({"type": "token", "content": final_text[len(full_text):]})
-                    full_text = final_text
+                answer = _style_answer_response(
+                    AnswerResponse(
+                        text=final_text,
+                        sections=[AnswerSection(type="explanation", content=final_text, grounded=True)],
+                        citations=citations_list,
+                    )
+                )
+                full_text = answer.text
+                await websocket.send_json({"type": "token", "content": full_text})
 
                 # Send citations
                 citations = [_serialize_citation(c) for c in citations_list]
                 await websocket.send_json({"type": "citations", "data": citations})
 
                 # Build and send mindmap
-                answer = AnswerResponse(
-                    text=full_text,
-                    sections=[AnswerSection(type="explanation", content=full_text, grounded=True)],
-                    citations=citations_list,
-                )
                 await websocket.send_json({"type": "visualizations", "data": answer.visualizations})
                 mindmap = _build_mindmap(answer)
                 await websocket.send_json({"type": "mindmap", "data": _serialize_mindmap(mindmap)})

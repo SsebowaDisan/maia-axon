@@ -5,6 +5,7 @@ import { persist } from "zustand/middleware";
 
 import { api } from "@/lib/api";
 import type { ConversationDetail, ConversationSummary } from "@/lib/types";
+import { useAuthStore } from "@/stores/authStore";
 
 const DELETE_TOMBSTONE_MS = 1200;
 
@@ -12,9 +13,11 @@ interface ConversationState {
   conversations: ConversationSummary[];
   activeConversationId: string | null;
   activeConversation: ConversationDetail | null;
+  activeConversationByUser: Record<string, string | null>;
   deletedConversationIds: Record<string, true>;
   searchTerm: string;
   loading: boolean;
+  error: string | null;
   isHydrated: boolean;
   setHydrated: () => void;
   fetchConversations: (projectId?: string | null) => Promise<void>;
@@ -25,29 +28,76 @@ interface ConversationState {
   startNewConversation: () => void;
 }
 
+function currentUserId() {
+  return useAuthStore.getState().user?.id ?? null;
+}
+
+function setUserActiveConversation(
+  activeConversationByUser: Record<string, string | null>,
+  conversationId: string | null,
+) {
+  const userId = currentUserId();
+  if (!userId) {
+    return activeConversationByUser;
+  }
+
+  return {
+    ...activeConversationByUser,
+    [userId]: conversationId,
+  };
+}
+
 export const useConversationStore = create<ConversationState>()(
   persist(
     (set, get) => ({
       conversations: [],
       activeConversationId: null,
       activeConversation: null,
+      activeConversationByUser: {},
       deletedConversationIds: {},
       searchTerm: "",
       loading: false,
+      error: null,
       isHydrated: false,
       setHydrated() {
         set({ isHydrated: true });
       },
       async fetchConversations(projectId) {
-        set({ loading: true });
+        set({ loading: true, error: null });
         try {
-          const conversations = await api.listConversations(projectId);
-          const activeConversationId = get().activeConversationId;
+          const deletedConversationIds = get().deletedConversationIds;
+          const conversations = (await api.listConversations(projectId)).filter(
+            (conversation) => !deletedConversationIds[conversation.id],
+          );
+          const userId = currentUserId();
+          const rememberedConversationId = userId
+            ? get().activeConversationByUser[userId] ?? null
+            : null;
+          const currentActiveConversationId = get().activeConversationId;
+          const activeConversationId =
+            [currentActiveConversationId, rememberedConversationId].find(
+              (candidate): candidate is string =>
+                !!candidate && conversations.some((conversation) => conversation.id === candidate),
+            ) ?? null;
           const stillExists = conversations.some((conversation) => conversation.id === activeConversationId);
           set({
             conversations,
             activeConversationId: stillExists ? activeConversationId : null,
             activeConversation: stillExists ? get().activeConversation : null,
+            activeConversationByUser:
+              userId
+                ? {
+                    ...get().activeConversationByUser,
+                    [userId]: stillExists ? activeConversationId : null,
+                  }
+                : get().activeConversationByUser,
+          });
+        } catch (error) {
+          set({
+            error: error instanceof Error ? error.message : "Failed to load conversations",
+            conversations: [],
+            activeConversationId: null,
+            activeConversation: null,
           });
         } finally {
           set({ loading: false });
@@ -57,17 +107,27 @@ export const useConversationStore = create<ConversationState>()(
         set({ loading: true });
         try {
           const detail = await api.getConversation(conversationId);
-          set({
+          set((state) => ({
             activeConversationId: conversationId,
             activeConversation: detail,
-          });
+            activeConversationByUser: setUserActiveConversation(
+              state.activeConversationByUser,
+              conversationId,
+            ),
+          }));
           return detail;
         } finally {
           set({ loading: false });
         }
       },
       setActiveConversationId(conversationId) {
-        set({ activeConversationId: conversationId });
+        set((state) => ({
+          activeConversationId: conversationId,
+          activeConversationByUser: setUserActiveConversation(
+            state.activeConversationByUser,
+            conversationId,
+          ),
+        }));
       },
       setSearchTerm(value) {
         set({ searchTerm: value });
@@ -83,6 +143,12 @@ export const useConversationStore = create<ConversationState>()(
             state.activeConversationId === conversationId ? null : state.activeConversationId,
           activeConversation:
             state.activeConversationId === conversationId ? null : state.activeConversation,
+          activeConversationByUser: Object.fromEntries(
+            Object.entries(state.activeConversationByUser).map(([userId, activeConversationId]) => [
+              userId,
+              activeConversationId === conversationId ? null : activeConversationId,
+            ]),
+          ),
         }));
 
         window.setTimeout(() => {
@@ -98,15 +164,18 @@ export const useConversationStore = create<ConversationState>()(
         }, DELETE_TOMBSTONE_MS);
       },
       startNewConversation() {
-        set({
+        set((state) => ({
           activeConversationId: null,
           activeConversation: null,
-        });
+          activeConversationByUser: setUserActiveConversation(state.activeConversationByUser, null),
+        }));
       },
     }),
     {
       name: "maia-axon-conversation",
-      partialize: (state) => ({ activeConversationId: state.activeConversationId }),
+      partialize: (state) => ({
+        activeConversationByUser: state.activeConversationByUser,
+      }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated();
       },

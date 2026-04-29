@@ -18,6 +18,14 @@ interface AuthState {
   logout: () => void;
 }
 
+function clearSessionStorage() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.removeItem("maia-axon-chat");
+}
+
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
@@ -30,11 +38,13 @@ export const useAuthStore = create<AuthState>()(
       async bootstrap() {
         set({ isLoading: true });
 
-        if (!get().token) {
+        const token = get().token;
+        if (!token) {
           set({ isHydrated: true, isLoading: false });
           return;
         }
 
+        setStoredToken(token);
         set({ error: null });
         try {
           const user = await api.me();
@@ -55,6 +65,7 @@ export const useAuthStore = create<AuthState>()(
         set({ isLoading: true, error: null });
         try {
           const response = await api.login(identifier, password);
+          clearSessionStorage();
           setStoredToken(response.access_token);
           set({
             token: response.access_token,
@@ -72,6 +83,7 @@ export const useAuthStore = create<AuthState>()(
       },
       logout() {
         setStoredToken(null);
+        clearSessionStorage();
         set({
           token: null,
           user: null,

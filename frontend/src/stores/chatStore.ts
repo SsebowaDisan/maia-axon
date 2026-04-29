@@ -542,20 +542,22 @@ export const useChatStore = create<ChatState>()(
     try {
       await chatSocket.send(payload);
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to send message";
       set((state) => ({
         messages: state.messages.map((message, index) =>
           index === state.messages.length - 1
             ? {
                 ...message,
-                content: error instanceof Error ? error.message : "Failed to send message",
+                content: errorMessage,
                 isStreaming: false,
-                warnings: [error instanceof Error ? error.message : "Failed to send message"],
+                status: "done",
+                warnings: [errorMessage],
               }
             : message,
         ),
         streaming: false,
+        connectionError: errorMessage,
       }));
-      throw error;
     }
   },
   async sendEditedUserMessage(messageId, content) {
@@ -574,12 +576,11 @@ export const useChatStore = create<ChatState>()(
   {
     name: "maia-axon-chat",
     partialize: (state) => ({
-      messages: state.messages,
-      messageCacheByConversation: state.messageCacheByConversation,
       mode: state.mode,
     }),
     onRehydrateStorage: () => (state) => {
       state?.setHydrated();
+      state?.clearChat();
     },
   },
 ));

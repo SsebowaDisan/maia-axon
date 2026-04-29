@@ -124,7 +124,9 @@ def _query_google_ads(company: Company, query: str) -> list[dict]:
         "developer-token": settings.google_ads_developer_token,
         "Content-Type": "application/json",
     }
-    login_customer_id = _normalized_customer_id(company.google_ads_login_customer_id)
+    login_customer_id = _normalized_customer_id(
+        company.google_ads_login_customer_id or settings.google_ads_login_customer_id
+    )
     if login_customer_id:
         headers["login-customer-id"] = login_customer_id
 

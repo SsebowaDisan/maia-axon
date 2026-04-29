@@ -77,12 +77,13 @@ async def update_company(
             raise HTTPException(status_code=400, detail="Company already exists")
         company.name = normalized_name
 
-    if body.ga4_property_id is not None:
-        company.ga4_property_id = body.ga4_property_id.strip() or None
-    if body.google_ads_customer_id is not None:
-        company.google_ads_customer_id = body.google_ads_customer_id.strip() or None
-    if body.google_ads_login_customer_id is not None:
-        company.google_ads_login_customer_id = body.google_ads_login_customer_id.strip() or None
+    updated_fields = body.model_fields_set
+    if "ga4_property_id" in updated_fields:
+        company.ga4_property_id = (body.ga4_property_id or "").strip() or None
+    if "google_ads_customer_id" in updated_fields:
+        company.google_ads_customer_id = (body.google_ads_customer_id or "").strip() or None
+    if "google_ads_login_customer_id" in updated_fields:
+        company.google_ads_login_customer_id = (body.google_ads_login_customer_id or "").strip() or None
 
     await db.flush()
     return CompanyResponse.model_validate(company)

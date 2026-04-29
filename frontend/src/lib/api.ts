@@ -27,13 +27,34 @@ import type {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
 const TOKEN_KEY = "maia-axon-token";
+const AUTH_STORE_KEY = "maia-axon-auth";
 const PAGE_CACHE_KEY_PREFIX = "maia-page-cache-v1";
 
 export function getStoredToken() {
   if (typeof window === "undefined") {
     return null;
   }
-  return window.localStorage.getItem(TOKEN_KEY);
+
+  const token = window.localStorage.getItem(TOKEN_KEY);
+  if (token) {
+    return token;
+  }
+
+  try {
+    const persistedAuth = window.localStorage.getItem(AUTH_STORE_KEY);
+    if (!persistedAuth) {
+      return null;
+    }
+    const parsed = JSON.parse(persistedAuth) as { state?: { token?: unknown } };
+    if (typeof parsed.state?.token === "string" && parsed.state.token) {
+      window.localStorage.setItem(TOKEN_KEY, parsed.state.token);
+      return parsed.state.token;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 export function setStoredToken(token: string | null) {
@@ -46,6 +67,15 @@ export function setStoredToken(token: string | null) {
     return;
   }
   window.localStorage.setItem(TOKEN_KEY, token);
+}
+
+function clearStoredAuth() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.removeItem(TOKEN_KEY);
+  window.localStorage.removeItem(AUTH_STORE_KEY);
 }
 
 export async function prefetchAuthorized(path: string) {
@@ -117,7 +147,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     if (response.status === 401) {
-      setStoredToken(null);
+      clearStoredAuth();
+      if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+        window.location.replace("/login");
+      }
     }
     const fallback = `Request failed with status ${response.status}`;
     try {

@@ -15,6 +15,20 @@ def _humanize_key(value: str) -> str:
     return " ".join(part for part in spaced.split() if part).strip().title()
 
 
+def _source_display_name(source_name: str) -> str:
+    normalized = " ".join(source_name.split()).strip()
+    if normalized.lower() == "google ads":
+        return "Google ads"
+    if normalized.lower() == "google analytics":
+        return "Google analytics"
+    return normalized
+
+
+def _report_heading(source_name: str, company_name: str) -> str:
+    source_display = _source_display_name(source_name)
+    return f"{source_display} report for {company_name}"
+
+
 def _normalize_totals_display(totals_display: dict[str, str]) -> dict[str, str]:
     return {_humanize_key(metric): value for metric, value in totals_display.items()}
 
@@ -47,7 +61,7 @@ def _fallback_summary(
 
     if not top_rows:
         return (
-            f"## {report_title}\n\n"
+            f"## {_report_heading(source_name, company_name)}\n\n"
             f"I connected to {source_name} for **{company_name}**, but there was not enough data to summarize {date_range}."
         )
 
@@ -60,7 +74,7 @@ def _fallback_summary(
     top_primary_value = top_primary_value or "0"
 
     summary_lines = [
-        f"## {report_title}",
+        f"## {_report_heading(source_name, company_name)}",
         "",
         (
             f"The strongest result for **{company_name}** over **{date_range}** was **{top_label}**, "
@@ -119,6 +133,7 @@ def build_marketing_narrative(
     normalized_rows = _normalize_top_rows(top_rows)
     payload = {
         "source_name": source_name,
+        "required_heading": _report_heading(source_name, company_name),
         "report_title": report_title,
         "company_name": company_name,
         "date_range": date_range,
@@ -158,6 +173,10 @@ def build_marketing_narrative(
                         "4) include 'Next actions' only when the data supports concrete actions. "
                         "Do not describe the dashboard or charts; the UI renders them after your summary. "
                         "Write polished Markdown with natural structure. "
+                        "Use this exact first Markdown heading from the payload key required_heading. "
+                        "Use sentence-style capitalization for every Markdown heading and dashboard title: "
+                        "capitalize the first word and proper nouns/company names only. "
+                        "For example, write 'Google ads report for Coateq', not 'Google Ads Report for Coateq'. "
                         "Choose the most relevant returned metrics from the payload instead of assuming fixed labels. "
                         "Keep it readable for a business user. "
                         "Mention the top result and the main takeaway. "
@@ -247,7 +266,9 @@ def build_dashboard_visualizations_with_llm(
                         "Prefer one large primary visual plus one to three supporting visuals. "
                         "For Google Ads, consider spend/cost, clicks, conversions, CTR, CPC, conversion value, and campaign/device/date context when available. "
                         "For GA4, consider sessions, active users, page views, geography, source, device, campaign, or page context when available. "
-                        "Make titles business-readable and specific to the question."
+                        "Make titles business-readable and specific to the question. "
+                        "Use sentence-style capitalization for visualization titles: capitalize the first word and proper nouns/company names only. "
+                        "For example, write 'Google ads report for Coateq', not 'Google Ads Report for Coateq'."
                     ),
                 },
                 {"role": "user", "content": json.dumps(payload)},

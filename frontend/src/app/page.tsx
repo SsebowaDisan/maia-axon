@@ -40,6 +40,7 @@ export default function HomePage() {
   const isHydrated = useAuthStore((state) => state.isHydrated);
   const isLoading = useAuthStore((state) => state.isLoading);
   const bootstrap = useAuthStore((state) => state.bootstrap);
+  const logout = useAuthStore((state) => state.logout);
   const fetchGroups = useGroupStore((state) => state.fetchGroups);
   const setActiveGroup = useGroupStore((state) => state.setActiveGroup);
   const fetchCompanies = useCompanyStore((state) => state.fetchCompanies);
@@ -50,7 +51,9 @@ export default function HomePage() {
   const conversations = useConversationStore((state) => state.conversations);
   const activeConversationId = useConversationStore((state) => state.activeConversationId);
   const activeConversation = useConversationStore((state) => state.activeConversation);
+  const activeConversationByUser = useConversationStore((state) => state.activeConversationByUser);
   const loadConversation = useConversationStore((state) => state.loadConversation);
+  const setActiveConversationId = useConversationStore((state) => state.setActiveConversationId);
   const fetchDocuments = useDocumentStore((state) => state.fetchDocuments);
   const initializeChat = useChatStore((state) => state.initialize);
   const chatHydrated = useChatStore((state) => state.isHydrated);
@@ -66,23 +69,54 @@ export default function HomePage() {
   }, [initializeChat]);
 
   useEffect(() => {
+    if (!user || !conversationHydrated || activeConversationId) {
+      return;
+    }
+
+    const rememberedConversationId = activeConversationByUser[user.id];
+    if (rememberedConversationId) {
+      setActiveConversationId(rememberedConversationId);
+    }
+  }, [
+    activeConversationByUser,
+    activeConversationId,
+    conversationHydrated,
+    setActiveConversationId,
+    user,
+  ]);
+
+  useEffect(() => {
     if (!isHydrated) {
       return;
     }
     if (!chatHydrated || !conversationHydrated) {
       return;
     }
-    if (isLoading && !user) {
+    if (isLoading) {
       return;
     }
     if (!user) {
       router.replace("/login");
       return;
     }
-    void fetchGroups();
-    void fetchCompanies();
-    void fetchProjects();
-    void fetchConversations();
+    void (async () => {
+      const results = await Promise.allSettled([
+        fetchGroups(),
+        fetchCompanies(),
+        fetchProjects(),
+        fetchConversations(),
+      ]);
+      const authFailed = results.some(
+        (result) =>
+          result.status === "rejected" &&
+          result.reason instanceof Error &&
+          /not authenticated|invalid token|unauthorized/i.test(result.reason.message),
+      );
+      if (authFailed) {
+        logout();
+        router.replace("/login");
+      }
+    })();
   }, [
     chatHydrated,
     conversationHydrated,
@@ -92,6 +126,7 @@ export default function HomePage() {
     fetchProjects,
     isHydrated,
     isLoading,
+    logout,
     router,
     user,
   ]);
@@ -111,36 +146,49 @@ export default function HomePage() {
     }
 
     const summary = conversations.find((conversation) => conversation.id === activeConversationId);
-    if (!summary) {
+    if (!summary && conversations.length > 0) {
+      setActiveConversationId(null);
       return;
     }
 
     restoredConversationIdRef.current = activeConversationId;
 
     void (async () => {
-      const cachedMessages = getCachedMessagesForConversation(summary.id);
+      const cachedMessages = getCachedMessagesForConversation(activeConversationId);
       if (cachedMessages?.length) {
-        hydrateMessages(cachedMessages, summary.id);
+        hydrateMessages(cachedMessages, activeConversationId);
       }
 
-      if (summary.project_id) {
+      if (summary?.project_id) {
         setActiveProject(summary.project_id);
       }
 
-      if (summary.group_id) {
+      if (summary?.group_id) {
         setActiveGroup(summary.group_id);
         await fetchDocuments(summary.group_id);
       }
 
-      const detail = await loadConversation(summary.id);
-      const serverMessages = detail.messages.map(mapMessage);
-      const latestCachedMessages = getCachedMessagesForConversation(detail.id);
-      if (latestCachedMessages && latestCachedMessages.length > serverMessages.length) {
-        hydrateMessages(latestCachedMessages, detail.id);
-        return;
-      }
+      try {
+        const detail = await loadConversation(activeConversationId);
+        if (detail.project_id) {
+          setActiveProject(detail.project_id);
+        }
+        if (detail.group_id && detail.group_id !== summary?.group_id) {
+          setActiveGroup(detail.group_id);
+          await fetchDocuments(detail.group_id);
+        }
+        const serverMessages = detail.messages.map(mapMessage);
+        const latestCachedMessages = getCachedMessagesForConversation(detail.id);
+        if (latestCachedMessages && latestCachedMessages.length > serverMessages.length) {
+          hydrateMessages(latestCachedMessages, detail.id);
+          return;
+        }
 
-      hydrateMessages(serverMessages, detail.id);
+        hydrateMessages(serverMessages, detail.id);
+      } catch {
+        restoredConversationIdRef.current = null;
+        setActiveConversationId(null);
+      }
     })();
   }, [
     activeConversation,
@@ -151,6 +199,7 @@ export default function HomePage() {
     hydrateMessages,
     loadConversation,
     setActiveGroup,
+    setActiveConversationId,
     setActiveProject,
     user,
   ]);
@@ -167,6 +216,15 @@ export default function HomePage() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-bg px-6 py-10 text-sm text-muted">
         Redirecting to login...
+      </div>
+    );
+  }
+
+  const rememberedConversationId = activeConversationByUser[user.id];
+  if (conversationHydrated && rememberedConversationId && !activeConversationId) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg px-6 py-10 text-sm text-muted">
+        Restoring your previous conversation...
       </div>
     );
   }

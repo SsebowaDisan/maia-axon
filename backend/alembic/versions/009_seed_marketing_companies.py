@@ -57,6 +57,12 @@ MARKETING_COMPANIES = [
         "ga4_property_id": "503598422",
         "google_ads_customer_id": "6655378313",
     },
+    {
+        "name": "Coateq",
+        "aliases": ["Coateq"],
+        "ga4_property_id": "479179141",
+        "google_ads_customer_id": "9996186397",
+    },
 ]
 
 

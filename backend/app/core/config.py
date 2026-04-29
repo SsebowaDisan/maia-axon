@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -28,6 +29,7 @@ class Settings(BaseSettings):
     google_service_account_email: str = ""
     google_service_account_key_path: str = ""
     google_ads_developer_token: str = ""
+    google_ads_login_customer_id: str = ""
     evidence_browser_user_data_dir: str = ""
     evidence_browser_channel: str = "chrome"
 
@@ -57,6 +59,13 @@ class Settings(BaseSettings):
     answer_context_top_k: int = 24
 
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def parse_debug_flag(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip().lower() in {"release", "prod", "production"}:
+            return False
+        return value
 
 
 settings = Settings()

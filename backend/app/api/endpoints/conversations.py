@@ -32,7 +32,7 @@ async def _check_conversation_access(
     conv = result.scalar_one_or_none()
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    if conv.user_id != user.id and not user.is_admin:
+    if conv.user_id != user.id:
         raise HTTPException(status_code=403, detail="Not your conversation")
     return conv
 
