@@ -1,6 +1,6 @@
 """grant every user access to every marketing company
 
-Revision ID: 016_grant_all_users_all_companies
+Revision ID: 016_grant_users_companies
 Revises: 015_grant_all_users_all_groups
 Create Date: 2026-04-30
 """
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
-revision: str = "016_grant_all_users_all_companies"
+revision: str = "016_grant_users_companies"
 down_revision: Union[str, None] = "015_grant_all_users_all_groups"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
