@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
 from app.core.security import hash_password
+from app.models.company import Company, CompanyUser
 from app.models.group import Group, GroupAssignment
 from app.models.user import User
 from app.schemas.user import AdminUserCreate, UserResponse, UserUpdate
@@ -65,6 +66,10 @@ async def create_user(
     groups_result = await db.execute(select(Group.id))
     for group_id in groups_result.scalars().all():
         db.add(GroupAssignment(group_id=group_id, user_id=user.id, assigned_by=admin.id))
+
+    companies_result = await db.execute(select(Company.id))
+    for company_id in companies_result.scalars().all():
+        db.add(CompanyUser(company_id=company_id, user_id=user.id, assigned_by=admin.id))
 
     await db.flush()
     return user

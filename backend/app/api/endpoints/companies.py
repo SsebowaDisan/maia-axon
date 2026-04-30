@@ -56,6 +56,12 @@ async def create_company(
     )
     db.add(company)
     await db.flush()
+
+    users_result = await db.execute(select(User.id))
+    for user_id in users_result.scalars().all():
+        db.add(CompanyUser(company_id=company.id, user_id=user_id, assigned_by=admin.id))
+
+    await db.flush()
     return CompanyResponse.model_validate(company)
 
 
