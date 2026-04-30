@@ -76,6 +76,12 @@ async def create_group(
     group = Group(name=body.name, description=body.description, created_by=admin.id)
     db.add(group)
     await db.flush()
+
+    users_result = await db.execute(select(User.id))
+    for user_id in users_result.scalars().all():
+        db.add(GroupAssignment(group_id=group.id, user_id=user_id, assigned_by=admin.id))
+
+    await db.flush()
     return GroupResponse.model_validate(group)
 
 
