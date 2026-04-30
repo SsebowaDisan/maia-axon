@@ -38,6 +38,7 @@ from app.services.answer_engine import (
     structural_listing_agent,
 )
 from app.services.google_marketing import generate_ga4_answer, generate_google_ads_answer
+from app.services.projects import ensure_default_project
 from app.services.retrieval import deep_search, library_search
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -220,12 +221,16 @@ async def chat(
     db: AsyncSession = Depends(get_db),
 ):
     """Non-streaming chat endpoint. For streaming, use the WebSocket endpoint."""
-    if body.project_id:
+    project_id = body.project_id
+    if project_id:
         project = await db.scalar(
-            select(Project).where(Project.id == body.project_id, Project.user_id == user.id)
+            select(Project).where(Project.id == project_id, Project.user_id == user.id)
         )
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
+    else:
+        project = await ensure_default_project(db, user)
+        project_id = project.id
 
     if body.mode in DOCUMENT_MODES and body.group_id is None:
         raise HTTPException(status_code=400, detail="Group is required for grounded chat")
@@ -254,13 +259,13 @@ async def chat(
     else:
         conversation = Conversation(
             user_id=user.id,
-            project_id=body.project_id,
+            project_id=project_id,
             group_id=body.group_id,
         )
         db.add(conversation)
         await db.flush()
 
-    conversation.project_id = body.project_id
+    conversation.project_id = project_id
     conversation.group_id = body.group_id
 
     # Save user message

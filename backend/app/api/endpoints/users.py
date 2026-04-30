@@ -11,6 +11,7 @@ from app.models.company import Company, CompanyUser
 from app.models.group import Group, GroupAssignment
 from app.models.user import User
 from app.schemas.user import AdminUserCreate, UserResponse, UserUpdate
+from app.services.projects import ensure_default_project
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -62,6 +63,7 @@ async def create_user(
     )
     db.add(user)
     await db.flush()
+    await ensure_default_project(db, user)
 
     groups_result = await db.execute(select(Group.id))
     for group_id in groups_result.scalars().all():

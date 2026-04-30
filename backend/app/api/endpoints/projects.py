@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -10,6 +10,7 @@ from app.models.conversation import Conversation
 from app.models.project import Project
 from app.models.user import User
 from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
+from app.services.projects import DEFAULT_PROJECT_NAME, ensure_default_project
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -29,6 +30,7 @@ async def list_projects(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await ensure_default_project(db, user)
     result = await db.execute(
         select(
             Project,
@@ -37,7 +39,11 @@ async def list_projects(
         .outerjoin(Conversation, Conversation.project_id == Project.id)
         .where(Project.user_id == user.id)
         .group_by(Project.id)
-        .order_by(Project.updated_at.desc(), Project.created_at.desc())
+        .order_by(
+            case((Project.name == DEFAULT_PROJECT_NAME, 0), else_=1),
+            Project.updated_at.desc(),
+            Project.created_at.desc(),
+        )
     )
 
     responses: list[ProjectResponse] = []

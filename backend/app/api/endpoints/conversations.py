@@ -17,6 +17,7 @@ from app.schemas.conversation import (
     ConversationResponse,
     MessageResponse,
 )
+from app.services.projects import ensure_default_project
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -60,22 +61,22 @@ async def create_conversation(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new conversation under a required project and optional group context."""
+    """Create a new conversation under a project and optional group context."""
     if body.project_id is None:
-        raise HTTPException(status_code=400, detail="Project is required")
-
-    project = await db.scalar(
-        select(Project).where(Project.id == body.project_id, Project.user_id == user.id)
-    )
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+        project = await ensure_default_project(db, user)
+    else:
+        project = await db.scalar(
+            select(Project).where(Project.id == body.project_id, Project.user_id == user.id)
+        )
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
 
     if body.group_id:
         group = await db.scalar(select(Group).where(Group.id == body.group_id))
         if group is None:
             raise HTTPException(status_code=404, detail="Group not found")
 
-    conv = Conversation(user_id=user.id, project_id=body.project_id, group_id=body.group_id)
+    conv = Conversation(user_id=user.id, project_id=project.id, group_id=body.group_id)
     db.add(conv)
     await db.flush()
     return conv

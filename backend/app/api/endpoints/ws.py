@@ -51,6 +51,7 @@ from app.services.answer_engine import (
     structural_listing_agent,
 )
 from app.services.google_marketing import generate_ga4_answer, generate_google_ads_answer
+from app.services.projects import ensure_default_project
 from app.services.prompt_attachments import build_attachment_context, load_prompt_attachment
 from app.services.retrieval import deep_search, library_search
 
@@ -198,19 +199,17 @@ async def websocket_chat(websocket: WebSocket):
 
             async with async_session() as db:
                 if project_id is None:
-                    await websocket.send_json(
-                        {"type": "error", "message": "Project is required"}
+                    project = await ensure_default_project(db, user)
+                    project_id = project.id
+                else:
+                    project = await db.scalar(
+                        select(Project).where(Project.id == project_id, Project.user_id == user.id)
                     )
-                    continue
-
-                project = await db.scalar(
-                    select(Project).where(Project.id == project_id, Project.user_id == user.id)
-                )
-                if project is None:
-                    await websocket.send_json(
-                        {"type": "error", "message": "Project not found"}
-                    )
-                    continue
+                    if project is None:
+                        await websocket.send_json(
+                            {"type": "error", "message": "Project not found"}
+                        )
+                        continue
 
                 if mode in DOCUMENT_MODES and group_id is None:
                     await websocket.send_json(
