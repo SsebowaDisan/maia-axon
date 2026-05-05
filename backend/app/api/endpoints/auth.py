@@ -11,7 +11,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 DEFAULT_ADMIN_NAME = "Admin"
 DEFAULT_ADMIN_EMAIL = "admin@maia.local"
-DEFAULT_ADMIN_PASSWORD = "admin"
+DEFAULT_ADMIN_PASSWORD = "1A2d3m4i5n"
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
@@ -41,7 +41,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     identifier = body.login_identifier
     user = None
 
-    if identifier.lower() == DEFAULT_ADMIN_NAME.lower() and body.password == DEFAULT_ADMIN_PASSWORD:
+    if identifier == DEFAULT_ADMIN_NAME and body.password == DEFAULT_ADMIN_PASSWORD:
         result = await db.execute(select(User).where(User.email == DEFAULT_ADMIN_EMAIL))
         user = result.scalar_one_or_none()
 
