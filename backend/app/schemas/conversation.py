@@ -53,6 +53,7 @@ class MessageResponse(BaseModel):
     citations: MessageCitations | None
     visualizations: list[dict] | None
     mindmap: dict | None
+    suggested_questions: list[str] | None = None
     search_mode: str | None
     created_at: datetime
 

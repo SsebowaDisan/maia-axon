@@ -1717,6 +1717,68 @@ def _reformulate_query_for_retry(query: str) -> str | None:
     return candidate
 
 
+def _enforce_per_document_diversity(
+    results: list[RetrievalResult],
+    *,
+    top_k: int,
+    min_books_for_cap: int = 3,
+) -> list[RetrievalResult]:
+    """Cap per-document chunks in the top-k so multiple books in the group are visible to the model.
+
+    When a group has many books, the LLM reranker tends to cluster
+    citations around the highest-scoring book and starve the others.
+    The user reads what one author wrote and never sees what the other
+    books in the same group say about the topic.
+
+    Strategy: if the candidate set spans ``min_books_for_cap`` or more
+    distinct documents, no single document gets more than
+    ``ceil(top_k / num_distinct_docs)`` slots in the top-k. Below the
+    cap we simply take the top-k as-is, since diversity isn't an
+    issue when there are 1–2 books and forcing diversity would just
+    drop the most relevant chunks.
+
+    The order of the returned list preserves the original relevance
+    ranking — we only DROP chunks beyond the per-document cap, then
+    fill the freed slots with the next-best ranked chunks from
+    under-represented books.
+    """
+    if not results or top_k <= 0:
+        return results
+
+    distinct_docs = {r.document_id for r in results if r.document_id is not None}
+    if len(distinct_docs) < min_books_for_cap:
+        return results[:top_k]
+
+    import math
+
+    per_doc_cap = max(1, math.ceil(top_k / len(distinct_docs)))
+
+    selected: list[RetrievalResult] = []
+    overflow: list[RetrievalResult] = []
+    counts: dict = {}
+
+    for result in results:
+        key = result.document_id
+        if key is None:
+            selected.append(result)
+            continue
+        if counts.get(key, 0) < per_doc_cap:
+            counts[key] = counts.get(key, 0) + 1
+            selected.append(result)
+        else:
+            overflow.append(result)
+        if len(selected) >= top_k:
+            break
+
+    # If the cap left fewer than top_k results, top up from overflow
+    # (preserves overall relevance order even when a book had to be
+    # capped).
+    if len(selected) < top_k:
+        selected.extend(overflow[: top_k - len(selected)])
+
+    return selected[:top_k]
+
+
 def _merge_retrieval_results(
     primary: list[RetrievalResult],
     secondary: list[RetrievalResult],
@@ -1810,6 +1872,16 @@ async def library_search(
             reranked_results = _merge_retrieval_results(
                 reranked_results, retry_results, top_k=settings.rerank_top_k,
             )
+
+    # Cross-book diversity: when the group has multiple ready documents,
+    # cap how many top-k chunks come from any single document so the
+    # answer model SEES every book that's relevant. Without this, one
+    # high-scoring book can swallow ~10/12 slots and the user never
+    # learns what the other books in their group say.
+    reranked_results = _enforce_per_document_diversity(
+        reranked_results,
+        top_k=settings.rerank_top_k,
+    )
 
     expanded_results = await _expand_with_neighbor_chunks(
         db,

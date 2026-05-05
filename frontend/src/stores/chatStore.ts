@@ -61,6 +61,7 @@ function mapServerMessage(message: MessageResponse): ChatMessage {
     status: "done",
     needsClarification:
       message.role === "assistant" && citations.length === 0 && /\?$/.test(message.content.trim()),
+    suggestedQuestions: message.suggested_questions ?? undefined,
   };
 }
 
@@ -274,6 +275,12 @@ export const useChatStore = create<ChatState>()(
             isStreaming: false,
             status: "done",
             needsClarification: message.citations.length === 0 && /\?$/.test(message.content.trim()),
+            // Suggested follow-up questions arrive on the final frame so we
+            // can render them as clickable chips below the assistant bubble
+            // the moment the stream completes (no extra round-trip).
+            suggestedQuestions: Array.isArray(event.suggested_questions)
+              ? event.suggested_questions
+              : message.suggestedQuestions,
           }));
           useConversationStore.getState().setActiveConversationId(event.conversation_id);
           void useConversationStore.getState().fetchConversations();

@@ -16,6 +16,37 @@ import { useDocumentStore } from "@/stores/documentStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useGroupStore } from "@/stores/groupStore";
 
+function SuggestedQuestionsRow({ questions }: { questions: string[] }) {
+  // Library mode is a learning interface: clicking a chip sends the
+  // suggested follow-up immediately rather than just filling the
+  // composer, so the user can keep exploring with one click. The model
+  // generated these in the user's own language and only proposed
+  // questions answerable from the source corpus.
+  const sendMessage = useChatStore((state) => state.sendMessage);
+  const streaming = useChatStore((state) => state.streaming);
+  return (
+    <div className="mt-8 border-t border-black/[0.06] pt-5">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-muted">
+        Continue learning
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {questions.map((question) => (
+          <button
+            key={question}
+            type="button"
+            disabled={streaming}
+            onClick={() => void sendMessage(question)}
+            className="rounded-full border border-black/10 bg-white px-4 py-2 text-left text-[14px] text-ink transition hover:border-black hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-black/10 disabled:hover:bg-white disabled:hover:text-ink"
+          >
+            {question}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
 function formatModeLabel(mode: SearchMode) {
   if (mode === "deep_search") {
     return "Deep Search";
@@ -359,6 +390,13 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
                     />
                     {message.visualizations.length ? (
                       <MessageVisualizationDashboard visualizations={message.visualizations} />
+                    ) : null}
+                    {message.role === "assistant" &&
+                    !message.isStreaming &&
+                    message.status === "done" &&
+                    message.suggestedQuestions &&
+                    message.suggestedQuestions.length ? (
+                      <SuggestedQuestionsRow questions={message.suggestedQuestions} />
                     ) : null}
                   </>
                 )}

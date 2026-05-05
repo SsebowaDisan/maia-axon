@@ -136,6 +136,24 @@ def _serialize_mindmap(node) -> dict:
     return result
 
 
+def _local_suggested_questions(local_scope: dict) -> list[str]:
+    """Pull ``answer.suggested_questions`` from the calling frame if available.
+
+    The WebSocket handler has many branches; some have an ``answer``
+    AnswerResponse in scope, some don't (e.g. streaming-error fallbacks).
+    Rather than thread an explicit argument through every ``done`` frame,
+    each path lets us inspect its locals and return the suggestions when
+    present, an empty list otherwise.
+    """
+    answer = local_scope.get("answer")
+    if answer is None:
+        return []
+    raw = getattr(answer, "suggested_questions", None)
+    if not raw:
+        return []
+    return [str(item) for item in raw if str(item).strip()][:5]
+
+
 async def _persist_assistant_message(
     db: AsyncSession,
     conversation: Conversation,
@@ -145,6 +163,7 @@ async def _persist_assistant_message(
     citations: list[dict] | None = None,
     visualizations: list[dict] | None = None,
     mindmap: dict | None = None,
+    suggested_questions: list[str] | None = None,
 ) -> None:
     assistant_msg = Message(
         conversation_id=conversation.id,
@@ -153,6 +172,7 @@ async def _persist_assistant_message(
         citations={"citations": citations or []},
         visualizations=visualizations or [],
         mindmap=mindmap,
+        suggested_questions=suggested_questions or None,
         search_mode=mode,
     )
     _ensure_conversation_metadata(conversation, query, mode)
@@ -324,8 +344,9 @@ async def websocket_chat(websocket: WebSocket):
                         [],
                         answer.visualizations,
                         _serialize_mindmap(answer.mindmap),
+                        suggested_questions=getattr(answer, "suggested_questions", None) or None,
                     )
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id), "suggested_questions": list(_local_suggested_questions(locals()))})
                     continue
 
                 if classify_axon_group_question(message):
@@ -351,8 +372,9 @@ async def websocket_chat(websocket: WebSocket):
                         citations,
                         answer.visualizations,
                         _serialize_mindmap(answer.mindmap),
+                        suggested_questions=getattr(answer, "suggested_questions", None) or None,
                     )
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id), "suggested_questions": list(_local_suggested_questions(locals()))})
                     continue
 
                 if classify_identity_question(message):
@@ -379,8 +401,9 @@ async def websocket_chat(websocket: WebSocket):
                         [],
                         answer.visualizations,
                         _serialize_mindmap(answer.mindmap),
+                        suggested_questions=getattr(answer, "suggested_questions", None) or None,
                     )
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id), "suggested_questions": list(_local_suggested_questions(locals()))})
                     continue
 
                 if mode in GOOGLE_MODES:
@@ -412,8 +435,9 @@ async def websocket_chat(websocket: WebSocket):
                         [],
                         answer.visualizations,
                         _serialize_mindmap(answer.mindmap),
+                        suggested_questions=getattr(answer, "suggested_questions", None) or None,
                     )
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id), "suggested_questions": list(_local_suggested_questions(locals()))})
                     continue
 
                 if mode == "standard":
@@ -482,7 +506,7 @@ async def websocket_chat(websocket: WebSocket):
                         [],
                         _serialize_mindmap(mindmap),
                     )
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id), "suggested_questions": list(_local_suggested_questions(locals()))})
                     continue
 
                 # --- Stage 1: Retrieval ---
@@ -512,7 +536,7 @@ async def websocket_chat(websocket: WebSocket):
                         [],
                         None,
                     )
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id), "suggested_questions": list(_local_suggested_questions(locals()))})
                     continue
 
                 if is_structural_listing_sources(sources):
@@ -538,8 +562,9 @@ async def websocket_chat(websocket: WebSocket):
                         citations,
                         answer.visualizations,
                         _serialize_mindmap(answer.mindmap),
+                        suggested_questions=getattr(answer, "suggested_questions", None) or None,
                     )
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id), "suggested_questions": list(_local_suggested_questions(locals()))})
                     continue
 
                 # --- Stage 2: Intent Classification ---
@@ -571,8 +596,9 @@ async def websocket_chat(websocket: WebSocket):
                         citations,
                         answer.visualizations,
                         _serialize_mindmap(answer.mindmap),
+                        suggested_questions=getattr(answer, "suggested_questions", None) or None,
                     )
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id), "suggested_questions": list(_local_suggested_questions(locals()))})
                     continue
 
                 if intent == "calculation":
@@ -605,8 +631,9 @@ async def websocket_chat(websocket: WebSocket):
                         citations,
                         answer.visualizations,
                         _serialize_mindmap(answer.mindmap) if answer.mindmap else None,
+                        suggested_questions=getattr(answer, "suggested_questions", None) or None,
                     )
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
+                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id), "suggested_questions": list(_local_suggested_questions(locals()))})
                     continue
 
                 # --- Stage 4: Streaming Q&A ---
@@ -708,7 +735,7 @@ async def websocket_chat(websocket: WebSocket):
                     answer.visualizations,
                     _serialize_mindmap(mindmap),
                 )
-                await websocket.send_json({"type": "done", "conversation_id": str(conversation.id)})
+                await websocket.send_json({"type": "done", "conversation_id": str(conversation.id), "suggested_questions": list(_local_suggested_questions(locals()))})
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for user {user.id}")

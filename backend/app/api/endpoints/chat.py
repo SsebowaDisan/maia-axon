@@ -189,6 +189,7 @@ def _serialize_answer(answer: AnswerResponse) -> dict:
         "warnings": answer.warnings,
         "needs_clarification": answer.needs_clarification,
         "clarification_question": answer.clarification_question,
+        "suggested_questions": list(answer.suggested_questions or []),
     }
 
 
@@ -353,6 +354,7 @@ async def chat(
         citations={"citations": serialized["citations"]},
         visualizations=serialized["visualizations"],
         mindmap=serialized["mindmap"],
+        suggested_questions=serialized.get("suggested_questions") or None,
         search_mode=body.mode,
     )
     db.add(assistant_msg)
