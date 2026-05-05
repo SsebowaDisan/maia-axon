@@ -1508,9 +1508,14 @@ def qa_agent(
             "question that the sources did not cover."
         )
 
+    # gpt-5 with medium reasoning meaningfully improves multi-step
+    # technical answers (formula derivations, scaling laws, comparing
+    # several sources). Reasoning tokens count toward the response cap,
+    # so the budget is doubled vs. the previous gpt-4o call.
     response = client.chat.completions.create(
-        model="gpt-4o",
-        max_tokens=4096,
+        model="gpt-5",
+        max_completion_tokens=8192,
+        reasoning_effort="medium",
         response_format={"type": "json_object"},
         messages=messages + [
             {
@@ -1641,10 +1646,15 @@ def calculation_agent(
     citations = _build_citations(sources)
     sources_text = _format_sources_for_prompt(sources)
 
-    # Step 1: Ask LLM to set up the calculation
+    # Step 1: Ask LLM to set up the calculation. The setup phase (formula
+    # selection + variable matching) is the hardest reasoning step in this
+    # pipeline; gpt-5 with medium effort catches formulas the gpt-4o
+    # baseline missed and is more reliable at distinguishing user-supplied
+    # values from values that need to be looked up.
     setup_response = client.chat.completions.create(
-        model="gpt-4o",
-        max_tokens=4096,
+        model="gpt-5",
+        max_completion_tokens=8192,
+        reasoning_effort="medium",
         messages=[
             {
                 "role": "system",
