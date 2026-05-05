@@ -249,8 +249,15 @@ export function PDFViewer() {
       return [];
     }
 
+    // Cap at the document's known page count so the prefetch window
+    // walking past the end of a 365-page doc doesn't leave the viewer
+    // rendering ghost "Loading page 366…" placeholders that never resolve.
+    const upperBound = currentDocument.page_count
+      ? Math.min(visibleRange.end, currentDocument.page_count)
+      : visibleRange.end;
+
     const pages: Array<{ pageNumber: number; pageData: PageData | null }> = [];
-    for (let pageNumber = visibleRange.start; pageNumber <= visibleRange.end; pageNumber += 1) {
+    for (let pageNumber = visibleRange.start; pageNumber <= upperBound; pageNumber += 1) {
       const key = pageKey(currentDocument.id, pageNumber);
       pages.push({
         pageNumber,

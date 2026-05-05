@@ -75,24 +75,34 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
       return;
     }
 
-    const pageResults = await Promise.all(
+    // Promise.allSettled (NOT Promise.all): if a single page 404s — easy
+    // to hit when the prefetch window walks past the end of a document —
+    // we still want the other pages to land in the cache. Using Promise.all
+    // would reject the whole batch and leave every page stuck on its
+    // "Loading page N…" placeholder forever.
+    const pageResults = await Promise.allSettled(
       missingPages.map(async (pageNumber) => ({
         pageNumber,
         pageData: await api.getPage(document.id, pageNumber),
       })),
     );
 
-    set((state) => ({
-      pageCache: {
-        ...state.pageCache,
-        ...Object.fromEntries(
-          pageResults.map(({ pageNumber, pageData }) => [pageKey(document.id, pageNumber), pageData]),
-        ),
-      },
-    }));
+    const successful = pageResults.flatMap((entry) =>
+      entry.status === "fulfilled" ? [entry.value] : [],
+    );
+    if (successful.length) {
+      set((state) => ({
+        pageCache: {
+          ...state.pageCache,
+          ...Object.fromEntries(
+            successful.map(({ pageNumber, pageData }) => [pageKey(document.id, pageNumber), pageData]),
+          ),
+        },
+      }));
+    }
 
-    void Promise.all(
-      missingPages.map((pageNumber) =>
+    void Promise.allSettled(
+      successful.map(({ pageNumber }) =>
         prefetchAuthorized(`/documents/${document.id}/pages/${pageNumber}/image`),
       ),
     );
@@ -190,15 +200,24 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
       return;
     }
 
-    const pageData = await api.getPage(document.id, pageNumber);
-    set((state) => ({
-      pageData,
-      loading: false,
-      pageCache: {
-        ...state.pageCache,
-        [key]: pageData,
-      },
-    }));
+    // A failed page fetch (404 past the end of the document, or a
+    // transient network error) used to leave ``loading`` true forever
+    // and the caller stuck on a "Loading page N…" placeholder. Resolve
+    // the loading state in both branches; PageRenderer will fall back
+    // to a clear placeholder if pageData is still missing.
+    try {
+      const pageData = await api.getPage(document.id, pageNumber);
+      set((state) => ({
+        pageData,
+        loading: false,
+        pageCache: {
+          ...state.pageCache,
+          [key]: pageData,
+        },
+      }));
+    } catch {
+      set({ loading: false });
+    }
   },
   async nextPage() {
     const { currentDocument, currentPage } = get();
