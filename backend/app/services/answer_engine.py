@@ -823,13 +823,27 @@ def classify_intent(
         messages=[{
             "role": "user",
             "content": (
-                f"Classify this question into exactly one category.\n\n"
+                f"Classify this question into exactly one category. "
+                f"The question may be in any language (English, Dutch, French, German, ...).\n\n"
                 f"Question: {query}\n"
                 f"{source_summary}\n\n"
                 "Categories:\n"
-                "- 'qa' = user wants information, explanation, or lookup\n"
-                "- 'calculation' = user wants a numeric computation using formulas or values\n"
-                "- 'ambiguous' = question is unclear or missing critical information\n\n"
+                "- 'qa' = the user wants information FROM the sources: a lookup, explanation, "
+                "definition, or *typical / recommended values* the documents describe. "
+                "Examples:\n"
+                "    EN 'what are the typical flow rates per nozzle?'\n"
+                "    EN 'what does the book say about cure temperature?'\n"
+                "    NL 'wat zijn de afstanden tussen de nozzles?'\n"
+                "    NL 'welke debieten zijn nodig per zone?'\n"
+                "    FR 'quelles sont les pressions typiques?'\n"
+                "    DE 'welche Werte sind üblich?'\n"
+                "- 'calculation' = the user has SUPPLIED specific numeric values and asks "
+                "to compute a result. Examples:\n"
+                "    EN 'compute power for Q=10 m3/s and Δp=500 Pa'\n"
+                "    NL 'bereken het vermogen als Q=10 m3/s en Δp=500 Pa'\n"
+                "  If the user is *asking what the typical values are*, this is 'qa', NOT 'calculation'.\n"
+                "- 'ambiguous' = the question is genuinely unclear (e.g. one-word query, "
+                "no enough context to retrieve relevant sources).\n\n"
                 "Reply with ONLY the category name, nothing else."
             ),
         }],
@@ -1751,7 +1765,30 @@ def calculation_agent(
 
     # Step 2: Check for missing variables
     missing = setup.get("missing_variables", [])
+    extracted_vars = setup.get("variables", []) or []
+
     if missing:
+        # Lookup-style queries (e.g. "what are the typical flow rates and
+        # nozzle distances?") get mis-classified as calculations because
+        # they mention quantities. The setup then asks for values the user
+        # did NOT provide and shouldn't have to — they want the values
+        # *from* the sources. Detect that case (no variables successfully
+        # extracted) and fall back to qa_agent so the user gets a real
+        # answer that quotes typical values out of the document, instead
+        # of a "please provide values" dead-end.
+        user_supplied = sum(
+            1
+            for v in extracted_vars
+            if "user" in str(v.get("source", "")).lower()
+        )
+        if user_supplied == 0:
+            logger.info(
+                "calculation_agent: no user-supplied values; falling back to qa_agent "
+                "for lookup-style query: %r",
+                query,
+            )
+            return qa_agent(query, sources, conversation_history, search_mode="library")
+
         missing_answer = _generate_calculation_fallback(
             mode="missing_variables",
             blocker="Required inputs are missing, so no exact numeric result can be produced yet.",
