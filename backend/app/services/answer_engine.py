@@ -19,7 +19,7 @@ import httpx
 import openai
 
 from app.core.config import settings
-from app.services.retrieval import RetrievalResult
+from app.services.retrieval import RetrievalResult, _strip_tracking_params_in_text
 from app.services.sandbox import execute_calculation
 
 logger = logging.getLogger(__name__)
@@ -137,10 +137,12 @@ def _apply_sentence_style_markdown(markdown: str) -> str:
 
 
 def _style_answer_response(answer: "AnswerResponse") -> "AnswerResponse":
-    answer.text = _apply_sentence_style_markdown(answer.text)
+    answer.text = _strip_tracking_params_in_text(_apply_sentence_style_markdown(answer.text))
     for section in answer.sections:
         if section.content:
-            section.content = _apply_sentence_style_markdown(section.content)
+            section.content = _strip_tracking_params_in_text(
+                _apply_sentence_style_markdown(section.content)
+            )
     return answer
 
 
@@ -151,7 +153,6 @@ class Citation:
     document_id: UUID | None = None
     document_name: str = ""
     page: int = 0
-    bbox: list | None = None
     boxes: list[list[float]] | None = None
     snippet: str = ""
     url: str | None = None
@@ -266,33 +267,21 @@ def language_instruction_for_query(query: str) -> str:
 
 
 def _normalize_bbox_references(bboxes: list[list[float]] | None) -> list[list[float]]:
-    valid_bboxes = [
-        bbox
-        for bbox in (bboxes or [])
-        if isinstance(bbox, list) and len(bbox) == 4
-    ]
-    return [
-        [
-            round(float(bbox[0]), 2),
-            round(float(bbox[1]), 2),
-            round(float(bbox[2]), 2),
-            round(float(bbox[3]), 2),
-        ]
-        for bbox in valid_bboxes
-    ]
-
-
-def _merge_bbox_references(bboxes: list[list[float]] | None) -> list[float] | None:
-    valid_bboxes = _normalize_bbox_references(bboxes)
-    if not valid_bboxes:
-        return None
-
-    return [
-        round(min(bbox[0] for bbox in valid_bboxes), 2),
-        round(min(bbox[1] for bbox in valid_bboxes), 2),
-        round(max(bbox[2] for bbox in valid_bboxes), 2),
-        round(max(bbox[3] for bbox in valid_bboxes), 2),
-    ]
+    normalized: list[list[float]] = []
+    for bbox in bboxes or []:
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            continue
+        try:
+            x1, y1, x2, y2 = (float(value) for value in bbox)
+        except (TypeError, ValueError):
+            continue
+        # Reject degenerate boxes (zero/negative area). They produce no useful
+        # highlight and would otherwise be inflated by minimum-size clamps in
+        # the renderer, creating phantom rectangles.
+        if x2 <= x1 or y2 <= y1:
+            continue
+        normalized.append([round(x1, 2), round(y1, 2), round(x2, 2), round(y2, 2)])
+    return normalized
 
 
 def _build_citations(results: list[RetrievalResult]) -> list[Citation]:
@@ -300,15 +289,27 @@ def _build_citations(results: list[RetrievalResult]) -> list[Citation]:
     citations = []
     for i, r in enumerate(results):
         boxes = _normalize_bbox_references(r.bbox_references)
+        # If the chunk carries sentence anchors, prefer the first anchor's
+        # sentence-level bbox over the chunk-merged bbox so a citation chip
+        # highlights one sentence instead of the whole region. Falls back to
+        # the chunk-level boxes when no anchor data is present.
+        anchor_box: list[float] | None = None
+        if r.anchors:
+            for anchor in r.anchors:
+                if isinstance(anchor, dict):
+                    bbox = anchor.get("bbox")
+                    if isinstance(bbox, list) and len(bbox) == 4:
+                        anchor_box = bbox
+                        break
+        snippet_source = _strip_anchor_markers(r.content or "")
         cite = Citation(
             id=f"cite-{i + 1}",
             source_type=r.source_type,
             document_id=r.document_id,
             document_name=r.document_name,
             page=r.page_number,
-            bbox=_merge_bbox_references(boxes),
-            boxes=boxes or None,
-            snippet=r.content[:200],
+            boxes=([anchor_box] if anchor_box else (boxes or None)),
+            snippet=snippet_source[:200],
             url=r.url,
             title=r.title,
         )
@@ -449,12 +450,14 @@ def _reindex_citation_references(
         return text, citations
 
     index_map = {old_index: new_index for new_index, old_index in enumerate(ordered_unique, start=1)}
-    remapped_text = text
-    for old_index, new_index in sorted(index_map.items(), reverse=True):
-        remapped_text = re.sub(rf"\[Source\s+{old_index}\]", f"[{new_index}]", remapped_text, flags=re.IGNORECASE)
-        remapped_text = re.sub(rf"\(Source\s+{old_index}\)", f"[{new_index}]", remapped_text, flags=re.IGNORECASE)
-        remapped_text = re.sub(rf"(?<!\[)\bSource\s+{old_index}\b", f"[{new_index}]", remapped_text, flags=re.IGNORECASE)
-        remapped_text = re.sub(rf"\[{old_index}\]", f"[{new_index}]", remapped_text)
+
+    def _remap(match: re.Match[str]) -> str:
+        old_index = int(match.group(1))
+        new_index = index_map.get(old_index)
+        return f"[{new_index}]" if new_index is not None else match.group(0)
+
+    normalized_text = _normalize_inline_citation_labels(text)
+    remapped_text = re.sub(r"\[(\d+)\]", _remap, normalized_text)
 
     remapped_citations = [citations[old_index - 1] for old_index in ordered_unique]
     return remapped_text, remapped_citations
@@ -477,7 +480,6 @@ def _merge_citation_pair(existing: Citation, incoming: Citation) -> Citation:
         document_id=existing.document_id or incoming.document_id,
         document_name=existing.document_name or incoming.document_name,
         page=existing.page or incoming.page,
-        bbox=_merge_bbox_references(merged_boxes) or existing.bbox or incoming.bbox,
         boxes=merged_boxes or existing.boxes or incoming.boxes,
         snippet=existing.snippet if len(existing.snippet) >= len(incoming.snippet) else incoming.snippet,
         url=existing.url or incoming.url,
@@ -1075,6 +1077,311 @@ def identity_agent(query: str, conversation_history: list[dict]) -> AnswerRespon
 # ---- Q&A Agent ----
 
 
+_FORMULA_TOPIC_PATTERN = re.compile(
+    r"\b(formul[ae]s?|equations?|calculations?|derivations?)\b",
+    re.IGNORECASE,
+)
+_FORMULA_LISTING_PATTERN = re.compile(
+    r"\b(what|which|list|show|tell\s+me|describe|all|every|the\s+formula"
+    r"|the\s+equation|the\s+calculation|cover|covers|covered|are\s+there)\b",
+    re.IGNORECASE,
+)
+
+
+_ANCHOR_MARKER_RE = re.compile(r"<c>[^<\s]+</c>")
+
+
+def _strip_anchor_markers(text: str) -> str:
+    """Remove inline ``<c>page.order</c>`` anchor markers from user-visible text.
+
+    Anchors are embedded in chunk content_text at ingestion time so the
+    answer model can cite at sentence granularity. They must never appear
+    in the final answer rendered to the user — this strip is the last
+    defence against that leakage, regardless of whether the answer came
+    via the anchor-aware pipeline or the legacy reindex pipeline.
+    """
+    if not text:
+        return text or ""
+    return _ANCHOR_MARKER_RE.sub("", text).strip()
+
+
+def _build_anchor_index(sources: list[RetrievalResult]) -> dict[str, dict]:
+    """Index every sentence anchor across the retrieved sources.
+
+    Each retrieved chunk carries a list of ``{"id", "bbox", "char_start",
+    "char_end"}`` anchor entries (populated at ingestion by
+    :func:`app.services.sentence_anchors.annotate_with_anchors`). The
+    resolver turns model-emitted anchor ids (e.g. ``"12.3"``) into
+    sentence-level :class:`Citation` objects.
+
+    Returned mapping: ``anchor_id -> {source, bbox, char_start, char_end}``.
+    """
+    index: dict[str, dict] = {}
+    for source in sources:
+        if not source.anchors:
+            continue
+        for anchor in source.anchors:
+            if not isinstance(anchor, dict):
+                continue
+            aid = anchor.get("id")
+            if not aid or not isinstance(aid, str):
+                continue
+            bbox = anchor.get("bbox") if isinstance(anchor.get("bbox"), list) else None
+            index[aid] = {
+                "source": source,
+                "bbox": bbox,
+                "char_start": anchor.get("char_start"),
+                "char_end": anchor.get("char_end"),
+            }
+    return index
+
+
+def _resolve_citation_token(
+    token: object,
+    anchor_index: dict[str, dict],
+    sources: list[RetrievalResult],
+) -> Citation | None:
+    """Resolve a model-emitted citation token to a :class:`Citation`.
+
+    Accepts both anchor ids (``"12.3"``) and legacy source numbers
+    (``1`` or ``"1"``). Anchor ids carry sentence-level bboxes; source
+    numbers fall back to the chunk's first bbox so legacy data still
+    renders something.
+    """
+    if token is None:
+        return None
+    raw = str(token).strip()
+    if not raw:
+        return None
+
+    # Anchor-id citation (page.order form).
+    if "." in raw and raw in anchor_index:
+        entry = anchor_index[raw]
+        source = entry["source"]
+        bbox = entry["bbox"]
+        char_start = entry.get("char_start")
+        char_end = entry.get("char_end")
+        # Anchor offsets were computed against the *original* text, but
+        # ``source.content`` carries the annotated form (with embedded
+        # ``<c>...</c>`` markers). Strip markers before slicing so the
+        # snippet shown in the citation chip is clean.
+        snippet_source = _strip_anchor_markers(source.content or "")
+        if isinstance(char_start, int) and isinstance(char_end, int):
+            sentence = snippet_source[char_start:char_end].strip()
+        else:
+            sentence = snippet_source[:200]
+        return Citation(
+            id=f"cite-{raw}",
+            source_type=source.source_type,
+            document_id=source.document_id,
+            document_name=source.document_name,
+            page=source.page_number,
+            boxes=[bbox] if bbox else None,
+            snippet=(sentence or snippet_source[:200])[:200],
+            url=source.url,
+            title=source.title,
+        )
+
+    # Fallback: legacy chunk-number citation.
+    try:
+        index = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if index < 1 or index > len(sources):
+        return None
+    source = sources[index - 1]
+    boxes = None
+    if isinstance(source.bbox_references, list) and source.bbox_references:
+        first = source.bbox_references[0]
+        if isinstance(first, list) and len(first) == 4:
+            boxes = [first]
+    return Citation(
+        id=f"cite-{index}",
+        source_type=source.source_type,
+        document_id=source.document_id,
+        document_name=source.document_name,
+        page=source.page_number,
+        boxes=boxes,
+        snippet=_strip_anchor_markers(source.content or "")[:200],
+        url=source.url,
+        title=source.title,
+    )
+
+
+def _render_claims_with_anchors(
+    claims: list,
+    sources: list[RetrievalResult],
+) -> tuple[str, list[Citation]]:
+    """Resolve a structured claims payload into Markdown with sentence citations.
+
+    Like :func:`_render_claims_to_markdown` but emits sentence-level
+    :class:`Citation` objects (one per anchor or legacy chunk reference)
+    rather than indexing into a pre-built citation list. This is the
+    NotebookLM-style path: the model returns anchor ids per claim, we
+    resolve each to its precise sentence bbox, and the answer text is
+    rendered with deterministic ``[N]`` markers.
+
+    Strict: claims that resolve to zero valid citations are dropped.
+    """
+    anchor_index = _build_anchor_index(sources)
+
+    pool: list[Citation] = []
+    pool_index_by_id: dict[str, int] = {}
+    paragraphs: list[str] = []
+
+    for claim in claims:
+        if not isinstance(claim, dict):
+            continue
+        text = str(claim.get("text", "") or "").strip()
+        if not text:
+            continue
+        raw_tokens = claim.get("citations") or []
+        if not isinstance(raw_tokens, list):
+            continue
+
+        marker_chunks: list[str] = []
+        seen_in_claim: set[str] = set()
+        for token in raw_tokens:
+            citation = _resolve_citation_token(token, anchor_index, sources)
+            if citation is None:
+                continue
+            if citation.id in seen_in_claim:
+                continue
+            seen_in_claim.add(citation.id)
+            if citation.id not in pool_index_by_id:
+                pool.append(citation)
+                pool_index_by_id[citation.id] = len(pool)
+            marker_chunks.append(f"[{pool_index_by_id[citation.id]}]")
+
+        if not marker_chunks:
+            continue
+        markers = "".join(marker_chunks)
+        if text[-1] in ".!?":
+            paragraphs.append(f"{text[:-1]} {markers}{text[-1]}")
+        else:
+            paragraphs.append(f"{text} {markers}")
+
+    return "\n\n".join(paragraphs), pool
+
+
+def _render_claims_to_markdown(
+    claims: list,
+    *,
+    max_index: int,
+) -> tuple[str, list[int]]:
+    """Render a structured claims-with-citations payload into Markdown.
+
+    The QA prompt now asks the model to emit ``{claims: [{text, citations}]}``
+    rather than placing ``[N]`` markers in free-form prose. We render it
+    deterministically here: each claim's text is followed by its citation
+    chips so downstream code (which still expects ``[N]`` markers) is
+    unchanged.
+
+    Claims without at least one in-range citation are dropped — the strict
+    citation-enforcement is the whole point of switching to this schema.
+
+    Returns ``(markdown_text, deduplicated_used_sources)``.
+    """
+    rendered_paragraphs: list[str] = []
+    used: list[int] = []
+    seen: set[int] = set()
+
+    for claim in claims:
+        if not isinstance(claim, dict):
+            continue
+        text = str(claim.get("text", "") or "").strip()
+        if not text:
+            continue
+        raw_citations = claim.get("citations") or []
+        if not isinstance(raw_citations, list):
+            continue
+
+        valid: list[int] = []
+        seen_in_claim: set[int] = set()
+        for raw in raw_citations:
+            try:
+                index = int(str(raw).strip())
+            except (TypeError, ValueError):
+                continue
+            if index < 1 or index > max_index or index in seen_in_claim:
+                continue
+            seen_in_claim.add(index)
+            valid.append(index)
+            if index not in seen:
+                seen.add(index)
+                used.append(index)
+
+        if not valid:
+            # Strict: no claim survives without at least one citation.
+            continue
+
+        marker_chunk = "".join(f"[{idx}]" for idx in valid)
+        # Inject markers right at the end of the claim text, before any
+        # trailing punctuation like ``.``, ``!``, ``?``.
+        if text and text[-1] in ".!?":
+            rendered = f"{text[:-1]} {marker_chunk}{text[-1]}"
+        else:
+            rendered = f"{text} {marker_chunk}"
+        rendered_paragraphs.append(rendered)
+
+    return "\n\n".join(rendered_paragraphs), used
+
+
+def _is_formula_listing_query(query: str) -> bool:
+    """Detect questions asking the model to enumerate formulas/calculations from sources.
+
+    Distinct from `calculation_agent`'s intent (which executes a single computation).
+    This catches questions like "which calculations are in these PDFs" / "list the
+    formulas" / "what equations does this book describe" — the user wants a *catalog*
+    of the math the sources contain, presented verbatim with proper rendering.
+    """
+    if not query:
+        return False
+    if not _FORMULA_TOPIC_PATTERN.search(query):
+        return False
+    return bool(_FORMULA_LISTING_PATTERN.search(query))
+
+
+def _promote_equation_sources(sources: list[RetrievalResult]) -> list[RetrievalResult]:
+    """Reorder sources so equation chunks lead, preserving relative order within groups.
+
+    The QA prompt embeds sources in the order given, and LLMs weight earlier context
+    more heavily. When the user is asking *about* formulas, we want those chunks at
+    the front so the model has the actual math to quote rather than narrative prose.
+    """
+    equations = [s for s in sources if s.chunk_type == "equation"]
+    others = [s for s in sources if s.chunk_type != "equation"]
+    return equations + others
+
+
+_FORMULA_LISTING_USER_RULE = (
+    "FORMULA LISTING MODE — the user is asking for the calculations/formulas the "
+    "sources cover. For EACH distinct calculation in the sources, output a section "
+    "with this exact structure:\n\n"
+    "### <Short formula name>\n"
+    "$$<convert the source's formula to display LaTeX, using \\frac, ^{}, _{}, "
+    "\\rho, \\omega, \\sum, etc.>$$\n"
+    "Source quote: \"<paste the formula verbatim from the source, including any "
+    "equation number like (11)>\" [N]\n"
+    "Variables:\n"
+    "- $<symbol>$: <name> — <unit>\n"
+    "- ...\n"
+    "Notes: <one sentence on what the formula computes or when it applies>\n\n"
+    "RULES FOR THIS MODE:\n"
+    "- Cover EVERY distinct calculation present in the sources. Do not collapse "
+    "multiple formulas into prose.\n"
+    "- The LaTeX must render the same equation as the source quote — do not "
+    "invent symbols.\n"
+    "- Each formula MUST carry an inline citation [N] immediately after the "
+    "source quote.\n"
+    "- If a source provides only a variable definition (e.g., 'Qv: débit (m3/s)'), "
+    "attach it to the formula it belongs to; do not list it standalone.\n"
+    "- If two sources give the same formula, cite both: [1][2].\n"
+    "- Do not include narrative summaries, prefaces, or closing 'these calculations "
+    "enable...' sentences. The output is the catalog itself.\n"
+)
+
+
 def qa_agent(
     query: str,
     sources: list[RetrievalResult],
@@ -1084,6 +1391,12 @@ def qa_agent(
     """Answer document Q&A questions with citations."""
     client = _get_client()
     language_instruction = language_instruction_for_query(query)
+
+    formula_listing = _is_formula_listing_query(query)
+    if formula_listing:
+        sources = _promote_equation_sources(sources)
+        logger.info("qa_agent: formula-listing intent detected; equation chunks promoted")
+
     all_citations = _build_citations(sources)
     sources_text = _format_sources_for_prompt(sources)
     library_user_rule = (
@@ -1102,25 +1415,34 @@ def qa_agent(
     for msg in conversation_history[-10:]:
         messages.append({"role": msg["role"], "content": msg["content"]})
 
+    base_rules = (
+        "RULES:\n"
+        f"0. {language_instruction}\n"
+        "1. Ground your answer in the sources. Cite inline as numbered references like [1], [2], or [3].\n"
+        f"{library_user_rule if search_mode == 'library' else non_library_user_rule}"
+        "3. If multiple sources give different information, present both and note the difference.\n"
+        "4. If a source has LOW OCR CONFIDENCE, warn the user to verify visually.\n"
+        "5. Be thorough and practically useful, not minimal.\n"
+        "6. Explain ideas, not just labels. For each major point, add concrete detail, mechanism, implication, or example.\n"
+        "7. If the topic supports it, add a short worked example, quick estimate, unit check, or mini-calculation.\n"
+        "8. Unless the user asks for a short answer, prefer a fuller explanation over a terse list.\n"
+        "9. Only cite a source section if that exact retrieved section supports the sentence.\n"
+        "10. Do not cite unused sources. Do not guess where support came from.\n"
+        f"11. {STRUCTURED_RESPONSE_GUIDANCE}"
+    )
+    rules_block = (
+        f"{_FORMULA_LISTING_USER_RULE}\n{base_rules}"
+        if formula_listing
+        else base_rules
+    )
+
     messages.append({
         "role": "user",
         "content": (
             f"Answer the following question using the provided sources.\n\n"
             f"SOURCES:\n{sources_text}\n\n"
             f"QUESTION: {query}\n\n"
-            "RULES:\n"
-            f"0. {language_instruction}\n"
-            "1. Ground your answer in the sources. Cite inline as numbered references like [1], [2], or [3].\n"
-            f"{library_user_rule if search_mode == 'library' else non_library_user_rule}"
-            "3. If multiple sources give different information, present both and note the difference.\n"
-            "4. If a source has LOW OCR CONFIDENCE, warn the user to verify visually.\n"
-            "5. Be thorough and practically useful, not minimal.\n"
-            "6. Explain ideas, not just labels. For each major point, add concrete detail, mechanism, implication, or example.\n"
-            "7. If the topic supports it, add a short worked example, quick estimate, unit check, or mini-calculation.\n"
-            "8. Unless the user asks for a short answer, prefer a fuller explanation over a terse list.\n"
-            "9. Only cite a source section if that exact retrieved section supports the sentence.\n"
-            "10. Do not cite unused sources. Do not guess where support came from.\n"
-            f"11. {STRUCTURED_RESPONSE_GUIDANCE}"
+            f"{rules_block}"
         ),
     })
 
@@ -1140,6 +1462,38 @@ def qa_agent(
         ),
     })
 
+    # Two output schemas: the formula-listing path stays free-form markdown
+    # (its prompt already prescribes a strict per-formula template), while
+    # the generic QA path uses claims-with-citations so each claim is
+    # explicitly bound to its sources rather than relying on the model to
+    # place [N] markers correctly in prose.
+    if formula_listing:
+        response_format_instruction = (
+            "Return valid JSON with keys answer_markdown, used_sources, and unsupported_claims. "
+            "answer_markdown must contain the final user-visible answer in Markdown using the "
+            "FORMULA LISTING MODE template above. "
+            "used_sources must be an array of source numbers actually used in the answer, such as [1, 3]. "
+            "unsupported_claims must list any parts of the user's request that were not fully supported "
+            "by the sources. "
+            "Do not include a source number unless the answer really used that source."
+        )
+    else:
+        response_format_instruction = (
+            "Return valid JSON with keys claims and unsupported_claims.\n"
+            "- claims is an ordered array of objects: "
+            "{ text: <one claim sentence or short paragraph in Markdown, with NO inline citation "
+            "markers>, citations: <array of anchor ids supporting THIS claim> }.\n"
+            "- Each anchor id is the value of a <c>...</c> tag you saw embedded in the source "
+            "passages (format: \"<page>.<order>\", e.g. \"12.3\"). Cite anchors that appear in the "
+            "exact span you are paraphrasing. If a source has no anchor on the relevant span, you "
+            "may fall back to its source number (e.g. \"1\" or \"3\").\n"
+            "- Every claim MUST have at least one citation. If you cannot back a claim from the "
+            "provided sources, omit it from claims and add the original phrasing to unsupported_claims.\n"
+            "- Do not pad with claims that have no citations.\n"
+            "- unsupported_claims is an array of plain strings describing any parts of the user's "
+            "question that the sources did not cover."
+        )
+
     response = client.chat.completions.create(
         model="gpt-4o",
         max_tokens=4096,
@@ -1147,37 +1501,59 @@ def qa_agent(
         messages=messages + [
             {
                 "role": "assistant",
-                "content": (
-                    "Return valid JSON with keys answer_markdown, used_sources, and unsupported_claims. "
-                    "answer_markdown must contain the final user-visible answer in Markdown. "
-                    "used_sources must be an array of source numbers actually used in the answer, such as [1, 3]. "
-                    "unsupported_claims must list any parts of the user's request that were not fully supported by the sources. "
-                    "Do not include a source number unless the answer really used that source."
-                ),
+                "content": response_format_instruction,
             }
         ],
     )
 
     raw_content = response.choices[0].message.content or ""
+    answer_text = ""
+    used_sources: list = []
+    unsupported_claims: list[str] = []
+    citations: list[Citation] = []
+    skip_legacy_pipeline = False
     try:
         payload = json.loads(raw_content)
-        answer_text = str(payload.get("answer_markdown", "") or "").strip()
-        used_sources = payload.get("used_sources", [])
+
         unsupported_claims = [
             str(item).strip()
             for item in payload.get("unsupported_claims", [])
             if str(item).strip()
         ]
+
+        if formula_listing:
+            answer_text = str(payload.get("answer_markdown", "") or "").strip()
+            used_sources = payload.get("used_sources", [])
+        else:
+            # NotebookLM-style: model emits anchor ids per claim, we resolve
+            # each to a sentence-level Citation (or fall back to chunk-level
+            # for legacy/anchorless sources). The resolver returns the final
+            # markdown + citation pool, already deterministic and
+            # deduplicated, so we skip the legacy reindex/strip pipeline.
+            answer_text, citations = _render_claims_with_anchors(
+                payload.get("claims") or [],
+                sources,
+            )
+            skip_legacy_pipeline = bool(answer_text)
+
+            # Off-spec fallback: if the model defied the schema and shipped
+            # a Markdown blob in answer_markdown, route it through the
+            # legacy pipeline so the user still gets an answer.
+            if not skip_legacy_pipeline and payload.get("answer_markdown"):
+                answer_text = str(payload["answer_markdown"]).strip()
+                used_sources = payload.get("used_sources", [])
     except Exception:
         answer_text = raw_content.strip()
         used_sources = []
         unsupported_claims = []
 
-    used_sources = _merge_source_indices(
-        _coerce_source_indices(used_sources, len(all_citations)),
-        _coerce_source_indices(_extract_citation_reference_indices(answer_text), len(all_citations)),
-    )
-    answer_text, citations = _reindex_citation_references(answer_text, all_citations, used_sources)
+    if not skip_legacy_pipeline:
+        used_sources = _merge_source_indices(
+            _coerce_source_indices(used_sources, len(all_citations)),
+            _coerce_source_indices(_extract_citation_reference_indices(answer_text), len(all_citations)),
+        )
+        answer_text, citations = _reindex_citation_references(answer_text, all_citations, used_sources)
+
     verification_source_indices = used_sources or list(range(1, len(sources) + 1))
     verified_sources, verifier_unsupported_claims = _verify_grounded_answer(
         query=query,
@@ -1189,7 +1565,7 @@ def qa_agent(
         ] or sources,
         search_mode=search_mode,
     )
-    if verified_sources:
+    if verified_sources and not skip_legacy_pipeline:
         verified_sources = _merge_source_indices(
             _coerce_source_indices(verified_sources, len(citations)),
             _coerce_source_indices(_extract_citation_reference_indices(answer_text), len(citations)),
@@ -1198,9 +1574,15 @@ def qa_agent(
     unsupported_claims.extend(
         claim for claim in verifier_unsupported_claims if claim not in unsupported_claims
     )
-    answer_text, citations = _deduplicate_citation_references(answer_text, citations)
-    answer_text = _remove_unresolved_citation_references(answer_text, citations)
-    answer_text = ensure_inline_citation_references(answer_text, citations)
+    if not skip_legacy_pipeline:
+        answer_text, citations = _deduplicate_citation_references(answer_text, citations)
+        answer_text = _remove_unresolved_citation_references(answer_text, citations)
+        answer_text = ensure_inline_citation_references(answer_text, citations)
+
+    # The user must NEVER see the inline ``<c>...</c>`` anchor markers that
+    # were embedded in chunk text for the model's benefit. Strip them
+    # unconditionally, regardless of which pipeline produced the answer.
+    answer_text = _strip_anchor_markers(answer_text)
 
     # Check for OCR warnings
     warnings = []

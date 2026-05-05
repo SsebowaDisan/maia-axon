@@ -172,7 +172,6 @@ export interface Citation {
   document_id: string | null;
   document_name: string;
   page: number;
-  bbox: number[] | null;
   boxes?: number[][] | null;
   snippet: string;
   url: string | null;

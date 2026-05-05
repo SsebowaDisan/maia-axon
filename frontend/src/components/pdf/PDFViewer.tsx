@@ -121,10 +121,20 @@ export function PDFViewer() {
   const zoom = usePDFViewerStore((state) => state.zoom);
   const highlights = usePDFViewerStore((state) => state.highlightCitations);
   const loading = usePDFViewerStore((state) => state.loading);
+  const openClickNonce = usePDFViewerStore((state) => state.openClickNonce);
   const clearHighlights = usePDFViewerStore((state) => state.clearHighlights);
   const loadPage = usePDFViewerStore((state) => state.loadPage);
   const prefetchPages = usePDFViewerStore((state) => state.prefetchPages);
   const hasEvidenceHighlights = highlights.length > 0;
+  const hasRenderableHighlight = useMemo(
+    () =>
+      highlights.some((citation) =>
+        citation.boxes?.some(
+          (box) => Array.isArray(box) && box.length === 4 && box[2] > box[0] && box[3] > box[1],
+        ),
+      ),
+    [highlights],
+  );
   const [visibleRange, setVisibleRange] = useState({ start: 1, end: 0 });
   const [highlightReadyNonce, setHighlightReadyNonce] = useState(0);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -191,7 +201,10 @@ export function PDFViewer() {
     );
     lastScrollTargetRef.current = null;
     setHighlightReadyNonce(0);
-  }, [currentDocument, currentPage, hasEvidenceHighlights]);
+    // openClickNonce is in deps so a repeat click of the same citation
+    // re-runs this effect and resets visibleRange to the citation window
+    // (otherwise React skips it because doc/page/highlight haven't changed).
+  }, [currentDocument, currentPage, hasEvidenceHighlights, openClickNonce]);
 
   useEffect(() => {
     if (!currentDocument || visibleRange.end < visibleRange.start) {
@@ -256,7 +269,10 @@ export function PDFViewer() {
       .map((citation) => citation.id)
       .sort()
       .join(",");
-    const targetKey = `${currentDocument.id}:${currentPage}:${highlightKey}:${highlightReadyNonce}`;
+    // openClickNonce makes each chip click produce a distinct key even when
+    // the user clicks the same citation twice — without it, the dedupe
+    // below short-circuits and the page never re-scrolls into view.
+    const targetKey = `${currentDocument.id}:${currentPage}:${highlightKey}:${highlightReadyNonce}:${openClickNonce}`;
     if (lastScrollTargetRef.current === targetKey) {
       return;
     }
@@ -301,7 +317,7 @@ export function PDFViewer() {
     };
 
     scrollToEvidence();
-  }, [currentDocument, currentPage, highlightReadyNonce, highlights, loadedPages]);
+  }, [currentDocument, currentPage, highlightReadyNonce, highlights, loadedPages, openClickNonce]);
 
   if (currentWebCitation) {
     return (
@@ -376,10 +392,14 @@ export function PDFViewer() {
       />
       <div className="flex items-center justify-between border-b border-line px-4 py-2 text-[11px] text-muted">
         <span>
-          {highlights.length ? "Evidence on " : ""}
+          {hasEvidenceHighlights && !hasRenderableHighlight
+            ? "Cited page (no precise highlight available) — "
+            : hasEvidenceHighlights
+              ? "Evidence on "
+              : ""}
           page {pageData?.printed_page_label ?? currentPage}
         </span>
-        {highlights.length ? (
+        {hasEvidenceHighlights ? (
           <button type="button" className="text-accent" onClick={clearHighlights}>
             Clear
           </button>

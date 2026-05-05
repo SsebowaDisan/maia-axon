@@ -108,7 +108,6 @@ def _serialize_citation(cite) -> dict:
         "document_id": str(cite.document_id) if cite.document_id else None,
         "document_name": cite.document_name,
         "page": cite.page,
-        "bbox": cite.bbox,
         "boxes": cite.boxes,
         "snippet": cite.snippet,
         "url": cite.url,

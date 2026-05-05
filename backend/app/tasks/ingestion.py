@@ -783,11 +783,19 @@ def _extract_searchable_page(embedded_text: str, text_dict: dict) -> dict:
         def flush_text_buffer():
             if not block_lines:
                 return
+            # Preserve per-line text + bbox so the sentence-anchor pass can
+            # tie each sentence to the actual lines it occupies, not just
+            # the merged chunk-level bbox. Length must match block_lines.
+            line_records = [
+                {"text": text_, "bbox": list(bbox_)}
+                for text_, bbox_ in zip(block_lines, block_line_bboxes)
+            ]
             regions.append({
                 "type": "text",
                 "glm_label": "text",
                 "bbox": _merge_bboxes(block_line_bboxes) if block_line_bboxes else block_bbox,
                 "content": "\n".join(block_lines),
+                "lines": line_records,
             })
             block_lines.clear()
             block_line_bboxes.clear()
@@ -1007,6 +1015,8 @@ def _page_to_chunk_payload(page: Page) -> dict:
 
 
 def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
+    from app.services.sentence_anchors import annotate_with_anchors
+
     chunks = []
 
     for page_data in pages:
@@ -1016,6 +1026,10 @@ def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
 
         recent_text_context: list[str] = []
 
+        # Reading-order counter shared across all chunks on this page so each
+        # sentence anchor on the page gets a unique id like ``{page}.{order}``.
+        reading_order = 0
+
         for region in regions:
             if region.get("type") == "skip":
                 continue
@@ -1024,12 +1038,23 @@ def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
                 content = (region.get("content") or "").strip()
                 if not content:
                     continue
+                # Sentence-level anchors are embedded inline in content_text
+                # as ``<c>{page}.{order}</c>`` markers and persisted in the
+                # ``anchors`` JSONB column for client-side bbox resolution.
+                annotated, sentence_anchors, reading_order = annotate_with_anchors(
+                    content,
+                    page_number=page_number,
+                    starting_reading_order=reading_order,
+                    chunk_bbox=region.get("bbox"),
+                    lines=region.get("lines"),
+                )
                 chunk = Chunk(
                     document_id=uuid.UUID(doc_id),
                     page_id=uuid.UUID(page_id),
                     chunk_type="section",
-                    content_text=content,
+                    content_text=annotated,
                     bbox_references=[region.get("bbox", [0, 0, 0, 0])],
+                    anchors=[a.to_dict() for a in sentence_anchors] or None,
                     metadata_={"page_number": page_number},
                 )
                 db.add(chunk)
@@ -1044,14 +1069,29 @@ def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
                 if context_before:
                     content = f"{context_before}\n\n{content}"
 
+                # Equation chunks get a single anchor for the whole formula
+                # so the answer model can cite the exact equation rather
+                # than the surrounding paragraph context.
+                eq_bbox = region.get("bbox", [0, 0, 0, 0])
+                anchor_id = f"{page_number}.{reading_order}"
+                anchor_entry = {
+                    "id": anchor_id,
+                    "bbox": eq_bbox,
+                    "char_start": 0,
+                    "char_end": len(content),
+                }
+                annotated_content = f"<c>{anchor_id}</c>{content}"
+                reading_order += 1
+
                 chunk = Chunk(
                     document_id=uuid.UUID(doc_id),
                     page_id=uuid.UUID(page_id),
                     chunk_type="equation",
-                    content_text=content,
+                    content_text=annotated_content,
                     latex=region.get("latex"),
                     variables=region.get("variables"),
-                    bbox_references=[region.get("bbox", [0, 0, 0, 0])],
+                    bbox_references=[eq_bbox],
+                    anchors=[anchor_entry],
                     metadata_={"page_number": page_number},
                 )
                 db.add(chunk)
@@ -1060,12 +1100,21 @@ def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
 
             if region.get("type") == "table":
                 content = region.get("content_markdown", region.get("content", ""))
+                tbl_bbox = region.get("bbox", [0, 0, 0, 0])
+                anchor_id = f"{page_number}.{reading_order}"
+                reading_order += 1
                 chunk = Chunk(
                     document_id=uuid.UUID(doc_id),
                     page_id=uuid.UUID(page_id),
                     chunk_type="table",
-                    content_text=content,
-                    bbox_references=[region.get("bbox", [0, 0, 0, 0])],
+                    content_text=f"<c>{anchor_id}</c>{content}",
+                    bbox_references=[tbl_bbox],
+                    anchors=[{
+                        "id": anchor_id,
+                        "bbox": tbl_bbox,
+                        "char_start": 0,
+                        "char_end": len(content),
+                    }],
                     metadata_={"page_number": page_number},
                 )
                 db.add(chunk)
@@ -1078,12 +1127,21 @@ def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
                 if caption:
                     content = f"{caption}\n{content}"
                 if content.strip():
+                    fig_bbox = region.get("bbox", [0, 0, 0, 0])
+                    anchor_id = f"{page_number}.{reading_order}"
+                    reading_order += 1
                     chunk = Chunk(
                         document_id=uuid.UUID(doc_id),
                         page_id=uuid.UUID(page_id),
                         chunk_type="figure",
-                        content_text=content,
-                        bbox_references=[region.get("bbox", [0, 0, 0, 0])],
+                        content_text=f"<c>{anchor_id}</c>{content}",
+                        bbox_references=[fig_bbox],
+                        anchors=[{
+                            "id": anchor_id,
+                            "bbox": fig_bbox,
+                            "char_start": 0,
+                            "char_end": len(content),
+                        }],
                         metadata_={"page_number": page_number},
                     )
                     db.add(chunk)
@@ -1092,12 +1150,29 @@ def _create_chunks(pages: list[dict], doc_id: str, db: Session) -> list[Chunk]:
         page_text = page_data.get("ocr_text", page_data.get("markdown", ""))
         if page_text and page_text.strip():
             all_bboxes = [r.get("bbox", [0, 0, 0, 0]) for r in regions if r.get("type") != "skip"]
+            # Page-level chunk also gets sentence anchors so a model citation
+            # to a page chunk still resolves to a sentence-precise highlight
+            # rather than the full-page bbox.
+            page_lines = []
+            for region in regions:
+                page_lines.extend(region.get("lines") or [])
+            page_annotated, page_anchors, _ = annotate_with_anchors(
+                page_text,
+                page_number=page_number,
+                # Page-level anchors restart at a high offset so they don't
+                # collide with the per-region ones above. Using 1000+ keeps
+                # them distinct without limiting per-region count in practice.
+                starting_reading_order=max(reading_order, 1000),
+                chunk_bbox=all_bboxes[0] if all_bboxes else None,
+                lines=page_lines,
+            )
             chunk = Chunk(
                 document_id=uuid.UUID(doc_id),
                 page_id=uuid.UUID(page_id),
                 chunk_type="page",
-                content_text=page_text,
+                content_text=page_annotated,
                 bbox_references=all_bboxes,
+                anchors=[a.to_dict() for a in page_anchors] or None,
                 metadata_={"page_number": page_number},
             )
             db.add(chunk)
@@ -1347,6 +1422,22 @@ def embed_document(self, doc_id: str):
         chunks = _create_chunks(page_payloads, doc_id, db)
         logger.info("[%s] Created %s chunks", doc_id, len(chunks))
         _generate_embeddings(chunks, db, doc_id)
+
+        # Refresh equation-chunk LaTeX with the vision pipeline. Best effort:
+        # a failure here must not block the document from going ready, since
+        # the chunks (with their plaintext fallback) are already valid.
+        try:
+            from app.services.math_extraction import refresh_equation_chunks_for_document
+
+            updated, total = refresh_equation_chunks_for_document(
+                uuid.UUID(doc_id), db, _get_openai_client()
+            )
+            if total:
+                logger.info(
+                    "[%s] Refreshed LaTeX for %d/%d equation chunks", doc_id, updated, total
+                )
+        except Exception as exc:
+            logger.warning("[%s] Equation LaTeX refresh failed: %s", doc_id, exc)
 
         _mark_ready(db, doc_id)
         logger.info("[%s] Ingestion complete: %s pages, %s chunks", doc_id, len(pages), len(chunks))

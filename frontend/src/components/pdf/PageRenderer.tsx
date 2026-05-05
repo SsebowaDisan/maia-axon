@@ -170,12 +170,11 @@ export function PageRenderer({
   const showRegionLinks = regionJumpLinks.length > 0 && coordinateWidth > 0 && coordinateHeight > 0;
   const showOutlineLinks = !showRegionLinks && outlineLinks.length > 0;
   const hasHighlightBoxes = useMemo(
-    () =>
-      highlights.some(
-        (citation) =>
-          citation.boxes?.some((box) => Array.isArray(box) && box.length === 4) ||
-          (citation.bbox && citation.bbox.length === 4),
-      ),
+    () => {
+      const isRenderable = (box: number[] | null | undefined): box is number[] =>
+        Array.isArray(box) && box.length === 4 && box[2] > box[0] && box[3] > box[1];
+      return highlights.some((citation) => citation.boxes?.some(isRenderable));
+    },
     [highlights],
   );
   const highlightKey = useMemo(

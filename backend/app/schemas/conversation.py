@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -22,12 +23,34 @@ class ConversationResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class CitationResponse(BaseModel):
+    id: str
+    source_type: Literal["pdf", "web"]
+    document_id: str | None = None
+    document_name: str = ""
+    page: int = 0
+    boxes: list[list[float]] | None = None
+    snippet: str | None = None
+    url: str | None = None
+    title: str | None = None
+
+    # Older persisted citations may carry retired keys (e.g. "bbox").
+    # Tolerate them silently so historical conversations keep loading.
+    model_config = {"extra": "ignore"}
+
+
+class MessageCitations(BaseModel):
+    citations: list[CitationResponse] = []
+
+    model_config = {"extra": "ignore"}
+
+
 class MessageResponse(BaseModel):
     id: UUID
     conversation_id: UUID
     role: str
     content: str
-    citations: dict | None
+    citations: MessageCitations | None
     visualizations: list[dict] | None
     mindmap: dict | None
     search_mode: str | None

@@ -14,6 +14,12 @@ interface PDFViewerState {
   pageCache: Record<string, PageData>;
   pageData: PageData | null;
   loading: boolean;
+  // Increments on every openCitation call (even when the user clicks the
+  // same chip twice). The PDFViewer scroll/visible-range effects include
+  // this nonce in their dedupe keys so a repeat click re-triggers the
+  // jump-to-evidence behaviour instead of being short-circuited as a
+  // duplicate of the previous state.
+  openClickNonce: number;
   prefetchPages: (document: Document, pageNumbers: number[]) => Promise<void>;
   openCitation: (citation: Citation, document?: Document | null) => Promise<void>;
   loadPage: (document: Document, pageNumber: number, highlightCitations?: Citation[]) => Promise<void>;
@@ -38,6 +44,7 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
   pageCache: {},
   pageData: null,
   loading: false,
+  openClickNonce: 0,
   async prefetchPages(document, pageNumbers) {
     const uniquePageNumbers = [...new Set(pageNumbers)]
       .filter((pageNumber) => pageNumber >= 1 && (!document.page_count || pageNumber <= document.page_count));
@@ -92,14 +99,18 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
   },
   async openCitation(citation, document) {
     if (citation.source_type === "web") {
-      set({
+      // Web citations: nonce + content set atomically so React only sees
+      // one consistent transition (no stale-state flicker for the
+      // PDFViewer effects, even if a PDF citation was previously open).
+      set((state) => ({
+        openClickNonce: state.openClickNonce + 1,
         currentDocument: null,
         currentWebCitation: citation,
         currentPage: 1,
         pageData: null,
         highlightCitations: [citation],
         loading: false,
-      });
+      }));
       return;
     }
 
@@ -107,46 +118,60 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
       return;
     }
 
-    const fallbackDocument =
-      document ??
-      ({
-        id: citation.document_id,
-        group_id: "",
-        filename: citation.document_name || citation.title || "Source document",
-        file_url: citation.url ?? "",
-        file_size_bytes: null,
-        page_count: null,
-        status: "ready",
-        current_stage: null,
-        progress_current: null,
-        progress_total: null,
-        error_detail: null,
-        uploaded_by: "",
-        created_at: "",
-        updated_at: "",
-      } satisfies Document);
+    let resolvedDocument: Document | null = document ?? null;
+    if (!resolvedDocument) {
+      try {
+        resolvedDocument = await api.getDocument(citation.document_id);
+      } catch {
+        // Fetch can fail if the document was deleted or the user no longer
+        // has access. Fall back to a synthetic shell so the user still gets
+        // the cited page; pagination beyond the cited page will be limited
+        // because page_count is unknown.
+        resolvedDocument = {
+          id: citation.document_id,
+          group_id: "",
+          filename: citation.document_name || citation.title || "Source document",
+          file_url: citation.url ?? "",
+          file_size_bytes: null,
+          page_count: null,
+          status: "ready",
+          current_stage: null,
+          progress_current: null,
+          progress_total: null,
+          error_detail: null,
+          uploaded_by: "",
+          created_at: "",
+          updated_at: "",
+        } satisfies Document;
+      }
+    }
 
-    await get().loadPage(fallbackDocument, citation.page, [citation]);
+    await get().loadPage(resolvedDocument, citation.page, [citation]);
     const prefetchWindow = [
       citation.page - 2,
       citation.page - 1,
       citation.page + 1,
       citation.page + 2,
     ];
-    void get().prefetchPages(fallbackDocument, prefetchWindow);
+    void get().prefetchPages(resolvedDocument, prefetchWindow);
   },
   async loadPage(document, pageNumber, highlightCitations = []) {
     const key = pageKey(document.id, pageNumber);
     const cached = get().pageCache[key] ?? getCachedPageData(document.id, pageNumber);
 
-    set({
+    // Bump openClickNonce atomically with the new page/highlight state.
+    // Doing it in the same ``set`` call avoids the prior-state flicker
+    // where PDFViewer effects fired with a fresh nonce against the
+    // *previous* citation, scrolling to the wrong page.
+    set((state) => ({
       currentDocument: document,
       currentWebCitation: null,
       currentPage: pageNumber,
       highlightCitations,
       loading: !cached,
-      pageData: cached ?? get().pageData,
-    });
+      pageData: cached ?? state.pageData,
+      openClickNonce: state.openClickNonce + 1,
+    }));
 
     if (cached) {
       set((state) => ({

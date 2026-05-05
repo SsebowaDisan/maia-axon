@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     neighbor_window_pages: int = 1
     neighbor_chunks_per_hit: int = 2
     answer_context_top_k: int = 24
+    # Quality gate: if fewer than ``retrieval_min_quality_results`` chunks
+    # score above ``retrieval_relevance_floor`` after reranking, the system
+    # makes one LLM-driven query reformulation attempt and re-retrieves.
+    # Floors below ~0.4 admit too much noise; above ~0.6 over-trust the
+    # rerank scores and starve legitimate but lower-scored chunks.
+    retrieval_relevance_floor: float = 0.45
+    retrieval_min_quality_results: int = 3
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

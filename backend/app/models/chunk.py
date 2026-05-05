@@ -29,6 +29,13 @@ class Chunk(Base):
     latex: Mapped[str | None] = mapped_column(Text, nullable=True)
     variables: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     bbox_references: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # NotebookLM-style sentence-level anchors. Each entry: ``{"id": "12.3",
+    # "bbox": [x1,y1,x2,y2], "char_start": int, "char_end": int}``. The id
+    # is ``{page_number}.{reading_order}`` and is embedded inline in
+    # ``content_text`` as ``<c>12.3</c>`` so the answer model can cite at
+    # sentence granularity. Resolved client-side / by the citation builder
+    # to render a sentence-level highlight instead of a chunk-wide bbox.
+    anchors: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

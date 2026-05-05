@@ -22,13 +22,14 @@ export function HighlightOverlay({
   const scaleX = renderedWidth / coordinateWidth;
   const scaleY = renderedHeight / coordinateHeight;
 
+  const isRenderableBox = (box: number[] | null | undefined): box is number[] =>
+    Array.isArray(box) && box.length === 4 && box[2] > box[0] && box[3] > box[1];
+
   return (
     <div className="pointer-events-none absolute inset-0">
       {citations
         .flatMap((citation) => {
-          const boxes =
-            citation.boxes?.filter((box) => Array.isArray(box) && box.length === 4) ??
-            (citation.bbox && citation.bbox.length === 4 ? [citation.bbox] : []);
+          const boxes = citation.boxes?.filter(isRenderableBox) ?? [];
           return boxes.map((box, index) => ({ citationId: citation.id, box, index }));
         })
         .map(({ citationId, box, index }, overlayIndex) => {

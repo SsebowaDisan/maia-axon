@@ -83,6 +83,16 @@ export function documentProgressLabel(current?: number | null, total?: number | 
   return `${safeCurrent}/${total}`;
 }
 
+// Strip backend-only sentence anchor markers (``<c>page.order</c>``) that
+// might leak into rendered text. They're embedded in chunk content for the
+// answer model's benefit and stripped server-side, but defending here too
+// guards against any path that bypasses the server-side stripper.
+const ANCHOR_MARKER_RE = /<c>[^<\s]+<\/c>/g;
+
+export function stripAnchorMarkers(content: string): string {
+  return content ? content.replace(ANCHOR_MARKER_RE, "") : "";
+}
+
 export function transformCitationLinks(content: string, citations: Citation[]) {
   const citationByReferenceNumber = (rawNumber: string) =>
     citations.find((item) => {
@@ -102,7 +112,7 @@ export function transformCitationLinks(content: string, citations: Citation[]) {
     return `[[${rawNumber}]](citation:${citation.id})`;
   };
 
-  return content
+  return stripAnchorMarkers(content)
     .replace(/\[Source\s+(\d+)\]/gi, (_match, rawNumber: string) => toCitationLink(rawNumber))
     .replace(/\(Source\s+(\d+)\)/gi, (_match, rawNumber: string) => toCitationLink(rawNumber))
     .replace(/(?<!\[)\[(\d+)\](?!\(citation:)/g, (_match, rawNumber: string) => toCitationLink(rawNumber))

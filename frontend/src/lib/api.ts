@@ -438,6 +438,9 @@ export const api = {
       }
     });
   },
+  getDocument(documentId: string) {
+    return request<Document>(`/documents/${documentId}`);
+  },
   getDocumentStatus(documentId: string) {
     return request<DocumentStatus>(`/documents/${documentId}/status`);
   },

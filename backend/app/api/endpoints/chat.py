@@ -171,7 +171,6 @@ def _serialize_answer(answer: AnswerResponse) -> dict:
             "document_id": str(c.document_id) if c.document_id else None,
             "document_name": c.document_name,
             "page": c.page,
-            "bbox": c.bbox,
             "boxes": c.boxes,
             "snippet": c.snippet,
             "url": c.url,
@@ -207,7 +206,6 @@ def _serialize_mindmap_node(node) -> dict:
             "document_id": str(node.source.document_id) if node.source.document_id else None,
             "document_name": node.source.document_name,
             "page": node.source.page,
-            "bbox": node.source.bbox,
             "boxes": node.source.boxes,
             "url": node.source.url,
         }

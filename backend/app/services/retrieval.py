@@ -9,6 +9,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from uuid import UUID
 
 import openai
@@ -88,6 +89,11 @@ class RetrievalResult:
     latex: str | None = None
     variables: dict | None = None
     bbox_references: list | None = None
+    # Sentence-level anchors carried from chunks.anchors. Each entry:
+    # ``{"id": "12.3", "bbox": [x1,y1,x2,y2], "char_start": int, "char_end": int}``.
+    # The answer model cites by these ids; the resolver maps them to
+    # sentence-precise highlights instead of chunk-wide bboxes.
+    anchors: list | None = None
     relevance_score: float = 0.0
     ocr_confidence: float | None = None
     # Web-specific
@@ -304,6 +310,7 @@ async def _load_document_chunks(
             Chunk.latex,
             Chunk.variables,
             Chunk.bbox_references,
+            Chunk.anchors,
             Chunk.metadata_,
             Document.filename,
         )
@@ -333,6 +340,7 @@ def _row_to_result(row, score: float) -> RetrievalResult:
         latex=getattr(row, "latex", None),
         variables=getattr(row, "variables", None),
         bbox_references=row.bbox_references,
+        anchors=getattr(row, "anchors", None),
         relevance_score=score,
     )
 
@@ -747,10 +755,31 @@ async def _formula_lookup_search(
         and not _is_reference_like_text(row.content_text or "")
     ]
     ranked_support = _rank_rows_by_query(query, supporting_rows, preferred_types={"section", "page"})
+
+    # Index equation chunks by (document_id, page_number) so we can surface
+    # them alongside the supporting page/section chunks they belong to. We
+    # only retain *substantive* formulas — equations that mention a variable
+    # (subscript with a letter, Greek symbol, or a math operator beyond
+    # bare equality). This filters out unit-conversion tables like
+    # "1 kp = 9.81 N" that pass the math-extraction sanity gate but flood
+    # the prompt without contributing real formulas.
+    equation_index: dict[tuple, list] = {}
+    for row in rows:
+        if row.chunk_type != "equation":
+            continue
+        latex = (row.latex or "").strip()
+        if not _is_substantive_formula_latex(latex):
+            continue
+        key = (row.document_id, _page_number_from_metadata(row.metadata_))
+        equation_index.setdefault(key, []).append(row)
+
     results: list[RetrievalResult] = []
-    for score, row in ranked_support[: settings.rerank_top_k]:
-        passage = _extract_formula_passage(row.content_text or "")
-        bonus = 0.15 if _STRICT_EQUATION_RE.search(passage) else 0.0
+    seen_chunk_ids: set = set()
+
+    def _emit_equation(row, score: float) -> None:
+        if row.id in seen_chunk_ids:
+            return
+        seen_chunk_ids.add(row.id)
         results.append(
             RetrievalResult(
                 source_type="pdf",
@@ -758,14 +787,46 @@ async def _formula_lookup_search(
                 document_id=row.document_id,
                 document_name=row.filename,
                 page_number=_page_number_from_metadata(row.metadata_),
-                chunk_type=row.chunk_type,
-                content=passage,
+                chunk_type="equation",
+                content=row.content_text or row.latex or "",
                 latex=getattr(row, "latex", None),
                 variables=getattr(row, "variables", None),
                 bbox_references=row.bbox_references,
-                relevance_score=min(score + 0.75 + bonus, 1.0),
+                anchors=getattr(row, "anchors", None),
+                relevance_score=score,
             )
         )
+
+    for score, row in ranked_support[: settings.rerank_top_k]:
+        passage = _extract_formula_passage(row.content_text or "")
+        bonus = 0.15 if _STRICT_EQUATION_RE.search(passage) else 0.0
+        if row.id not in seen_chunk_ids:
+            seen_chunk_ids.add(row.id)
+            results.append(
+                RetrievalResult(
+                    source_type="pdf",
+                    chunk_id=row.id,
+                    document_id=row.document_id,
+                    document_name=row.filename,
+                    page_number=_page_number_from_metadata(row.metadata_),
+                    chunk_type=row.chunk_type,
+                    content=passage,
+                    latex=getattr(row, "latex", None),
+                    variables=getattr(row, "variables", None),
+                    bbox_references=row.bbox_references,
+                    anchors=getattr(row, "anchors", None),
+                    relevance_score=min(score + 0.75 + bonus, 1.0),
+                )
+            )
+
+        # Pull a few adjacent equation chunks from the same page. Slightly
+        # lower relevance than the supporting chunk so the page-level
+        # context leads. We cap per page so a math-heavy page can't flood
+        # the prompt with 20 equations and crowd out other relevant pages.
+        page_key = (row.document_id, _page_number_from_metadata(row.metadata_))
+        for eq_row in equation_index.get(page_key, [])[:_MAX_EQUATION_CHUNKS_PER_PAGE]:
+            _emit_equation(eq_row, max(score + 0.6, 0.6))
+
     return results
 
 
@@ -883,6 +944,7 @@ async def _vector_search(
             c.latex,
             c.variables,
             c.bbox_references,
+            c.anchors,
             c.metadata as chunk_metadata,
             p.ocr_confidence,
             ce.embedding <=> CAST(:embedding AS vector) as distance
@@ -910,6 +972,7 @@ async def _vector_search(
             "latex": row["latex"],
             "variables": row["variables"],
             "bbox_references": row["bbox_references"],
+            "anchors": row["anchors"],
             "page_number": row["chunk_metadata"].get("page_number", 0) if row["chunk_metadata"] else 0,
             "ocr_confidence": row["ocr_confidence"],
             "score": 1.0 - float(row["distance"]),  # Convert distance to similarity
@@ -965,6 +1028,7 @@ async def _keyword_search(
             c.latex,
             c.variables,
             c.bbox_references,
+            c.anchors,
             c.metadata as chunk_metadata,
             p.ocr_confidence,
             ts_rank(
@@ -993,6 +1057,7 @@ async def _keyword_search(
             "latex": row["latex"],
             "variables": row["variables"],
             "bbox_references": row["bbox_references"],
+            "anchors": row["anchors"],
             "page_number": row["chunk_metadata"].get("page_number", 0) if row["chunk_metadata"] else 0,
             "ocr_confidence": row["ocr_confidence"],
             "score": float(row["score"]),
@@ -1038,6 +1103,50 @@ def _reciprocal_rank_fusion(
 # ---- Web search (OpenAI Responses API with web_search_preview) ----
 
 
+def _strip_tracking_params(url: str | None) -> str | None:
+    """Remove utm_* and similar tracking query params from a URL.
+
+    OpenAI's web_search tool appends ``?utm_source=openai`` to result URLs,
+    which leaks our tooling into anything we display or persist. Strip those
+    so citations show clean canonical URLs.
+    """
+    if not url:
+        return url
+    try:
+        parts = urlparse(url)
+        cleaned_query = [
+            (key, value)
+            for key, value in parse_qsl(parts.query, keep_blank_values=True)
+            if not key.lower().startswith("utm_")
+        ]
+        return urlunparse(parts._replace(query=urlencode(cleaned_query)))
+    except Exception:
+        return url
+
+
+_URL_IN_TEXT_PATTERN = re.compile(r"https?://[^\s<>\"')\]]+")
+_URL_TRAILING_PUNCTUATION = ".,;:!?"
+
+
+def _strip_tracking_params_in_text(text: str | None) -> str:
+    """Strip utm_* params from any URLs embedded in free-form text."""
+    if not text:
+        return text or ""
+
+    def _replace(match: re.Match[str]) -> str:
+        url = match.group(0)
+        # The URL pattern is greedy and may swallow sentence punctuation that
+        # almost never belongs to a URL. Pull it back off before cleaning.
+        trailing = ""
+        while url and url[-1] in _URL_TRAILING_PUNCTUATION:
+            trailing = url[-1] + trailing
+            url = url[:-1]
+        cleaned = _strip_tracking_params(url) or url
+        return cleaned + trailing
+
+    return _URL_IN_TEXT_PATTERN.sub(_replace, text)
+
+
 async def _web_search(query: str, top_k: int = 5) -> list[RetrievalResult]:
     """Search the web using OpenAI's built-in web search tool."""
     try:
@@ -1065,7 +1174,7 @@ async def _web_search(query: str, top_k: int = 5) -> list[RetrievalResult]:
                                     RetrievalResult(
                                         source_type="web",
                                         content=annotation.title or "",
-                                        url=annotation.url,
+                                        url=_strip_tracking_params(annotation.url),
                                         title=annotation.title,
                                         relevance_score=0.7,
                                     )
@@ -1085,7 +1194,7 @@ async def _web_search(query: str, top_k: int = 5) -> list[RetrievalResult]:
                 results.append(
                     RetrievalResult(
                         source_type="web",
-                        content=full_text[:2000],
+                        content=_strip_tracking_params_in_text(full_text)[:2000],
                         url=None,
                         title="Web search results",
                         relevance_score=0.6,
@@ -1435,6 +1544,197 @@ def _rerank_deep_search_results(
 # ---- Public API ----
 
 
+_FORMULA_LISTING_TOPIC_RE = re.compile(
+    r"\b(formul[ae]s?|equations?|calculations?|derivations?)\b",
+    re.IGNORECASE,
+)
+_FORMULA_LISTING_INTENT_RE = re.compile(
+    r"\b(what|which|list|show|tell\s+me|describe|all|every|the\s+formula"
+    r"|the\s+equation|the\s+calculation|cover|covers|covered|are\s+there)\b",
+    re.IGNORECASE,
+)
+
+# Cap on equation chunks emitted per page during formula_lookup. Without
+# this, a unit-conversion table page (e.g. "1 kp = 9.81 N", "1 Torr = 133 Pa")
+# can dump 20+ equations into the prompt and crowd out the actually relevant
+# pages.
+_MAX_EQUATION_CHUNKS_PER_PAGE = 3
+
+_TEXT_BLOCK_RE = re.compile(r"\\(text|mathrm|operatorname|mathit|mathbf|mathsf)\{[^}]*\}")
+_GREEK_LETTER_COMMAND_RE = re.compile(
+    r"\\(rho|eta|omega|alpha|beta|gamma|delta|sigma|theta|phi|psi|mu|nu|tau"
+    r"|kappa|lambda|xi|epsilon|zeta|chi|pi|Phi|Delta|Lambda|Sigma|Theta|Omega"
+    r"|Gamma|Pi|Psi|Xi|Upsilon)\b",
+    re.IGNORECASE,
+)
+_MATH_OPERATOR_COMMAND_RE = re.compile(
+    r"\\(frac|sqrt|sum|int|partial|prod|nabla|cdot|times|approx|propto|leq|geq"
+    r"|neq|infty)\b"
+)
+
+
+def _is_substantive_formula_latex(latex: str | None) -> bool:
+    """Distinguish meaningful formulas from unit-only conversions.
+
+    A unit conversion like ``1\\,\\mathrm{kp} = 9.81\\,\\mathrm{N}`` is
+    technically valid LaTeX with an ``=``, but it carries no variables and
+    contributes nothing to a "formulas in the laws of fans" answer beyond
+    flooding the prompt context.
+
+    We strip ``\\mathrm{...}``/``\\text{...}`` (where unit names typically
+    live, including any ``^2`` inside) and then look for any remaining
+    Greek letter command, math operator command (``\\frac``, ``\\sqrt``,
+    ``\\sum``, etc.), or sub/superscript marker. Unit conversions have
+    none of these once the text-formatting wrappers are removed.
+    """
+    if not latex:
+        return False
+    stripped = _TEXT_BLOCK_RE.sub("", latex)
+    if _GREEK_LETTER_COMMAND_RE.search(stripped):
+        return True
+    if _MATH_OPERATOR_COMMAND_RE.search(stripped):
+        return True
+    if "_" in stripped or "^" in stripped:
+        return True
+    return False
+
+
+def _is_formula_listing_query(query: str) -> bool:
+    """Mirrors ``answer_engine._is_formula_listing_query`` to keep retrieval
+    independent of the answer pipeline. Used to force ``formula_lookup``
+    routing for queries like "list the formulas" or "what calculations are
+    in this book" — the LLM planner alone misses these too often.
+    """
+    if not query:
+        return False
+    if not _FORMULA_LISTING_TOPIC_RE.search(query):
+        return False
+    return bool(_FORMULA_LISTING_INTENT_RE.search(query))
+
+
+async def _hybrid_retrieve_and_rerank(
+    db: AsyncSession,
+    query: str,
+    search_query: str,
+    group_id: UUID,
+    document_ids: list[UUID] | None,
+    top_k: int,
+    plan: "StructuralQueryPlan",
+) -> tuple[list[float], list[RetrievalResult]]:
+    """Run vector + keyword search, RRF fuse, filter, and LLM rerank.
+
+    Pulled out of ``library_search`` so the quality-gate retry path can run
+    a second pass with a reformulated query without duplicating the body.
+    """
+    query_embedding = await _embed_query(search_query)
+    vector_results = await _vector_search(db, query_embedding, group_id, document_ids, top_k * 2)
+    keyword_results = await _keyword_search(db, search_query, group_id, document_ids, top_k * 2)
+    merged = _reciprocal_rank_fusion(vector_results, keyword_results)
+
+    if plan.route == "generic":
+        filtered_merged = [
+            result for result in merged
+            if not _is_structural_reference_text(str(result.get("content", "") or ""))
+        ]
+        if filtered_merged:
+            merged = filtered_merged
+        filtered_front_matter = [
+            result for result in merged
+            if not _is_front_matter_like_text(str(result.get("content", "") or ""))
+        ]
+        if filtered_front_matter:
+            merged = filtered_front_matter
+
+    base_results = [
+        RetrievalResult(
+            source_type="pdf",
+            chunk_id=UUID(r["chunk_id"]) if isinstance(r["chunk_id"], str) else r["chunk_id"],
+            document_id=UUID(r["document_id"]) if isinstance(r["document_id"], str) else r["document_id"],
+            document_name=r["document_name"],
+            page_number=r["page_number"],
+            chunk_type=r["chunk_type"],
+            content=r["content"],
+            latex=r.get("latex"),
+            variables=r.get("variables"),
+            bbox_references=r.get("bbox_references"),
+            anchors=r.get("anchors"),
+            relevance_score=r["score"],
+            ocr_confidence=r.get("ocr_confidence"),
+        )
+        for r in merged
+    ]
+
+    if plan.route != "formula_lookup":
+        explanatory_results = [
+            result
+            for result in base_results
+            if result.chunk_type in {"section", "page", "table", "figure"}
+        ]
+        if explanatory_results:
+            base_results = explanatory_results
+
+    heuristic_reranked = _rerank_library_results(
+        search_query, base_results, settings.llm_rerank_candidate_k
+    )
+    reranked = _llm_rerank_library_results(query, heuristic_reranked, settings.rerank_top_k)
+    return query_embedding, reranked
+
+
+def _reformulate_query_for_retry(query: str) -> str | None:
+    """Ask the LLM to rewrite a low-yield query using technical synonyms.
+
+    Returns the reformulated query, or None if the model returned nothing
+    useful (empty / unchanged / refusal). Kept tight: short prompt, low
+    max_tokens, no system message — the API call is cheap but it's still
+    paid bandwidth so we want it bounded.
+    """
+    try:
+        client = _get_openai_client()
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=80,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "The following search query against a technical document library "
+                        "returned weak results. Rewrite it once to use technical synonyms "
+                        "or more specific terminology that's likely to appear verbatim in "
+                        "engineering / scientific texts. Keep it under 15 words. Output "
+                        "ONLY the rewritten query, no quotes, no commentary.\n\n"
+                        f"Query: {query}"
+                    ),
+                }
+            ],
+        )
+    except Exception as exc:
+        logger.warning("Query reformulation failed: %s", exc)
+        return None
+
+    candidate = (response.choices[0].message.content or "").strip().strip('"').strip("'")
+    if not candidate or candidate.lower() == query.strip().lower():
+        return None
+    return candidate
+
+
+def _merge_retrieval_results(
+    primary: list[RetrievalResult],
+    secondary: list[RetrievalResult],
+    *,
+    top_k: int,
+) -> list[RetrievalResult]:
+    """Combine two result lists by chunk_id, keeping the higher relevance score."""
+    pool: dict = {}
+    for result in (*primary, *secondary):
+        if not result.chunk_id:
+            continue
+        existing = pool.get(result.chunk_id)
+        if existing is None or result.relevance_score > existing.relevance_score:
+            pool[result.chunk_id] = result
+    ordered = sorted(pool.values(), key=lambda r: r.relevance_score, reverse=True)
+    return ordered[:top_k]
+
+
 async def library_search(
     db: AsyncSession,
     query: str,
@@ -1448,6 +1748,11 @@ async def library_search(
     """
     top_k = top_k or settings.retrieval_top_k
     plan = _plan_structural_query_with_llm(query)
+    # Pre-empt the LLM planner for formula-listing queries — empirically the
+    # planner often returns "generic" for "what are the formulas..." even
+    # though the dedicated formula route handles them better.
+    if _is_formula_listing_query(query):
+        plan.route = "formula_lookup"
     search_query = _expand_library_search_query(query)
 
     if plan.route == "document_overview":
@@ -1479,67 +1784,33 @@ async def library_search(
         if structural_results:
             return RetrievalResponse(results=structural_results[: settings.rerank_top_k], query_embedding=None)
 
-    # Generate query embedding
-    query_embedding = await _embed_query(search_query)
-
-    # Run vector and keyword search in parallel
-    vector_results = await _vector_search(db, query_embedding, group_id, document_ids, top_k * 2)
-    keyword_results = await _keyword_search(db, search_query, group_id, document_ids, top_k * 2)
-
-    # Fuse results
-    merged = _reciprocal_rank_fusion(vector_results, keyword_results)
-
-    if plan.route == "generic":
-        filtered_merged = [
-            result for result in merged
-            if not _is_structural_reference_text(str(result.get("content", "") or ""))
-        ]
-        if filtered_merged:
-            merged = filtered_merged
-        filtered_front_matter = [
-            result for result in merged
-            if not _is_front_matter_like_text(str(result.get("content", "") or ""))
-        ]
-        if filtered_front_matter:
-            merged = filtered_front_matter
-
-    base_results = [
-        RetrievalResult(
-            source_type="pdf",
-            chunk_id=UUID(r["chunk_id"]) if isinstance(r["chunk_id"], str) else r["chunk_id"],
-            document_id=UUID(r["document_id"]) if isinstance(r["document_id"], str) else r["document_id"],
-            document_name=r["document_name"],
-            page_number=r["page_number"],
-            chunk_type=r["chunk_type"],
-            content=r["content"],
-            latex=r.get("latex"),
-            variables=r.get("variables"),
-            bbox_references=r.get("bbox_references"),
-            relevance_score=r["score"],
-            ocr_confidence=r.get("ocr_confidence"),
-        )
-        for r in merged
-    ]
-
-    if plan.route != "formula_lookup":
-        explanatory_results = [
-            result
-            for result in base_results
-            if result.chunk_type in {"section", "page", "table", "figure"}
-        ]
-        if explanatory_results:
-            base_results = explanatory_results
-
-    heuristic_reranked = _rerank_library_results(
-        search_query,
-        base_results,
-        settings.llm_rerank_candidate_k,
+    # Initial hybrid retrieval + rerank pass.
+    query_embedding, reranked_results = await _hybrid_retrieve_and_rerank(
+        db, query, search_query, group_id, document_ids, top_k, plan,
     )
-    reranked_results = _llm_rerank_library_results(
-        query,
-        heuristic_reranked,
-        settings.rerank_top_k,
+
+    # Quality gate: when too few results pass the relevance floor, the
+    # initial query likely missed the intended terminology (e.g. user said
+    # "fan laws" but the corpus uses "lois de similitude aéraulique"). Try
+    # one LLM-driven reformulation and merge the better-scoring chunks in.
+    quality_count = sum(
+        1 for r in reranked_results if r.relevance_score >= settings.retrieval_relevance_floor
     )
+    if quality_count < settings.retrieval_min_quality_results:
+        reformulated = _reformulate_query_for_retry(query)
+        if reformulated and reformulated.strip().lower() != query.strip().lower():
+            logger.info(
+                "Quality gate: %d/%d above floor; retrying with reformulated query: %r",
+                quality_count, len(reranked_results), reformulated,
+            )
+            retry_search_query = _expand_library_search_query(reformulated)
+            _, retry_results = await _hybrid_retrieve_and_rerank(
+                db, reformulated, retry_search_query, group_id, document_ids, top_k, plan,
+            )
+            reranked_results = _merge_retrieval_results(
+                reranked_results, retry_results, top_k=settings.rerank_top_k,
+            )
+
     expanded_results = await _expand_with_neighbor_chunks(
         db,
         reranked_results,
