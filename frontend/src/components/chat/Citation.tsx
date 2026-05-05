@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, getCachedPageData } from "@/lib/api";
 import type { Citation } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useDocumentStore } from "@/stores/documentStore";
 import { usePDFViewerStore } from "@/stores/pdfViewerStore";
 
 function pageKey(documentId: string, pageNumber: number) {
@@ -46,11 +47,31 @@ export function CitationChip({
     setLoadedPageLabel(undefined);
   }, [citation.document_id, citation.page]);
 
+  const prefetchPages = usePDFViewerStore((state) => state.prefetchPages);
+  const documentsByGroup = useDocumentStore((state) => state.documentsByGroup);
+
   const loadVisiblePageLabel = async (open: boolean) => {
+    if (!open || citation.source_type !== "pdf" || !citation.document_id) {
+      return;
+    }
+
+    // Hover-prefetch: opening the tooltip means the user is considering
+    // clicking the chip. Warm the page (and its neighbours) now so the
+    // PDF viewer renders instantly when they actually click. We look the
+    // Document up in the cached document store rather than hitting the
+    // network for it — if it isn't loaded the fallback path inside
+    // openCitation will handle the lookup.
+    const allDocuments = Object.values(documentsByGroup).flat();
+    const document = allDocuments.find((item) => item.id === citation.document_id);
+    if (document) {
+      void prefetchPages(document, [
+        citation.page - 1,
+        citation.page,
+        citation.page + 1,
+      ]);
+    }
+
     if (
-      !open ||
-      citation.source_type !== "pdf" ||
-      !citation.document_id ||
       cachedPage?.printed_page_label ||
       sessionCachedPage?.printed_page_label ||
       loadedPageLabel !== undefined

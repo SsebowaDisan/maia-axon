@@ -1697,21 +1697,61 @@ def calculation_agent(
             {
                 "role": "system",
                 "content": (
-                    "You are a technical calculation assistant with the mindset of a mathematician, scientist, and engineer. Your job is to:\n"
-                    f"{language_instruction}\n"
-                    "1. Identify the relevant formula(s) from the sources\n"
-                    "2. List all variables needed\n"
-                    "3. Match variables to values from the user's question\n"
-                    "4. If multiple methods exist in different sources, note all of them\n"
-                    "5. If any required value is missing, say MISSING: <variable name>\n"
-                    "6. Write Python code to perform the calculation\n\n"
-                    "Respond in this JSON format:\n"
+                    "You are a senior calculation engineer. Your job is to set up "
+                    "and execute technical calculations with mathematical rigour, "
+                    "explicit units, and engineering judgement.\n"
+                    f"{language_instruction}\n\n"
+                    "WORKFLOW:\n"
+                    "1. Decompose the user's question into sub-quantities. If the "
+                    "answer requires combining several formulas (e.g. compute "
+                    "power → need flow rate → need pressure rise), enumerate every "
+                    "sub-step.\n"
+                    "2. For each sub-step, identify the formula(s) from the sources. "
+                    "When the sources offer ≥2 distinct methods (empirical, "
+                    "theoretical, simplified), record each one.\n"
+                    "3. List every variable with an explicit unit (SI when "
+                    "possible, otherwise the source's unit).\n"
+                    "4. VALUE HIERARCHY (in order — never bail with MISSING when "
+                    "the user wanted a calculation):\n"
+                    "   a) user-supplied: from the question. mark source as \"user\".\n"
+                    "   b) typical from sources: a value the books explicitly state "
+                    "as typical/recommended/standard. mark source as \"[N] page X\" "
+                    "(actual citation).\n"
+                    "   c) illustrative example: when neither (a) nor (b) is "
+                    "available, choose a sensible example value that's "
+                    "engineering-realistic for the domain. mark source as "
+                    "\"example\". This is REQUIRED — do not refuse the calculation.\n"
+                    "   missing_variables stays empty unless a variable cannot be "
+                    "estimated even illustratively (very rare).\n"
+                    "5. Write Python that:\n"
+                    "   - imports `pint` and creates a UnitRegistry: "
+                    "`ureg = pint.UnitRegistry()`\n"
+                    "   - assigns every variable as a pint Quantity "
+                    "(e.g. `Q = 10 * ureg.meter**3 / ureg.second`)\n"
+                    "   - performs the calculation with unit-aware arithmetic so "
+                    "any unit mismatch raises\n"
+                    "   - converts the final answer to the most useful display unit\n"
+                    "   - if the question is symbolic ('what happens to Q if D "
+                    "doubles'), use `sympy` to derive the relationship rather than "
+                    "plug in numbers\n"
+                    "   - if multiple methods exist, computes each and prints a "
+                    "comparison block\n"
+                    "   - finishes with a `sensitivity` block that varies each "
+                    "user/typical input by ±10% and prints the resulting min/max\n"
+                    "6. Stores the final answer in `result` and prints structured "
+                    "output that the explanation step can quote.\n\n"
+                    "RESPONSE JSON (strict):\n"
                     '{"formulas": [{"source": "[1]", "latex": "...", "description": "..."}],\n'
-                    ' "variables": [{"name": "...", "value": ..., "unit": "...", "source": "[1] or user"}],\n'
-                    ' "missing_variables": ["var1", "var2"],\n'
-                    ' "python_code": "# calculation code\\nresult = ...",\n'
-                    ' "multiple_methods": false,\n'
-                    ' "method_comparison": ""}'
+                    ' "variables": [{"name": "...", "value": ..., "unit": "...",\n'
+                    '                "source": "user|[N]|example",\n'
+                    '                "rationale": "why this value (esp. for example)"}],\n'
+                    ' "missing_variables": [],\n'
+                    ' "python_code": "import pint\\nureg = pint.UnitRegistry()\\n# ...",\n'
+                    ' "multiple_methods": true,\n'
+                    ' "method_comparison": "method A returns X; method B returns Y; difference Z%",\n'
+                    ' "decomposition_steps": ["step 1: ...", "step 2: ..."],\n'
+                    ' "sensitivity_summary": "<one-line description of what was varied>",\n'
+                    ' "uses_example_values": true}'
                 ),
             },
             {
@@ -1719,8 +1759,15 @@ def calculation_agent(
                 "content": (
                     f"SOURCES:\n{sources_text}\n\n"
                     f"QUESTION: {query}\n\n"
-                    "Set up the calculation. Use formulas from the sources. "
-                    "Use values from the user's question. Flag any missing values."
+                    "Set up the calculation rigorously. Use formulas from the "
+                    "sources with explicit pint units. Apply the VALUE HIERARCHY: "
+                    "user → sources → illustrative example. The calculation MUST "
+                    "produce a number — do not refuse for missing inputs. If you "
+                    "had to fabricate any example values, set "
+                    "uses_example_values=true so the final answer can frame the "
+                    "result as a worked example with a clear caveat. When sources "
+                    "offer multiple methods, set multiple_methods=true and "
+                    "structure python_code to compute each."
                 ),
             },
         ],
@@ -1811,32 +1858,14 @@ def calculation_agent(
 
         return _strip_empty_missing_information_section(response.choices[0].message.content.strip())
 
-    # Step 2: Check for missing variables
+    # Step 2: Missing variables. The new value-hierarchy prompt requires
+    # the model to fabricate illustrative examples when neither the user
+    # nor the sources supply a value, so this branch should now be rare
+    # and only fires when the model decided a quantity is genuinely
+    # un-estimable. We keep the explanation graceful instead of dead-
+    # ending so the user knows what to provide for a definitive answer.
     missing = setup.get("missing_variables", [])
-    extracted_vars = setup.get("variables", []) or []
-
     if missing:
-        # Lookup-style queries (e.g. "what are the typical flow rates and
-        # nozzle distances?") get mis-classified as calculations because
-        # they mention quantities. The setup then asks for values the user
-        # did NOT provide and shouldn't have to — they want the values
-        # *from* the sources. Detect that case (no variables successfully
-        # extracted) and fall back to qa_agent so the user gets a real
-        # answer that quotes typical values out of the document, instead
-        # of a "please provide values" dead-end.
-        user_supplied = sum(
-            1
-            for v in extracted_vars
-            if "user" in str(v.get("source", "")).lower()
-        )
-        if user_supplied == 0:
-            logger.info(
-                "calculation_agent: no user-supplied values; falling back to qa_agent "
-                "for lookup-style query: %r",
-                query,
-            )
-            return qa_agent(query, sources, conversation_history, search_mode="library")
-
         missing_answer = _generate_calculation_fallback(
             mode="missing_variables",
             blocker="Required inputs are missing, so no exact numeric result can be produced yet.",
@@ -1931,18 +1960,36 @@ def calculation_agent(
             "content": (
                 f"Given this calculation setup:\n{json.dumps(setup, indent=2)}\n\n"
                 f"And this result: {result_text}\n\n"
-                "Write a clear, step-by-step explanation of the calculation. "
-                "Reference numbered citations like [1] for any formula or value from the documents. "
-                "Show: formula -> variable definitions -> substitution -> result. "
-                "Then add a short interpretation of what the result means in practice, and if useful include "
-                "one quick comparison, sensitivity note, or sanity check. "
-                "Be detailed enough that a technical user can follow the reasoning without guessing missing steps. "
-                "Use clean Markdown headings and bullets so the response feels polished and easy to scan. "
-                "Use sentence-style capitalization for Markdown headings and titles: capitalize only the first word and proper nouns, company names, product names, or acronyms. "
-                "Do not invent fallback formulas, illustrative numbers, or hypothetical examples unless they are explicitly labeled illustrative and clearly separated from the grounded result. "
-                "If the setup is incomplete, say so directly instead of padding the answer. "
-                "End with a short section titled '## Missing information' only if specific user-supplied inputs are truly missing. "
-                "If nothing is missing, do not include that section at all."
+                "Write a clear, step-by-step explanation of the calculation.\n"
+                "REQUIRED STRUCTURE:\n"
+                "- '## Approach': name the formula(s) and decomposition.\n"
+                "- '## Inputs': table of every variable, its value, unit, and "
+                "provenance (citation if from the sources, 'user' if supplied, "
+                "'example' if illustrative). When a value is illustrative, "
+                "include a one-sentence rationale.\n"
+                "- '## Calculation': formula → substitution → result, with units "
+                "shown at every step.\n"
+                "- '## Sensitivity': quote the ±10% range printed by the code "
+                "and translate it into a one-line interpretation.\n"
+                "- '## Method comparison' (only if multiple_methods is true): "
+                "compare each method's result.\n"
+                "- '## Interpretation': what this means in practice, plus a "
+                "quick sanity check or order-of-magnitude reasoning.\n"
+                "- '## Worked example caveat' (ONLY when uses_example_values is "
+                "true): a clear callout that some inputs were illustrative, "
+                "list which ones, and tell the user how to make the answer "
+                "definitive (e.g. 'Tell me your actual flow rate and "
+                "transport-belt speed and I'll redo this with your numbers.'). "
+                "When uses_example_values is true, the document title at the "
+                "top should also lead with 'Worked example: ...' to set "
+                "expectations.\n\n"
+                "RULES:\n"
+                "- Reference numbered citations [1], [2], ... for every formula "
+                "and source-derived value.\n"
+                "- Use clean Markdown. Sentence-style capitalisation in headings "
+                "(only first word + proper nouns capitalised).\n"
+                "- Be detailed enough that a technical user can follow without "
+                "guessing missing steps, but do not pad."
             ),
         }],
     )

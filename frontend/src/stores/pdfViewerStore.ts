@@ -147,11 +147,16 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
     }
 
     await get().loadPage(resolvedDocument, citation.page, [citation]);
+    // Wider prefetch window so scrolling around the cited page is instant
+    // (covers ±3 around the hit). Hover-prefetch on the citation chip
+    // already warms the immediate ±1 before the user even clicks.
     const prefetchWindow = [
+      citation.page - 3,
       citation.page - 2,
       citation.page - 1,
       citation.page + 1,
       citation.page + 2,
+      citation.page + 3,
     ];
     void get().prefetchPages(resolvedDocument, prefetchWindow);
   },
