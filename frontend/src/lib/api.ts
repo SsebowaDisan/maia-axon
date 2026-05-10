@@ -441,6 +441,12 @@ export const api = {
   getDocument(documentId: string) {
     return request<Document>(`/documents/${documentId}`);
   },
+  // URL of the raw PDF file. Returned by the backend with auth required;
+  // we feed both the URL and the bearer token to react-pdf via the
+  // ``httpHeaders`` field on the Document file prop.
+  getDocumentFileUrl(documentId: string) {
+    return `${API_URL}/documents/${documentId}/file`;
+  },
   getDocumentStatus(documentId: string) {
     return request<DocumentStatus>(`/documents/${documentId}/status`);
   },

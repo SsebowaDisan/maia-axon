@@ -469,6 +469,42 @@ async def get_document(
     return _with_public_file_url(doc)
 
 
+@router.get("/documents/{document_id}/file")
+async def get_document_file(
+    document_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Serve the original PDF for the in-browser PDF.js viewer.
+
+    Returns the entire file in one response. PDF.js progressively
+    renders pages as bytes arrive, so we don't need server-side range
+    handling for the viewer to feel snappy on the typical book size.
+    Auth + group access are enforced before any bytes leave Cloud Run.
+    """
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    doc = result.scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await _check_group_access(doc.group_id, user, db)
+
+    key = f"documents/{document_id}/original.pdf"
+    try:
+        pdf_bytes = download_file(key)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="PDF file not found") from exc
+
+    safe_name = (doc.filename or "document.pdf").replace("\"", "")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "Content-Disposition": f'inline; filename="{safe_name}"',
+        },
+    )
+
+
 @router.get("/documents/{document_id}/status", response_model=DocumentStatusResponse)
 async def get_document_status(
     document_id: UUID,

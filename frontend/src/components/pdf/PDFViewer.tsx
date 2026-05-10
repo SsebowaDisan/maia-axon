@@ -1,12 +1,16 @@
 "use client";
 
+import "@/components/pdf/pdfjsSetup";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, FileSearch2, Globe2 } from "lucide-react";
+import { Document as PDFDocument } from "react-pdf";
 
 import { PageRenderer } from "@/components/pdf/PageRenderer";
+import { PDFPageJS } from "@/components/pdf/PDFPageJS";
 import { PDFToolbar } from "@/components/pdf/PDFToolbar";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
-import { getCachedPageData } from "@/lib/api";
+import { api, getCachedPageData, getStoredToken } from "@/lib/api";
 import type { Citation, Document, PageData } from "@/lib/types";
 import { usePDFViewerStore } from "@/stores/pdfViewerStore";
 
@@ -140,6 +144,22 @@ export function PDFViewer() {
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const lastScrollTargetRef = useRef<string | null>(null);
+
+  // Stable file prop for react-pdf <Document>: same object reference for
+  // the same document, so PDF.js doesn't reload the PDF on every parent
+  // re-render. Auth header threaded via httpHeaders so the streaming
+  // /file endpoint accepts us.
+  const pdfFile = useMemo(() => {
+    if (!currentDocument) {
+      return null;
+    }
+    const token = getStoredToken();
+    return {
+      url: api.getDocumentFileUrl(currentDocument.id),
+      httpHeaders: token ? { Authorization: `Bearer ${token}` } : {},
+      withCredentials: false as const,
+    };
+  }, [currentDocument]);
 
   const loadPreviousPages = useCallback(() => {
     if (!currentDocument?.page_count || visibleRange.start <= 1) {
@@ -462,49 +482,54 @@ export function PDFViewer() {
               <LoadingSpinner className="h-6 w-6 text-white" />
             </div>
           ) : (
-            <div className="space-y-6">
-              {visibleRange.start > 1 ? (
-                <div className="flex justify-center">
-                <button
-                  type="button"
-                  onClick={loadPreviousPages}
-                  className="border border-white/40 bg-white/90 px-4 py-2 text-[11px] font-medium uppercase tracking-[0.16em] text-ink transition hover:bg-white"
-                >
-                    Load earlier pages
-                  </button>
+            <PDFDocument
+              file={pdfFile}
+              loading={
+                <div className="flex h-full items-center justify-center">
+                  <LoadingSpinner className="h-6 w-6 text-white" />
                 </div>
-              ) : null}
-              {loadedPages.map(({ pageNumber, pageData: nextPageData }) => (
-                <div
-                  key={`${currentDocument.id}-${pageNumber}`}
-                  ref={(element) => {
-                    pageRefs.current[pageNumber] = element;
-                  }}
-                  className="space-y-0"
-                >
-                  {nextPageData ? (
-                    <PageRenderer
-                      page={nextPageData}
+              }
+              error={
+                <div className="mx-auto max-w-[640px] mt-10 border border-black/[0.08] bg-white px-6 py-6 text-center text-sm text-warn">
+                  Could not load this PDF. Try refreshing or contact support if it
+                  persists.
+                </div>
+              }
+            >
+              <div className="space-y-6">
+                {visibleRange.start > 1 ? (
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      onClick={loadPreviousPages}
+                      className="border border-white/40 bg-white/90 px-4 py-2 text-[11px] font-medium uppercase tracking-[0.16em] text-ink transition hover:bg-white"
+                    >
+                      Load earlier pages
+                    </button>
+                  </div>
+                ) : null}
+                {loadedPages.map(({ pageNumber }) => (
+                  <div
+                    key={`${currentDocument.id}-${pageNumber}`}
+                    ref={(element) => {
+                      pageRefs.current[pageNumber] = element;
+                    }}
+                    className="space-y-0"
+                  >
+                    <PDFPageJS
+                      pageNumber={pageNumber}
                       zoom={zoom}
                       highlights={pageNumber === currentPage ? highlights : []}
-                      scrollMode="natural"
-                      onNavigateToExactPage={(nextPage) => {
-                        void handleOpenPage(nextPage);
-                      }}
                       onHighlightReady={
                         pageNumber === currentPage
                           ? handleCurrentHighlightReady
                           : undefined
                       }
                     />
-                  ) : (
-                    <div className="mx-auto max-w-[940px] border border-black/[0.08] bg-white px-6 py-10 text-center text-sm text-muted">
-                      Loading page {pageNumber}...
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
+                  </div>
+                ))}
+              </div>
+            </PDFDocument>
           )}
         </div>
       </div>

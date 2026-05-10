@@ -1,10 +1,18 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 
 import { MindmapCanvas } from "@/components/mindmap/MindmapCanvas";
-import { PDFViewer } from "@/components/pdf/PDFViewer";
+// Dynamic import with ssr:false: react-pdf / pdfjs-dist reach for browser
+// globals (DOMMatrix, etc.) at module load, which crashes Next.js's static
+// rendering. Loading the viewer client-only avoids that without changing
+// the rest of the page.
+const PDFViewer = dynamic(
+  () => import("@/components/pdf/PDFViewer").then((mod) => mod.PDFViewer),
+  { ssr: false },
+);
 import { Button } from "@/components/ui/button";
 import { useMindmapStore } from "@/stores/mindmapStore";
 import { usePDFViewerStore } from "@/stores/pdfViewerStore";
