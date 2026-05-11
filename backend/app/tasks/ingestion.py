@@ -5,6 +5,7 @@ Large documents are processed as separate Celery stages so retries can resume fr
 persisted database state instead of restarting the whole document.
 """
 import base64
+import io
 import json
 import logging
 import re
@@ -17,7 +18,7 @@ from sqlalchemy import create_engine, delete
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
-from app.core.storage import download_file, upload_page_image
+from app.core.storage import download_file, upload_page_image, upload_pdf
 from app.models.chunk import Chunk, ChunkEmbedding
 from app.models.document import Document, Page
 from app.tasks.worker import celery_app
@@ -1241,6 +1242,32 @@ def split_document(self, doc_id: str):
         page_count = len(pdf_doc)
         doc.page_count = page_count
         db.commit()
+
+        # Linearize ("Fast Web View") so pdf.js can stream-render page
+        # 1 after a couple of range requests instead of waiting for the
+        # whole file. The hint table goes at the start of the file and
+        # each page's data is placed in reading order — combined with
+        # Range-aware /file endpoint this is the single biggest first
+        # paint win for long PDFs. Idempotent: re-running on an already
+        # linearized PDF just rewrites the same shape.
+        try:
+            buffer = io.BytesIO()
+            pdf_doc.save(buffer, linear=True, garbage=4, deflate=True, clean=True)
+            linearized = buffer.getvalue()
+            if linearized and linearized != pdf_bytes:
+                upload_pdf(uuid.UUID(doc_id), linearized)
+                pdf_doc.close()
+                pdf_doc = fitz.open(stream=linearized, filetype="pdf")
+                logger.info(
+                    "[%s] Linearized PDF (%.1f KB -> %.1f KB)",
+                    doc_id,
+                    len(pdf_bytes) / 1024,
+                    len(linearized) / 1024,
+                )
+        except Exception as linearize_err:
+            # Don't fail ingestion just because linearization failed —
+            # the original PDF still works, it just won't fast-load.
+            logger.warning("[%s] PDF linearization skipped: %s", doc_id, linearize_err)
 
         _deduplicate_document_pages(db, doc_id)
         existing_pages = {page.page_number: page for page in _document_page_rows(db, doc_id)}

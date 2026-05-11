@@ -30,7 +30,9 @@ import {
 } from "lucide-react";
 
 import { DocumentUploader } from "@/components/admin/DocumentUploader";
+import { IndexingStatus } from "@/components/admin/IndexingStatus";
 import { GroupManager } from "@/components/admin/GroupManager";
+import { DocumentPreviewDialog } from "@/components/pdf/DocumentPreviewDialog";
 import { CompanyManager } from "@/components/admin/CompanyManager";
 import { FeedbackManager } from "@/components/admin/FeedbackManager";
 import { UserAssignment } from "@/components/admin/UserAssignment";
@@ -41,7 +43,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useDialogDismiss } from "@/hooks/useDialogDismiss";
-import type { ChatMessage, ConversationSummary, Group, MessageResponse, Project } from "@/lib/types";
+import type { ChatMessage, ConversationSummary, Document, Group, MessageResponse, Project } from "@/lib/types";
 import { formatRelativeTime, titleFromMessage } from "@/lib/utils";
 import { useAuthStore } from "@/stores/authStore";
 import { useChatStore } from "@/stores/chatStore";
@@ -332,7 +334,12 @@ function LibraryDialog({
   const setActiveGroup = useGroupStore((state) => state.setActiveGroup);
   const fetchDocuments = useDocumentStore((state) => state.fetchDocuments);
   const clearSelection = useDocumentStore((state) => state.clearSelection);
+  const documentsByGroup = useDocumentStore((state) => state.documentsByGroup);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(activeGroupId ?? groups[0]?.id ?? null);
+  // Preview dialog for the non-admin read-only library view. Admin
+  // view manages its own preview state inside DocumentUploader, so we
+  // only wire this when the read-only list is rendered.
+  const [previewDocument, setPreviewDocument] = useState<Document | null>(null);
 
   const documentCount = useMemo(
     () => groups.reduce((total, group) => total + group.document_count, 0),
@@ -461,16 +468,69 @@ function LibraryDialog({
                 {isAdmin ? (
                   <DocumentUploader groupId={selectedGroup?.id ?? null} />
                 ) : (
-                  <div className="rounded-[26px] border border-dashed border-line p-8 text-center text-sm text-muted">
-                    Only admins can upload PDFs to the library.
-                  </div>
+                  <ReadOnlyDocumentList
+                    documents={selectedGroup ? documentsByGroup[selectedGroup.id] ?? [] : []}
+                    groupId={selectedGroup?.id ?? ""}
+                    onOpen={(doc) => setPreviewDocument(doc)}
+                  />
                 )}
               </div>
             </div>
           </div>
         </Dialog.Content>
       </Dialog.Portal>
+      <DocumentPreviewDialog
+        document={previewDocument}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setPreviewDocument(null);
+        }}
+      />
     </Dialog.Root>
+  );
+}
+
+function ReadOnlyDocumentList({
+  documents,
+  groupId,
+  onOpen,
+}: {
+  documents: Document[];
+  groupId: string;
+  onOpen: (doc: Document) => void;
+}) {
+  if (!groupId) {
+    return (
+      <div className="rounded-[26px] border border-dashed border-line p-8 text-center text-sm text-muted">
+        Select a group to browse its PDFs.
+      </div>
+    );
+  }
+
+  if (!documents.length) {
+    return (
+      <div className="flex h-full min-h-[220px] items-center justify-center rounded-[26px] border border-dashed border-line bg-white/55 px-6 text-center text-sm text-muted">
+        No PDFs in this group yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full overflow-y-auto pr-1 scrollbar-thin">
+      <p className="px-1 pb-3 text-[11px] font-medium uppercase tracking-[0.16em] text-muted">
+        Click a PDF to read it. Only admins can upload or delete.
+      </p>
+      <div className="space-y-3">
+        {documents.map((doc) => (
+          <IndexingStatus
+            key={doc.id}
+            document={doc}
+            groupId={groupId}
+            onOpen={onOpen}
+            readOnly
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -522,13 +582,16 @@ function SettingsDialog({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/18 backdrop-blur-[18px]" onDoubleClick={requestClose} />
         <Dialog.Content
           aria-describedby={undefined}
-          className="fixed left-1/2 top-1/2 z-50 w-[min(460px,calc(100vw-2rem))] max-h-[min(720px,calc(100vh-2rem))] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
+          className="fixed left-1/2 top-1/2 z-50 flex w-[min(460px,calc(100vw-2rem))] max-h-[min(720px,calc(100vh-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
           onPointerDownOutside={handlePointerDownOutside}
           onEscapeKeyDown={handleEscapeKeyDown}
           onFocusOutside={handleFocusOutside}
           onInteractOutside={handleInteractOutside}
         >
-          <div className="flex items-start justify-between gap-4">
+          {/* Header stays fixed at the top; everything below scrolls
+              when the dialog is taller than the viewport (e.g. on
+              shorter screens, or once we add more workspace tiles). */}
+          <div className="flex shrink-0 items-start justify-between gap-4">
             <div className="flex items-center gap-4">
               <span className="rounded-full bg-black p-3 text-white">
                 <Settings2 className="h-5 w-5" />
@@ -550,7 +613,9 @@ function SettingsDialog({
             </button>
           </div>
 
-          <div className="mt-6">
+          <div className="-mr-2 mt-6 min-h-0 flex-1 overflow-y-auto pr-2 scrollbar-thin">
+
+          <div className="">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
               Choose workspace
             </p>
@@ -657,6 +722,7 @@ function SettingsDialog({
               </span>
               <ArrowLeft className="h-4 w-4 rotate-180" />
             </button>
+          </div>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

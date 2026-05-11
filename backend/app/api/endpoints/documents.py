@@ -1,4 +1,5 @@
 import fitz
+import openai
 from uuid import UUID
 from functools import lru_cache
 import re
@@ -17,6 +18,7 @@ from app.core.storage import (
     delete_document_files,
     download_file,
     get_file_metadata,
+    get_file_size,
     get_file_url,
     to_public_url,
     upload_pdf,
@@ -469,18 +471,23 @@ async def get_document(
     return _with_public_file_url(doc)
 
 
+_RANGE_HEADER_RE = re.compile(r"^bytes=(\d+)-(\d*)$")
+
+
 @router.get("/documents/{document_id}/file")
 async def get_document_file(
+    request: Request,
     document_id: UUID,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Serve the original PDF for the in-browser PDF.js viewer.
 
-    Returns the entire file in one response. PDF.js progressively
-    renders pages as bytes arrive, so we don't need server-side range
-    handling for the viewer to feel snappy on the typical book size.
-    Auth + group access are enforced before any bytes leave Cloud Run.
+    Supports HTTP Range requests so pdf.js can stream only the bytes it
+    needs per page. With linearized PDFs (set up at ingestion time),
+    this lets page 1 render after a few hundred KB instead of waiting
+    for the entire file. Auth + group access are enforced before any
+    bytes leave Cloud Run.
     """
     result = await db.execute(select(Document).where(Document.id == document_id))
     doc = result.scalar_one_or_none()
@@ -489,20 +496,197 @@ async def get_document_file(
     await _check_group_access(doc.group_id, user, db)
 
     key = f"documents/{document_id}/original.pdf"
+    safe_name = (doc.filename or "document.pdf").replace("\"", "")
+    etag = f'W/"{document_id}-{int(doc.updated_at.timestamp()) if doc.updated_at else 0}"'
+
+    # Conditional GET: if the browser already has the file cached and
+    # the ETag still matches, return 304 without re-downloading from
+    # storage. Huge win when the same PDF is reopened from chat ->
+    # library or vice versa.
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "private, max-age=86400"})
+
+    # Resolve full file size up front so 416 / Content-Range stay sane.
+    try:
+        total_size = get_file_size(key)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="PDF file not found") from exc
+
+    common_headers = {
+        "Accept-Ranges": "bytes",
+        "ETag": etag,
+        # Browsers + pdf.js cache for a day; private since the URL is
+        # auth-gated and shouldn't be served by a shared cache.
+        "Cache-Control": "private, max-age=86400",
+        "Content-Disposition": f'inline; filename="{safe_name}"',
+    }
+
+    range_header = request.headers.get("range")
+    if range_header:
+        match = _RANGE_HEADER_RE.match(range_header)
+        if not match:
+            raise HTTPException(status_code=416, detail="Malformed Range header")
+        start = int(match.group(1))
+        end = int(match.group(2)) if match.group(2) else total_size - 1
+        if start >= total_size:
+            return Response(
+                status_code=416,
+                headers={**common_headers, "Content-Range": f"bytes */{total_size}"},
+            )
+        end = min(end, total_size - 1)
+        try:
+            chunk = download_file(key, start=start, end=end)
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail="PDF file not found") from exc
+        return Response(
+            content=chunk,
+            status_code=206,
+            media_type="application/pdf",
+            headers={
+                **common_headers,
+                "Content-Range": f"bytes {start}-{end}/{total_size}",
+                "Content-Length": str(len(chunk)),
+            },
+        )
+
     try:
         pdf_bytes = download_file(key)
     except Exception as exc:
         raise HTTPException(status_code=404, detail="PDF file not found") from exc
 
-    safe_name = (doc.filename or "document.pdf").replace("\"", "")
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Cache-Control": "private, max-age=3600",
-            "Content-Disposition": f'inline; filename="{safe_name}"',
+            **common_headers,
+            "Content-Length": str(total_size),
         },
     )
+
+
+@router.get("/documents/{document_id}/page-offset")
+async def get_document_page_offset(
+    document_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resolve a PDF's printed-page-number → internal-page-index offset.
+
+    Runs gpt-4o-mini once per document on the text content of three
+    sample pages and caches the result on `documents.printed_page_offset`.
+    Subsequent calls return the cached value with no LLM cost.
+
+    The viewer uses this so clicking "Chapter 5 ... 40" in a TOC lands
+    on the page that actually shows "40", regardless of how much
+    unnumbered front matter the book has.
+    """
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    doc = result.scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await _check_group_access(doc.group_id, user, db)
+
+    # Cached → return.
+    if doc.printed_page_offset is not None:
+        return {"offset": int(doc.printed_page_offset)}
+
+    page_count = doc.page_count or 0
+    if page_count < 4:
+        doc.printed_page_offset = 0
+        await db.flush()
+        return {"offset": 0}
+
+    # Pull text from three sample pages via PyMuPDF (more reliable than
+    # client-side pdfjs at extracting structured page text).
+    try:
+        pdf_bytes = download_file(f"documents/{document_id}/original.pdf")
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="PDF file not found") from exc
+
+    sample_indices = sorted(
+        {
+            max(1, int(page_count * 0.40)),
+            max(1, int(page_count * 0.50)),
+            max(1, int(page_count * 0.60)),
+        }
+    )
+
+    samples_text: list[tuple[int, str]] = []
+    try:
+        pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        try:
+            for idx in sample_indices:
+                page = pdf_doc[idx - 1]
+                txt = page.get_text("text") or ""
+                # Trim each sample so we don't blast the prompt with
+                # body text — header + footer are at the edges.
+                lines = [line for line in txt.splitlines() if line.strip()]
+                if len(lines) > 12:
+                    head = "\n".join(lines[:6])
+                    tail = "\n".join(lines[-6:])
+                    txt = head + "\n…\n" + tail
+                samples_text.append((idx, txt))
+        finally:
+            pdf_doc.close()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"PDF text extraction failed: {exc}") from exc
+
+    prompt_user = "\n\n".join(
+        f"--- Sample {i + 1} (internal page index = {idx}) ---\n{txt or '[no text]'}"
+        for i, (idx, txt) in enumerate(samples_text)
+    )
+
+    client = openai.OpenAI(api_key=settings.openai_api_key)
+    system = (
+        "You are given the text content of a few sample pages from a PDF book, each "
+        "annotated with its 1-indexed internal page index in the file. Your job is to "
+        "identify the *printed page number* shown on each page (almost always a small "
+        "integer in the page header or footer) and compute the OFFSET = "
+        "internal_page_index − printed_page_number.\n\n"
+        "Books often have unnumbered front matter (cover, copyright, dedication, TOC, "
+        "etc.) so the offset is typically a small non-negative integer (commonly 0–20).\n\n"
+        "Rules:\n"
+        "- If the offset is the same across ALL samples, output that integer.\n"
+        "- If samples disagree, or you cannot find a clear printed page number on any "
+        "  sample, output null.\n"
+        "- Ignore numbers that appear in the body text (figure numbers, equations, "
+        "  references). Page numbers always sit alone on a header/footer line.\n"
+        "- Roman numerals in the front matter map to internal indices but don't help "
+        "  define the arabic-numeral offset; in that case sample only arabic pages.\n\n"
+        'Respond with JSON only: {"offset": 4} or {"offset": null}'
+    )
+
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt_user},
+            ],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LLM call failed: {exc}") from exc
+
+    import json as _json
+
+    raw = completion.choices[0].message.content or "{}"
+    try:
+        parsed = _json.loads(raw)
+    except Exception:
+        parsed = {}
+    offset_raw = parsed.get("offset")
+    offset: int | None = None
+    if isinstance(offset_raw, int):
+        # Sanity-check the LLM's answer before persisting.
+        if 0 <= offset_raw < max(50, page_count // 4):
+            offset = offset_raw
+
+    doc.printed_page_offset = offset if offset is not None else 0
+    await db.flush()
+
+    return {"offset": int(doc.printed_page_offset)}
 
 
 @router.get("/documents/{document_id}/status", response_model=DocumentStatusResponse)

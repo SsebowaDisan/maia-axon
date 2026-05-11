@@ -1,4 +1,7 @@
 import type {
+  Annotation,
+  AnnotationCreatePayload,
+  AnnotationUpdatePayload,
   AuthTokenResponse,
   AdminFeatureIdea,
   AdminMessageFeedback,
@@ -447,6 +450,9 @@ export const api = {
   getDocumentFileUrl(documentId: string) {
     return `${API_URL}/documents/${documentId}/file`;
   },
+  getDocumentPageOffset(documentId: string) {
+    return request<{ offset: number }>(`/documents/${documentId}/page-offset`);
+  },
   getDocumentStatus(documentId: string) {
     return request<DocumentStatus>(`/documents/${documentId}/status`);
   },
@@ -570,6 +576,30 @@ export const api = {
     return request<FeatureIdea>(`/feedback/admin/ideas/${ideaId}`, {
       method: "PATCH",
       body: JSON.stringify({ status }),
+    });
+  },
+  listAnnotations(documentId: string) {
+    return request<Annotation[]>(`/annotations?document_id=${encodeURIComponent(documentId)}`);
+  },
+  createAnnotation(payload: AnnotationCreatePayload) {
+    return request<Annotation>("/annotations", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  updateAnnotation(annotationId: string, payload: AnnotationUpdatePayload) {
+    return request<Annotation>(`/annotations/${annotationId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteAnnotation(annotationId: string) {
+    return request<void>(`/annotations/${annotationId}`, { method: "DELETE" });
+  },
+  translateText(text: string, targetLanguage: string) {
+    return request<{ translated_text: string; target_language: string }>("/translate", {
+      method: "POST",
+      body: JSON.stringify({ text, target_language: targetLanguage }),
     });
   },
 };

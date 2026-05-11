@@ -134,14 +134,49 @@ def to_public_url(url: str) -> str:
     return url
 
 
-def download_file(key: str) -> bytes:
+def download_file(
+    key: str,
+    *,
+    start: int | None = None,
+    end: int | None = None,
+) -> bytes:
+    """Download an object, optionally restricted to a byte range.
+
+    ``start`` and ``end`` use HTTP Range semantics: both inclusive,
+    zero-indexed. When both are ``None`` the whole object is returned
+    (the historical behaviour). The range fast-path lets the PDF
+    streaming endpoint serve only the bytes pdf.js asked for instead
+    of materialising the entire file in memory on every page fetch.
+    """
     if _is_google_cloud_storage():
         bucket = get_gcs_client().bucket(settings.s3_bucket_name)
-        return bucket.blob(key).download_as_bytes()
+        blob = bucket.blob(key)
+        if start is not None or end is not None:
+            # google-cloud-storage's start/end are HTTP-Range inclusive.
+            return blob.download_as_bytes(start=start, end=end)
+        return blob.download_as_bytes()
 
     client = get_s3_client()
-    response = client.get_object(Bucket=settings.s3_bucket_name, Key=key)
+    kwargs: dict = {"Bucket": settings.s3_bucket_name, "Key": key}
+    if start is not None or end is not None:
+        start_str = str(start if start is not None else 0)
+        end_str = str(end) if end is not None else ""
+        kwargs["Range"] = f"bytes={start_str}-{end_str}"
+    response = client.get_object(**kwargs)
     return response["Body"].read()
+
+
+def get_file_size(key: str) -> int:
+    """Return the object's content length without downloading the body."""
+    if _is_google_cloud_storage():
+        bucket = get_gcs_client().bucket(settings.s3_bucket_name)
+        blob = bucket.blob(key)
+        blob.reload()
+        return int(blob.size or 0)
+
+    client = get_s3_client()
+    response = client.head_object(Bucket=settings.s3_bucket_name, Key=key)
+    return int(response["ContentLength"])
 
 
 def delete_document_files(document_id: UUID) -> None:

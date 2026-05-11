@@ -1,3 +1,4 @@
+from app.models.annotation import Annotation
 from app.models.company import Company, CompanyUser, UserExportDestination
 from app.models.chunk import Chunk, ChunkEmbedding
 from app.models.conversation import Conversation, Message
@@ -23,4 +24,5 @@ __all__ = [
     "Message",
     "MessageFeedback",
     "FeatureIdea",
+    "Annotation",
 ]

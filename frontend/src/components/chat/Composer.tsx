@@ -1,7 +1,7 @@
 "use client";
 
 import { type ClipboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, Building2, Check, ChevronDown, Hash, Layers3, Paperclip, Plus, Send, Square, X } from "lucide-react";
+import { BarChart3, Building2, Check, ChevronDown, Hash, Layers3, Paperclip, Plus, Quote, Send, Square, X } from "lucide-react";
 
 import { CompanySelector } from "@/components/chat/CompanySelector";
 import { ComposerMenu } from "@/components/chat/ComposerMenu";
@@ -107,6 +107,9 @@ export function Composer() {
   const setIncludeDashboard = useChatStore((state) => state.setIncludeDashboard);
   const draftMode = useChatStore((state) => state.draftMode);
   const cancelEditingUserMessage = useChatStore((state) => state.cancelEditingUserMessage);
+  const composerFocusNonce = useChatStore((state) => state.composerFocusNonce);
+  const passageContext = useChatStore((state) => state.passageContext);
+  const clearPassageContext = useChatStore((state) => state.clearPassageContext);
   const mode = useChatStore((state) => state.mode);
   const setMode = useChatStore((state) => state.setMode);
   const sendMessage = useChatStore((state) => state.sendMessage);
@@ -141,7 +144,7 @@ export function Composer() {
   const selectedCompany = companies.find((company) => company.id === selectedCompanyId) ?? null;
   const needsProjectSelection = isDocumentMode(mode);
   const canSend =
-    (!!value.trim() || promptAttachments.length > 0) &&
+    (!!value.trim() || promptAttachments.length > 0 || !!passageContext) &&
     !streaming &&
     !welcomeStreaming &&
     (isGoogleMode(mode) ? !!selectedCompany : true) &&
@@ -198,6 +201,24 @@ export function Composer() {
     window.addEventListener("maia-focus-composer", handleFocusComposer);
     return () => window.removeEventListener("maia-focus-composer", handleFocusComposer);
   }, []);
+
+  // React-side focus trigger so callers (e.g. PDF "Ask Maia") can
+  // request focus without dispatching a window event.
+  useEffect(() => {
+    if (composerFocusNonce === 0) {
+      return;
+    }
+    const element = textareaRef.current;
+    if (!element) {
+      return;
+    }
+    element.focus();
+    // Move caret to the end so a pre-filled draft doesn't drop the user
+    // halfway through the seeded prompt.
+    const length = element.value.length;
+    element.setSelectionRange(length, length);
+    element.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [composerFocusNonce]);
 
   useEffect(() => {
     if (activeGroupId && groups.some((group) => group.id === activeGroupId)) {
@@ -460,6 +481,28 @@ export function Composer() {
             }}
           >
             Cancel edit
+          </button>
+        </div>
+      ) : null}
+
+      {passageContext ? (
+        <div className="mb-3 flex items-start gap-2 rounded-2xl border border-black/[0.08] bg-white px-3 py-2 shadow-[0_8px_22px_rgba(15,23,42,0.04)]">
+          <Quote className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted">
+              {passageContext.documentName ?? "Passage"} · page {passageContext.pageNumber}
+            </p>
+            <p className="mt-1 line-clamp-3 text-[12px] leading-5 text-ink/85">
+              “{passageContext.text}”
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={clearPassageContext}
+            aria-label="Remove attached passage"
+            className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted transition hover:bg-black/[0.06] hover:text-ink"
+          >
+            <X className="h-3 w-3" />
           </button>
         </div>
       ) : null}

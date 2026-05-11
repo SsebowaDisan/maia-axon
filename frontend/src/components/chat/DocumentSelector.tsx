@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef } from "react";
-import { CheckSquare, Eye, FileText, Square } from "lucide-react";
+import { CheckSquare, FileText, Square } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import type { Document } from "@/lib/types";
@@ -28,7 +28,10 @@ export const DocumentSelector = forwardRef<HTMLDivElement, {
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
       />
-      <div className="mt-3 max-h-72 space-y-1 overflow-y-auto scrollbar-thin">
+      <p className="mt-2 px-1 text-[10px] font-medium uppercase tracking-[0.16em] text-muted">
+        Click a PDF to read · checkbox to include in chat
+      </p>
+      <div className="mt-2 max-h-72 space-y-1 overflow-y-auto scrollbar-thin">
         <button
           type="button"
           className="flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left transition hover:bg-black/5"
@@ -46,45 +49,56 @@ export const DocumentSelector = forwardRef<HTMLDivElement, {
         </button>
         {documents.map((document) => {
           const checked = selectedIds.includes(document.id);
+          const isReady = document.status === "ready";
           return (
             <div
               key={document.id}
-              className="group flex items-center gap-2 rounded-2xl px-2 py-2 transition hover:bg-black/5"
+              className="group flex items-center gap-1 rounded-2xl px-1 py-1 transition hover:bg-black/5"
             >
+              {/* Explicit selection target — small, distinct from the
+                  "open to read" surface so users don't accidentally
+                  attach a doc when they meant to preview it. */}
               <button
                 type="button"
-                className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-2xl px-1 py-1 text-left"
-                onClick={() => onToggleDocument(document.id)}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition hover:bg-black/[0.08]"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggleDocument(document.id);
+                }}
+                aria-label={checked ? `Deselect ${document.filename}` : `Select ${document.filename}`}
+                title={checked ? "Deselect" : "Include in chat"}
               >
-                <span className="flex min-w-0 items-center gap-3">
-                  {checked ? (
-                    <CheckSquare className="h-4 w-4 text-accent" />
-                  ) : (
-                    <Square className="h-4 w-4 text-muted" />
-                  )}
-                  <span className="flex min-w-0 items-center gap-2">
-                    <FileText className="h-4 w-4 shrink-0 text-muted" />
-                    <span className="truncate text-sm font-medium">{document.filename}</span>
-                  </span>
-                </span>
-                <span className="shrink-0 text-xs text-muted">{document.page_count ?? "?"} pages</span>
+                {checked ? (
+                  <CheckSquare className="h-4 w-4 text-accent" />
+                ) : (
+                  <Square className="h-4 w-4 text-muted" />
+                )}
               </button>
-              {document.status === "ready" ? (
-                <button
-                  type="button"
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-black/[0.06] bg-white text-muted opacity-0 shadow-[0_8px_20px_rgba(15,23,42,0.04)] transition hover:border-black/[0.12] hover:text-ink group-hover:opacity-100 focus:opacity-100"
-                  aria-label={`Preview ${document.filename}`}
-                  title="Preview PDF"
-                  onClick={(event) => {
-                    event.stopPropagation();
+
+              {/* Primary action: click the row to open the PDF for
+                  reading. Disabled when the document is still being
+                  processed so users don't try to preview an empty
+                  viewer. */}
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-2xl px-2 py-1.5 text-left transition hover:bg-black/[0.05] disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={!isReady}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (isReady) {
                     onPreviewDocument(document);
-                  }}
-                >
-                  <Eye className="h-4 w-4" />
-                </button>
-              ) : (
-                <span className="inline-flex h-9 w-9 shrink-0" />
-              )}
+                  }
+                }}
+                title={isReady ? "Open and read" : `Status: ${document.status}`}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <FileText className="h-4 w-4 shrink-0 text-muted" />
+                  <span className="truncate text-sm font-medium">{document.filename}</span>
+                </span>
+                <span className="shrink-0 text-xs text-muted">
+                  {isReady ? `${document.page_count ?? "?"} pages` : document.status}
+                </span>
+              </button>
             </div>
           );
         })}

@@ -46,6 +46,9 @@ class Document(Base):
     progress_current: Mapped[int | None] = mapped_column(Integer, nullable=True)
     progress_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Cached printed-page-number to internal-page-index offset (LLM-
+    # resolved on first viewer open). NULL = not yet computed.
+    printed_page_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
     uploaded_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )

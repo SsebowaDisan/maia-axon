@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.endpoints import (
+    annotations,
     auth,
     chat,
     companies,
@@ -10,6 +11,7 @@ from app.api.endpoints import (
     feedback,
     groups,
     projects,
+    translate,
     users,
     ws,
 )
@@ -43,6 +45,12 @@ api_router.include_router(chat.router)
 
 # Feedback
 api_router.include_router(feedback.router)
+
+# Annotations (highlights + comments)
+api_router.include_router(annotations.router)
+
+# Translate (ephemeral PDF passage translation)
+api_router.include_router(translate.router)
 
 # WebSocket (mounted at root level, not under /api)
 ws_router = ws.router

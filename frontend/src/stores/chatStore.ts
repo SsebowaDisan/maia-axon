@@ -9,6 +9,7 @@ import type {
   ChatMessage,
   ChatQueryPayload,
   MessageResponse,
+  PassageContext,
   PromptAttachment,
   SearchMode,
 } from "@/lib/types";
@@ -32,6 +33,7 @@ function makeMessage(
     role: partial.role,
     content: partial.content,
     attachments: partial.attachments ?? [],
+    passageContext: partial.passageContext,
     createdAt: new Date().toISOString(),
     citations: partial.citations ?? [],
     visualizations: partial.visualizations ?? [],
@@ -88,6 +90,19 @@ interface ChatState {
   initialized: boolean;
   isHydrated: boolean;
   autoScrollNonce: number;
+  // Increments whenever an outside surface (e.g. the PDF "Ask Maia"
+  // button) wants the composer textarea to focus + scroll into view.
+  // The Composer listens to this nonce; routes that pre-fill the draft
+  // also bump it so the user can immediately keep typing.
+  composerFocusNonce: number;
+  focusComposer: () => void;
+  // Pending passage context attached via PDF "Ask Maia". Lives at the
+  // store level (rather than as composer state) so it survives focus
+  // changes and the user can attach a passage from any page before
+  // typing their question.
+  passageContext: PassageContext | null;
+  setPassageContext: (context: PassageContext | null) => void;
+  clearPassageContext: () => void;
   setHydrated: () => void;
   initialize: () => void;
   setMode: (mode: SearchMode) => void;
@@ -156,6 +171,17 @@ export const useChatStore = create<ChatState>()(
   initialized: false,
   isHydrated: false,
   autoScrollNonce: 0,
+  composerFocusNonce: 0,
+  focusComposer() {
+    set((state) => ({ composerFocusNonce: state.composerFocusNonce + 1 }));
+  },
+  passageContext: null,
+  setPassageContext(context) {
+    set({ passageContext: context });
+  },
+  clearPassageContext() {
+    set({ passageContext: null });
+  },
   setHydrated() {
     set({ isHydrated: true });
   },
@@ -453,7 +479,7 @@ export const useChatStore = create<ChatState>()(
     if ((mode === "google_analytics" || mode === "google_ads") && !companyId) {
       throw new Error("Select a company before resending this message.");
     }
-    if (!content.trim() && promptAttachments.length === 0) {
+    if (!content.trim() && promptAttachments.length === 0 && !state.passageContext) {
       throw new Error("Message cannot be empty.");
     }
     if (options?.requireConversationId && !conversationId) {
@@ -500,14 +526,38 @@ export const useChatStore = create<ChatState>()(
       }
     }
 
+    const passageContext = state.passageContext;
+    // Compose the outbound message text the agent receives. When the
+    // user attached a passage, splice it in as a quoted block so the
+    // model has unambiguous context for the question — even if the
+    // user's typed text is empty, the quote alone is a reasonable
+    // "explain this" prompt.
+    const trimmedTyped = content.trim();
+    const outboundMessage = passageContext
+      ? (() => {
+          const sourceLabel = passageContext.documentName
+            ? `${passageContext.documentName} (page ${passageContext.pageNumber})`
+            : `page ${passageContext.pageNumber}`;
+          const quoted = passageContext.text
+            .split("\n")
+            .map((line) => `> ${line}`)
+            .join("\n");
+          const userPart = trimmedTyped || "What does this passage mean?";
+          return `From ${sourceLabel}:\n${quoted}\n\n${userPart}`;
+        })()
+      : content;
+
     const visibleUserContent =
-      content.trim() ||
-      `Attached: ${promptAttachments.map((attachment) => attachment.filename).join(", ")}`;
+      trimmedTyped ||
+      (passageContext
+        ? "What does this passage mean?"
+        : `Attached: ${promptAttachments.map((attachment) => attachment.filename).join(", ")}`);
 
     const userMessage = makeMessage({
       role: "user",
       content: visibleUserContent,
       attachments: promptAttachments,
+      passageContext: passageContext ?? undefined,
       searchMode: mode,
     });
     const assistantMessage = makeMessage({
@@ -530,6 +580,7 @@ export const useChatStore = create<ChatState>()(
       includeDashboard: false,
       draftMode: "compose",
       editingMessageId: null,
+      passageContext: null,
       autoScrollNonce: state.autoScrollNonce + 1,
     }));
 
@@ -542,7 +593,7 @@ export const useChatStore = create<ChatState>()(
       attachment_ids: promptAttachments.map((attachment) => attachment.id),
       include_dashboard: includeDashboard,
       mode,
-      message: content,
+      message: outboundMessage,
       conversation_id: conversationId,
     };
 

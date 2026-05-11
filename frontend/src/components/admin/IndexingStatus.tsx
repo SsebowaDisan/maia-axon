@@ -23,10 +23,16 @@ export function IndexingStatus({
   document,
   groupId,
   onOpen,
+  readOnly = false,
 }: {
   document: Document;
   groupId: string;
   onOpen?: (document: Document) => void;
+  // When true (non-admin library view), the Delete and Retry actions
+  // are hidden so the card becomes a pure click-to-read row. Backend
+  // already enforces admin-only on those endpoints, so this is purely
+  // a UI cleanup.
+  readOnly?: boolean;
 }) {
   const deleteDocument = useDocumentStore((state) => state.deleteDocument);
   const isDeleted = useDocumentStore((state) => !!state.deletedDocumentIds[document.id]);
@@ -86,34 +92,36 @@ export function IndexingStatus({
         </p>
       ) : null}
       {errorDetail ? <p className="mt-2 text-xs text-danger">{errorDetail}</p> : null}
-      <div className="mt-4 flex items-center gap-2">
-        {status === "failed" && !isDeleted ? (
+      {!readOnly ? (
+        <div className="mt-4 flex items-center gap-2">
+          {status === "failed" && !isDeleted ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={(event) => {
+                event.stopPropagation();
+                void reindexDocument(document.id);
+              }}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Retry
+            </Button>
+          ) : null}
           <Button
             type="button"
             size="sm"
-            variant="secondary"
+            variant="ghost"
+            disabled={isDeleted}
             onClick={(event) => {
               event.stopPropagation();
-              void reindexDocument(document.id);
+              setDeleteOpen(true);
             }}
           >
-            <RotateCcw className="h-3.5 w-3.5" />
-            Retry
+            Delete
           </Button>
-        ) : null}
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={isDeleted}
-          onClick={(event) => {
-            event.stopPropagation();
-            setDeleteOpen(true);
-          }}
-        >
-          Delete
-        </Button>
-      </div>
+        </div>
+      ) : null}
       <DeleteConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}

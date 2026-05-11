@@ -299,6 +299,16 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
               })}
             </div>
           ) : null}
+          {message.passageContext ? (
+            <div className="mb-3 rounded-2xl border border-white/15 bg-white/8 px-3 py-2 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+              <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-white/55">
+                {message.passageContext.documentName ?? "Passage"} · page {message.passageContext.pageNumber}
+              </p>
+              <p className="mt-1 line-clamp-4 text-[12.5px] italic leading-5 text-white/85">
+                “{message.passageContext.text}”
+              </p>
+            </div>
+          ) : null}
           {isInlineEditing ? (
             <>
               <Textarea

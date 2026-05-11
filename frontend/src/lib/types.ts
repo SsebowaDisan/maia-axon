@@ -230,11 +230,22 @@ export interface ConversationDetail extends ConversationSummary {
   messages: MessageResponse[];
 }
 
+export interface PassageContext {
+  documentId: string | null;
+  documentName: string | null;
+  pageNumber: number;
+  text: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   attachments?: PromptAttachment[];
+  // Optional inline-quoted passage the user attached via the PDF
+  // viewer's "Ask Maia" action. Rendered as a card above the message
+  // text so the user's question reads cleanly without markdown noise.
+  passageContext?: PassageContext;
   createdAt: string;
   citations: Citation[];
   visualizations: MessageVisualization[];
@@ -334,4 +345,43 @@ export type AdminTab = "groups" | "documents" | "users";
 export interface WelcomePayload {
   intro_markdown: string;
   suggested_questions: string[];
+}
+
+export type AnnotationVisibility = "private" | "group_shared";
+export type AnnotationColor = "yellow" | "green" | "blue" | "pink" | "orange";
+
+export interface Annotation {
+  id: string;
+  document_id: string;
+  page_number: number;
+  color: AnnotationColor;
+  highlighted_text: string;
+  comment: string | null;
+  visibility: AnnotationVisibility;
+  char_start: number | null;
+  char_end: number | null;
+  // Each box is [x1, y1, x2, y2] in PDF native coordinates.
+  boxes: number[][];
+  user_id: string;
+  user_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AnnotationCreatePayload {
+  document_id: string;
+  page_number: number;
+  highlighted_text: string;
+  color?: AnnotationColor;
+  comment?: string | null;
+  visibility?: AnnotationVisibility;
+  char_start?: number | null;
+  char_end?: number | null;
+  boxes?: number[][];
+}
+
+export interface AnnotationUpdatePayload {
+  color?: AnnotationColor;
+  comment?: string | null;
+  visibility?: AnnotationVisibility;
 }
