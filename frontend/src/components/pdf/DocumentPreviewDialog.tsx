@@ -3,10 +3,13 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { GripHorizontal, Maximize2, Minimize2, X } from "lucide-react";
+import { GripHorizontal, MessageSquare, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, X } from "lucide-react";
 
+import { DocumentChatPane } from "@/components/pdf/DocumentChatPane";
 import { useDialogDismiss } from "@/hooks/useDialogDismiss";
 import type { Document } from "@/lib/types";
+import { useDocumentStore } from "@/stores/documentStore";
+import { useGroupStore } from "@/stores/groupStore";
 import { usePDFViewerStore } from "@/stores/pdfViewerStore";
 
 // Re-use the chat's full PDFViewer (search, highlights, annotations,
@@ -30,6 +33,12 @@ const VIEWPORT_INSET = 16;
 // it again.
 const DRAG_KEEP_VISIBLE = 80;
 const STORAGE_KEY = "pdfDialogSize";
+const CHAT_OPEN_STORAGE_KEY = "pdfDialogChatOpen";
+const CHAT_PANE_WIDTH = 420;
+// Below this dialog width we hide the chat pane regardless of the
+// toggle state — there isn't enough horizontal room to read the PDF
+// AND chat side-by-side. User can maximize the dialog to get it back.
+const CHAT_MIN_DIALOG_WIDTH = 1100;
 
 type Size = { width: number; height: number };
 type Position = { x: number; y: number };
@@ -105,6 +114,23 @@ export function DocumentPreviewDialog({
 }) {
   const loadPage = usePDFViewerStore((state) => state.loadPage);
   const closeStore = usePDFViewerStore((state) => state.close);
+  // We auto-select this PDF in the document store on open so the
+  // composer attaches it as a source for every message; the previous
+  // selection is restored on close. The chat lives next to the PDF
+  // in a split-pane layout; the user can hide it via the title bar.
+  const setSelectedDocuments = useDocumentStore((s) => s.setSelectedDocuments);
+  const previousSelection = useRef<string[] | null>(null);
+  const setActiveGroup = useGroupStore((s) => s.setActiveGroup);
+  const previousActiveGroup = useRef<string | null>(null);
+  const [chatOpen, setChatOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    try {
+      const raw = window.localStorage.getItem(CHAT_OPEN_STORAGE_KEY);
+      return raw === null ? true : raw === "true";
+    } catch {
+      return true;
+    }
+  });
   const {
     handleOpenChange,
     handlePointerDownOutside,
@@ -160,6 +186,11 @@ export function DocumentPreviewDialog({
   // dialog opens; tear it down on close so the chat panel doesn't
   // keep showing the doc the user just dismissed. Also re-centre on
   // open so each library click feels predictable.
+  //
+  // We also temporarily scope the chat composer to this PDF: stash
+  // whatever was selected before, swap in this document, and put
+  // the user on the doc's library group so the composer's "Library"
+  // mode targets it. Both are restored on close.
   useEffect(() => {
     if (!document) return;
     void loadPage(document, 1, []);
@@ -169,10 +200,38 @@ export function DocumentPreviewDialog({
       // we're transitioning from "no document" to "document").
       return current;
     });
+    previousSelection.current =
+      useDocumentStore.getState().selectedDocumentIds;
+    previousActiveGroup.current =
+      useGroupStore.getState().activeGroupId;
+    setSelectedDocuments([document.id]);
+    if (document.group_id) {
+      setActiveGroup(document.group_id);
+    }
     return () => {
       closeStore();
+      if (previousSelection.current !== null) {
+        setSelectedDocuments(previousSelection.current);
+        previousSelection.current = null;
+      }
+      if (previousActiveGroup.current !== null) {
+        setActiveGroup(previousActiveGroup.current);
+        previousActiveGroup.current = null;
+      }
     };
-  }, [document, loadPage, closeStore]);
+  }, [document, loadPage, closeStore, setSelectedDocuments, setActiveGroup]);
+
+  // Persist the chat-open preference so the dialog opens the same way
+  // next time. We do not respect this when the dialog is narrower than
+  // CHAT_MIN_DIALOG_WIDTH — see below.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(CHAT_OPEN_STORAGE_KEY, chatOpen ? "true" : "false");
+    } catch {
+      /* ignore storage errors */
+    }
+  }, [chatOpen]);
 
   // Re-centre whenever the dialog opens fresh.
   useEffect(() => {
@@ -337,6 +396,14 @@ export function DocumentPreviewDialog({
     ? { x: VIEWPORT_INSET / 2, y: VIEWPORT_INSET / 2 }
     : position;
 
+  // Chat-pane visibility: the user toggles it via the title-bar
+  // button, but we override to hide when the dialog is too narrow
+  // for both panes to be usable (PDF needs ~640px, chat needs the
+  // CHAT_PANE_WIDTH allocation). Below CHAT_MIN_DIALOG_WIDTH the
+  // toggle button is greyed out and the chat is hidden.
+  const chatRoomAvailable = renderedSize.width >= CHAT_MIN_DIALOG_WIDTH;
+  const chatVisible = chatOpen && chatRoomAvailable && document !== null;
+
   const resizeHandleClass = (cursor: string, edge: string) =>
     `absolute z-40 ${edge} ${cursor} ${maximized ? "pointer-events-none opacity-0" : ""}`;
 
@@ -387,6 +454,34 @@ export function DocumentPreviewDialog({
               </span>
             </div>
             <div className="flex items-center gap-1">
+              {chatRoomAvailable ? (
+                <button
+                  type="button"
+                  aria-label={chatOpen ? "Hide chat" : "Show chat"}
+                  title={chatOpen ? "Hide chat panel" : "Show chat panel"}
+                  onClick={() => setChatOpen((v) => !v)}
+                  className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition ${
+                    chatOpen
+                      ? "border-black/[0.10] bg-white text-ink"
+                      : "border-transparent text-muted hover:border-black/[0.10] hover:bg-white hover:text-ink"
+                  }`}
+                >
+                  {chatOpen ? (
+                    <PanelRightClose className="h-3.5 w-3.5" />
+                  ) : (
+                    <PanelRightOpen className="h-3.5 w-3.5" />
+                  )}
+                  <span className="hidden sm:inline">Chat</span>
+                </button>
+              ) : (
+                <span
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[11px] text-muted/60"
+                  title="Widen the dialog to show the chat panel"
+                >
+                  <MessageSquare className="h-3.5 w-3.5 opacity-50" />
+                  <span className="hidden sm:inline">Chat</span>
+                </span>
+              )}
               <button
                 type="button"
                 aria-label={maximized ? "Restore size" : "Maximize"}
@@ -406,8 +501,18 @@ export function DocumentPreviewDialog({
               </button>
             </div>
           </div>
-          <div className="min-h-0 flex-1">
-            {document ? <PDFViewer /> : null}
+          <div className="min-h-0 flex flex-1 overflow-hidden">
+            <div className="min-h-0 min-w-0 flex-1">
+              {document ? <PDFViewer /> : null}
+            </div>
+            {chatVisible ? (
+              <div
+                className="flex h-full shrink-0 flex-col border-l border-black/[0.06] bg-panel"
+                style={{ width: CHAT_PANE_WIDTH }}
+              >
+                <DocumentChatPane />
+              </div>
+            ) : null}
           </div>
           {/* Corner resize handles. Invisible — the cursor change on
               hover is the affordance, same pattern Notion / Figma /
