@@ -117,20 +117,17 @@ export function DocumentPreviewDialog({
   // We auto-select this PDF in the document store on open so the
   // composer attaches it as a source for every message; the previous
   // selection is restored on close. The chat lives next to the PDF
-  // in a split-pane layout; the user can hide it via the title bar.
+  // in a split-pane layout; the user toggles it via the PDF toolbar.
   const setSelectedDocuments = useDocumentStore((s) => s.setSelectedDocuments);
   const previousSelection = useRef<string[] | null>(null);
   const setActiveGroup = useGroupStore((s) => s.setActiveGroup);
   const previousActiveGroup = useRef<string | null>(null);
-  const [chatOpen, setChatOpen] = useState<boolean>(() => {
-    if (typeof window === "undefined") return true;
-    try {
-      const raw = window.localStorage.getItem(CHAT_OPEN_STORAGE_KEY);
-      return raw === null ? true : raw === "true";
-    } catch {
-      return true;
-    }
-  });
+  // Chat-open is shared with PDFToolbar via the pdfViewerStore so the
+  // toolbar button can toggle it. We seed it from localStorage and
+  // mirror writes back so the preference sticks across opens.
+  const chatPaneOpen = usePDFViewerStore((s) => s.chatPaneOpen);
+  const setChatPaneAvailable = usePDFViewerStore((s) => s.setChatPaneAvailable);
+  const setChatPaneOpen = usePDFViewerStore((s) => s.setChatPaneOpen);
   const {
     handleOpenChange,
     handlePointerDownOutside,
@@ -221,17 +218,42 @@ export function DocumentPreviewDialog({
     };
   }, [document, loadPage, closeStore, setSelectedDocuments, setActiveGroup]);
 
-  // Persist the chat-open preference so the dialog opens the same way
-  // next time. We do not respect this when the dialog is narrower than
-  // CHAT_MIN_DIALOG_WIDTH — see below.
+  // Seed the chat-open preference from localStorage on first mount of
+  // an open dialog, then mirror writes back. We do not respect the
+  // preference when the dialog is narrower than CHAT_MIN_DIALOG_WIDTH
+  // — see chatVisible below.
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      window.localStorage.setItem(CHAT_OPEN_STORAGE_KEY, chatOpen ? "true" : "false");
+      const raw = window.localStorage.getItem(CHAT_OPEN_STORAGE_KEY);
+      if (raw !== null) {
+        setChatPaneOpen(raw === "true");
+      }
     } catch {
       /* ignore storage errors */
     }
-  }, [chatOpen]);
+  }, [setChatPaneOpen]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        CHAT_OPEN_STORAGE_KEY,
+        chatPaneOpen ? "true" : "false",
+      );
+    } catch {
+      /* ignore storage errors */
+    }
+  }, [chatPaneOpen]);
+
+  // Tell the PDF toolbar (via the shared pdfViewerStore) that a chat
+  // pane is available to toggle. Clear the flag on unmount so the
+  // main-app PDF viewer doesn't show an orphan Chat button.
+  useEffect(() => {
+    if (!document) return;
+    setChatPaneAvailable(true);
+    return () => setChatPaneAvailable(false);
+  }, [document, setChatPaneAvailable]);
 
   // Re-centre whenever the dialog opens fresh.
   useEffect(() => {
@@ -396,13 +418,32 @@ export function DocumentPreviewDialog({
     ? { x: VIEWPORT_INSET / 2, y: VIEWPORT_INSET / 2 }
     : position;
 
-  // Chat-pane visibility: the user toggles it via the title-bar
-  // button, but we override to hide when the dialog is too narrow
+  // Chat-pane visibility: the user toggles it via the PDF toolbar's
+  // Chat button. We override to hide when the dialog is too narrow
   // for both panes to be usable (PDF needs ~640px, chat needs the
-  // CHAT_PANE_WIDTH allocation). Below CHAT_MIN_DIALOG_WIDTH the
-  // toggle button is greyed out and the chat is hidden.
+  // CHAT_PANE_WIDTH allocation). At that size the toolbar button is
+  // still shown (so the user knows the affordance exists) but
+  // clicking widens the dialog instead of changing layout.
   const chatRoomAvailable = renderedSize.width >= CHAT_MIN_DIALOG_WIDTH;
-  const chatVisible = chatOpen && chatRoomAvailable && document !== null;
+  const chatVisible = chatPaneOpen && chatRoomAvailable && document !== null;
+
+  // When the user toggles chat on but the dialog is too narrow, widen
+  // the dialog enough to show both panes (preserving the current
+  // PDF width). The PDF toolbar's Chat button calls toggleChatPane
+  // via the store; we observe the state here and react.
+  useEffect(() => {
+    if (typeof window === "undefined" || !document) return;
+    if (chatPaneOpen && !chatRoomAvailable && !maximized) {
+      const target = clampSize({
+        width: Math.max(renderedSize.width, CHAT_MIN_DIALOG_WIDTH),
+        height: renderedSize.height,
+      });
+      if (target.width !== renderedSize.width || target.height !== renderedSize.height) {
+        setSize(target);
+        setPosition(centeredPosition(target));
+      }
+    }
+  }, [chatPaneOpen, chatRoomAvailable, maximized, document, renderedSize.width, renderedSize.height]);
 
   const resizeHandleClass = (cursor: string, edge: string) =>
     `absolute z-40 ${edge} ${cursor} ${maximized ? "pointer-events-none opacity-0" : ""}`;
@@ -454,34 +495,6 @@ export function DocumentPreviewDialog({
               </span>
             </div>
             <div className="flex items-center gap-1">
-              {chatRoomAvailable ? (
-                <button
-                  type="button"
-                  aria-label={chatOpen ? "Hide chat" : "Show chat"}
-                  title={chatOpen ? "Hide chat panel" : "Show chat panel"}
-                  onClick={() => setChatOpen((v) => !v)}
-                  className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition ${
-                    chatOpen
-                      ? "border-black/[0.10] bg-white text-ink"
-                      : "border-transparent text-muted hover:border-black/[0.10] hover:bg-white hover:text-ink"
-                  }`}
-                >
-                  {chatOpen ? (
-                    <PanelRightClose className="h-3.5 w-3.5" />
-                  ) : (
-                    <PanelRightOpen className="h-3.5 w-3.5" />
-                  )}
-                  <span className="hidden sm:inline">Chat</span>
-                </button>
-              ) : (
-                <span
-                  className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[11px] text-muted/60"
-                  title="Widen the dialog to show the chat panel"
-                >
-                  <MessageSquare className="h-3.5 w-3.5 opacity-50" />
-                  <span className="hidden sm:inline">Chat</span>
-                </span>
-              )}
               <button
                 type="button"
                 aria-label={maximized ? "Restore size" : "Maximize"}

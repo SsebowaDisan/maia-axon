@@ -1005,7 +1005,6 @@ export function PDFViewer() {
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
         onFitWidth={handleFitWidth}
-        onOpenLearn={() => setLearnOpen(true)}
         onOpenMindmap={() => setMindmapOpen(true)}
         search={search}
       />

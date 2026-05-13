@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ChevronDown, ChevronUp, GraduationCap, Maximize2, Minus, Network, Plus, Search, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Maximize2, MessageSquare, Minus, Network, PanelRightClose, Plus, Search, X } from "lucide-react";
 
 import type { Document } from "@/lib/types";
 import type { PdfSearchState } from "@/components/pdf/usePdfSearch";
+import { usePDFViewerStore } from "@/stores/pdfViewerStore";
 
 interface PDFToolbarProps {
   document: Document;
@@ -12,12 +13,18 @@ interface PDFToolbarProps {
   onZoomIn?: () => void;
   onZoomOut?: () => void;
   onFitWidth?: () => void;
-  onOpenLearn?: () => void;
   onOpenMindmap?: () => void;
   search?: PdfSearchState;
 }
 
-export function PDFToolbar({ document, zoom, onZoomIn, onZoomOut, onFitWidth, onOpenLearn, onOpenMindmap, search }: PDFToolbarProps) {
+export function PDFToolbar({ document, zoom, onZoomIn, onZoomOut, onFitWidth, onOpenMindmap, search }: PDFToolbarProps) {
+  // The Chat toggle only renders when a chat surface is mounted next
+  // to the viewer — that's the case when the user opened the PDF via
+  // the preview dialog. In the main app there's no embedded chat to
+  // toggle, so the button stays hidden.
+  const chatPaneAvailable = usePDFViewerStore((s) => s.chatPaneAvailable);
+  const chatPaneOpen = usePDFViewerStore((s) => s.chatPaneOpen);
+  const toggleChatPane = usePDFViewerStore((s) => s.toggleChatPane);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   // Ctrl/Cmd+F focuses the in-PDF search instead of the browser's find bar.
@@ -126,15 +133,25 @@ export function PDFToolbar({ document, zoom, onZoomIn, onZoomOut, onFitWidth, on
           Mindmap
         </button>
       ) : null}
-      {onOpenLearn ? (
+      {chatPaneAvailable ? (
         <button
           type="button"
-          onClick={onOpenLearn}
-          title="Open learn mode for this document"
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-black/[0.10] bg-white px-2.5 py-[5px] text-[12px] font-medium text-ink transition hover:bg-[#2a2522] hover:text-white"
+          onClick={toggleChatPane}
+          title={chatPaneOpen ? "Hide chat panel" : "Show chat panel"}
+          aria-label={chatPaneOpen ? "Hide chat" : "Show chat"}
+          aria-pressed={chatPaneOpen}
+          className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-[5px] text-[12px] font-medium transition ${
+            chatPaneOpen
+              ? "border-black/[0.16] bg-[#2a2522] text-white hover:bg-[#3a3530]"
+              : "border-black/[0.10] bg-white text-ink hover:bg-[#2a2522] hover:text-white"
+          }`}
         >
-          <GraduationCap className="h-3.5 w-3.5" />
-          Learn
+          {chatPaneOpen ? (
+            <PanelRightClose className="h-3.5 w-3.5" />
+          ) : (
+            <MessageSquare className="h-3.5 w-3.5" />
+          )}
+          Chat
         </button>
       ) : null}
       <div className="flex shrink-0 items-center overflow-hidden rounded-md border border-black/[0.10] bg-white">
