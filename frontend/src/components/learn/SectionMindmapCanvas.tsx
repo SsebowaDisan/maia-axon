@@ -9,12 +9,13 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
   type Edge,
   type Node,
   type NodeMouseHandler,
   type NodeProps,
 } from "@xyflow/react";
-import { GraduationCap, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, GraduationCap, Loader2 } from "lucide-react";
 
 import { api } from "@/lib/api";
 import type { MindmapSectionNode } from "@/lib/types";
@@ -28,10 +29,6 @@ interface CanvasProps {
   onLearnSection?: (sectionId: string, title: string) => void;
 }
 
-// ReactFlow's Node generic requires the data type to be assignable to
-// Record<string, unknown>; add an index signature so our specific
-// payload types satisfy that constraint without losing strong typing
-// on the named fields.
 interface NodePayload {
   title: string;
   kind: "root" | "topic" | "subtopic" | "headline";
@@ -40,23 +37,35 @@ interface NodePayload {
   sectionId: string | null;
   summary: string | null;
   mastery: number | null;
+  // NotebookLM-style expansion state. ``hasChildren`` lets the node
+  // renderer draw an expand affordance; ``isExpanded`` toggles the
+  // chevron direction. ``childCount`` powers the "+N" hint when the
+  // subtree is hidden.
+  hasChildren: boolean;
+  isExpanded: boolean;
+  childCount: number;
+  onToggle?: () => void;
+  onLearn?: (sectionId: string, title: string) => void;
   [key: string]: unknown;
 }
 
+const ROOT_ID = "__book_root__";
+
 // ---------------------------------------------------------------------------
-// Layout: recursive hierarchical layout (book on the left, branches grow
-// rightward). Each node's vertical span is proportional to the leaf count
-// of its subtree, so siblings stack without overlap regardless of how
-// unbalanced the tree is.
+// Visual tuning
 // ---------------------------------------------------------------------------
 
-const _LEVEL_X = 320;       // horizontal gap between levels
-const _LEAF_Y = 56;         // vertical gap between leaves
-const _NODE_WIDTH = 240;    // node width (used for handle anchoring math)
+const _LEVEL_X = 320;
+const _LEAF_Y = 64;
+const _NODE_WIDTH = 240;
 
-function countLeaves(node: MindmapSectionNode): number {
-  if (!node.children.length) return 1;
-  return node.children.reduce((acc, child) => acc + countLeaves(child), 0);
+// ---------------------------------------------------------------------------
+// Tree helpers
+// ---------------------------------------------------------------------------
+
+function visibleLeafCount(node: MindmapSectionNode, expanded: Set<string>): number {
+  if (!node.children.length || !expanded.has(node.id)) return 1;
+  return node.children.reduce((acc, c) => acc + visibleLeafCount(c, expanded), 0);
 }
 
 function rollupMastery(node: MindmapSectionNode): number | null {
@@ -70,11 +79,11 @@ function rollupMastery(node: MindmapSectionNode): number | null {
 }
 
 function masteryColor(score: number | null): string {
-  if (score == null) return "rgba(241,245,249,1)"; // slate-100
-  if (score >= 0.85) return "rgba(167,243,208,1)"; // emerald-200
-  if (score >= 0.65) return "rgba(253,230,138,1)"; // amber-200
-  if (score >= 0.35) return "rgba(254,215,170,1)"; // orange-200
-  return "rgba(254,205,211,1)"; // rose-200
+  if (score == null) return "rgba(241,245,249,1)";
+  if (score >= 0.85) return "rgba(167,243,208,1)";
+  if (score >= 0.65) return "rgba(253,230,138,1)";
+  if (score >= 0.35) return "rgba(254,215,170,1)";
+  return "rgba(254,205,211,1)";
 }
 
 function masteryBorder(score: number | null): string {
@@ -113,7 +122,6 @@ function kindStyle(
       borderWidth: 1,
     };
   }
-  // headline — mastery colour drives the fill
   return {
     background: masteryColor(mastery),
     borderColor: masteryBorder(mastery),
@@ -121,6 +129,12 @@ function kindStyle(
     borderWidth: 2,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Layout — recursive top-down placement that only renders nodes whose
+// ancestor chain is fully expanded. Each rendered node carries the
+// expand/collapse state so the renderer can show an affordance.
+// ---------------------------------------------------------------------------
 
 interface FlowAccumulator {
   nodes: Node<NodePayload>[];
@@ -131,21 +145,25 @@ function layoutSubtree(
   node: MindmapSectionNode,
   depth: number,
   yOffset: number,
-  parentId: string | null,
+  parentId: string,
+  expanded: Set<string>,
   acc: FlowAccumulator,
-  collapsed: Set<string>,
-): number {
+): void {
   const id = node.id;
-  const isLeaf = !node.children.length || collapsed.has(id);
-  const mastery = rollupMastery(node);
-  const leafCount = isLeaf ? 1 : countLeaves(node);
+  const isExpanded = expanded.has(id);
+  const hasChildren = node.children.length > 0;
+  const renderChildren = hasChildren && isExpanded;
+  const leafCount = renderChildren ? visibleLeafCount(node, expanded) : 1;
   const blockHeight = leafCount * _LEAF_Y;
-
   const centerY = yOffset + blockHeight / 2 - _LEAF_Y / 2;
+  const mastery = rollupMastery(node);
+
   acc.nodes.push({
     id,
     type: "section",
     position: { x: depth * _LEVEL_X, y: centerY },
+    sourcePosition: Position.Right,
+    targetPosition: Position.Left,
     data: {
       title: node.title,
       kind: (node.kind === "headline" || node.kind === "subtopic" || node.kind === "topic")
@@ -156,49 +174,52 @@ function layoutSubtree(
       sectionId: id,
       summary: node.summary,
       mastery,
+      hasChildren,
+      isExpanded,
+      childCount: node.children.length,
     },
-    sourcePosition: Position.Right,
-    targetPosition: Position.Left,
   });
 
-  if (parentId) {
-    acc.edges.push({
-      id: `${parentId}->${id}`,
-      source: parentId,
-      target: id,
-      type: "smoothstep",
-      style: { stroke: "rgba(110,103,93,0.45)", strokeWidth: 1.5 },
-      markerEnd: { type: MarkerType.ArrowClosed, color: "rgba(110,103,93,0.6)" },
-    });
-  }
+  acc.edges.push({
+    id: `${parentId}->${id}`,
+    source: parentId,
+    target: id,
+    type: "smoothstep",
+    style: { stroke: "rgba(110,103,93,0.45)", strokeWidth: 1.5 },
+    markerEnd: { type: MarkerType.ArrowClosed, color: "rgba(110,103,93,0.6)" },
+  });
 
-  if (!isLeaf) {
+  if (renderChildren) {
     let childY = yOffset;
     for (const child of node.children) {
-      const childLeaves = countLeaves(child);
-      layoutSubtree(child, depth + 1, childY, id, acc, collapsed);
+      const childLeaves = visibleLeafCount(child, expanded);
+      layoutSubtree(child, depth + 1, childY, id, expanded, acc);
       childY += childLeaves * _LEAF_Y;
     }
   }
-
-  return blockHeight;
 }
 
 function buildFlow(
   documentName: string,
   tree: MindmapSectionNode[],
-  collapsed: Set<string>,
+  expanded: Set<string>,
 ): FlowAccumulator {
   const acc: FlowAccumulator = { nodes: [], edges: [] };
+  const rootIsExpanded = expanded.has(ROOT_ID);
+  // When the root is collapsed the canvas shows only the book node —
+  // that's the "give me one starting point" first frame.
+  const visibleTops = rootIsExpanded ? tree : [];
+
   const totalLeaves =
-    tree.reduce((acc, t) => acc + countLeaves(t), 0) || 1;
+    visibleTops.reduce((acc, t) => acc + visibleLeafCount(t, expanded), 0) || 1;
   const totalHeight = totalLeaves * _LEAF_Y;
-  const rootId = "__book_root__";
 
   acc.nodes.push({
-    id: rootId,
+    id: ROOT_ID,
     type: "section",
     position: { x: 0, y: totalHeight / 2 - _LEAF_Y / 2 },
+    sourcePosition: Position.Right,
+    targetPosition: Position.Left,
     data: {
       title: documentName,
       kind: "root",
@@ -207,33 +228,27 @@ function buildFlow(
       sectionId: null,
       summary: null,
       mastery: null,
+      hasChildren: tree.length > 0,
+      isExpanded: rootIsExpanded,
+      childCount: tree.length,
     },
-    sourcePosition: Position.Right,
-    targetPosition: Position.Left,
   });
 
   let y = 0;
-  for (const top of tree) {
-    const leaves = countLeaves(top);
-    layoutSubtree(top, 1, y, rootId, acc, collapsed);
+  for (const top of visibleTops) {
+    const leaves = visibleLeafCount(top, expanded);
+    layoutSubtree(top, 1, y, ROOT_ID, expanded, acc);
     y += leaves * _LEAF_Y;
   }
   return acc;
 }
 
 // ---------------------------------------------------------------------------
-// Custom node renderer — gives us pill-shaped nodes with mastery indicator,
-// page-range badge, and a learn-this action that NotebookLM-style mindmaps
-// also lean on (click a node to drill into the source).
+// Node renderer
 // ---------------------------------------------------------------------------
 
-interface SectionNodeData extends NodePayload {
-  onLearn?: (sectionId: string, title: string) => void;
-}
-
-function SectionNodeView({ data }: NodeProps<Node<SectionNodeData>>) {
+function SectionNodeView({ data }: NodeProps<Node<NodePayload>>) {
   const style = kindStyle(data.kind, data.mastery);
-  const showHandles = data.kind !== "root" ? true : true;
   const fontSize =
     data.kind === "root"
       ? 13
@@ -243,6 +258,7 @@ function SectionNodeView({ data }: NodeProps<Node<SectionNodeData>>) {
           ? 12
           : 11.5;
   const fontWeight = data.kind === "headline" ? 500 : 600;
+
   return (
     <div
       style={{
@@ -256,39 +272,80 @@ function SectionNodeView({ data }: NodeProps<Node<SectionNodeData>>) {
         fontSize,
         fontWeight,
         lineHeight: 1.3,
+        cursor: data.hasChildren ? "pointer" : "default",
       }}
     >
-      {showHandles ? (
-        <>
-          <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
-          <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
-        </>
-      ) : null}
-      <div
-        style={{
-          fontSize: 9.5,
-          textTransform: "uppercase",
-          letterSpacing: "0.16em",
-          opacity: 0.55,
-        }}
-      >
-        {data.kind === "root" ? "Book" : data.kind}
-        {data.kind !== "root" ? ` · p. ${data.pageStart}` : ""}
+      <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
+      <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
+      <div className="flex items-start justify-between gap-2">
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div
+            style={{
+              fontSize: 9.5,
+              textTransform: "uppercase",
+              letterSpacing: "0.16em",
+              opacity: 0.55,
+            }}
+          >
+            {data.kind === "root" ? "Book" : data.kind}
+            {data.kind !== "root" ? ` · p. ${data.pageStart}` : ""}
+          </div>
+          <div style={{ marginTop: 4, wordBreak: "break-word" }}>{data.title}</div>
+          {data.kind === "headline" && data.onLearn && data.sectionId ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                data.onLearn?.(data.sectionId!, data.title);
+              }}
+              className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-white/85 px-2 py-[1px] text-[10px] font-semibold text-emerald-700 hover:bg-white"
+            >
+              <GraduationCap className="h-2.5 w-2.5" />
+              Learn this
+            </button>
+          ) : null}
+        </div>
+        {data.hasChildren ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              data.onToggle?.();
+            }}
+            title={data.isExpanded ? "Collapse" : `Expand (${data.childCount})`}
+            aria-label={data.isExpanded ? "Collapse" : "Expand"}
+            style={{
+              marginTop: 1,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              minWidth: 22,
+              height: 22,
+              borderRadius: 11,
+              border: `1px solid ${data.kind === "root" ? "rgba(255,255,255,0.35)" : "rgba(0,0,0,0.08)"}`,
+              background:
+                data.kind === "root"
+                  ? "rgba(255,255,255,0.12)"
+                  : "rgba(255,255,255,0.85)",
+              color: data.kind === "root" ? "white" : "rgba(31,27,24,0.7)",
+              fontSize: 10,
+              fontWeight: 700,
+              padding: data.isExpanded ? 0 : "0 6px",
+              gap: 2,
+              cursor: "pointer",
+            }}
+          >
+            {data.isExpanded ? (
+              <ChevronDown style={{ width: 12, height: 12 }} />
+            ) : (
+              <>
+                <ChevronRight style={{ width: 12, height: 12 }} />
+                {data.childCount > 0 ? <span>{data.childCount}</span> : null}
+              </>
+            )}
+          </button>
+        ) : null}
       </div>
-      <div style={{ marginTop: 4, wordBreak: "break-word" }}>{data.title}</div>
-      {data.kind === "headline" && data.onLearn && data.sectionId ? (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            data.onLearn?.(data.sectionId!, data.title);
-          }}
-          className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-white/85 px-2 py-[1px] text-[10px] font-semibold text-emerald-700 hover:bg-white"
-        >
-          <GraduationCap className="h-2.5 w-2.5" />
-          Learn this
-        </button>
-      ) : null}
     </div>
   );
 }
@@ -307,14 +364,18 @@ function CanvasInner({
 }: CanvasProps) {
   const [tree, setTree] = useState<MindmapSectionNode[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Track which non-leaf nodes the user collapsed. Lets the user
-  // tame a wide subtree the same way notebook-style mindmaps do.
-  const [collapsed, _setCollapsed] = useState<Set<string>>(new Set());
+  // The set of parent ids whose direct children are visible. We seed
+  // with the book root so the first frame shows root + top-level
+  // topics. Everything else stays collapsed until the user opens it
+  // — same pattern as NotebookLM's mindmap.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set([ROOT_ID]));
+  const reactFlow = useReactFlow();
 
   useEffect(() => {
     let cancelled = false;
     setTree(null);
     setError(null);
+    setExpanded(new Set([ROOT_ID]));
     api
       .getDocumentSections(documentId)
       .then((data) => {
@@ -327,26 +388,60 @@ function CanvasInner({
     };
   }, [documentId]);
 
+  const toggle = useCallback((id: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
   const flow = useMemo(() => {
     if (!tree) return { nodes: [], edges: [] };
-    const built = buildFlow(documentName, tree, collapsed);
-    // Inject the onLearn handler into headline nodes via data.
-    built.nodes = built.nodes.map((node) =>
-      node.data.kind === "headline"
-        ? ({ ...node, data: { ...node.data, onLearn: onLearnSection } } as Node<SectionNodeData>)
-        : node,
-    ) as Node<NodePayload>[];
+    const built = buildFlow(documentName, tree, expanded);
+    // Inject runtime handlers via the data payload — keeps the node
+    // renderer pure of any store / context plumbing.
+    built.nodes = built.nodes.map((node) => ({
+      ...node,
+      data: {
+        ...node.data,
+        onToggle: node.data.hasChildren
+          ? () => toggle(node.id)
+          : undefined,
+        onLearn: node.data.kind === "headline" ? onLearnSection : undefined,
+      },
+    }));
     return built;
-  }, [tree, documentName, collapsed, onLearnSection]);
+  }, [tree, documentName, expanded, onLearnSection, toggle]);
+
+  // Re-fit the viewport whenever the set of visible nodes changes so
+  // the user always sees the new layout centred. We use a small
+  // duration so it feels like an animation rather than a jump.
+  useEffect(() => {
+    if (!flow.nodes.length) return;
+    const handle = window.requestAnimationFrame(() => {
+      reactFlow.fitView({ padding: 0.18, duration: 300 });
+    });
+    return () => window.cancelAnimationFrame(handle);
+  }, [flow.nodes.length, reactFlow]);
 
   const handleNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => {
       const data = node.data as NodePayload;
+      // Clicking a non-leaf toggles its children. Clicking a leaf
+      // (headline) jumps the PDF to that section. Clicking the root
+      // toggles the entire top level so the user can hide everything
+      // and start over.
+      if (data.hasChildren) {
+        toggle(node.id);
+        return;
+      }
       if (data.pageStart && data.kind !== "root") {
         onJumpToPage(data.pageStart);
       }
     },
-    [onJumpToPage],
+    [onJumpToPage, toggle],
   );
 
   if (error) {
@@ -377,7 +472,7 @@ function CanvasInner({
       edges={flow.edges}
       nodeTypes={nodeTypes}
       fitView
-      fitViewOptions={{ padding: 0.15 }}
+      fitViewOptions={{ padding: 0.18 }}
       nodesDraggable={false}
       nodesConnectable={false}
       panOnScroll
