@@ -491,12 +491,25 @@ export const useChatStore = create<ChatState>()(
       mode === "google_analytics" || mode === "google_ads"
         ? companyState.selectedCompanyByMode[mode]
         : null;
-    const groupId =
-      mode === "standard"
-        ? groupState.activeGroupId ?? groupState.groups[0]?.id ?? null
-        : mode === "library" || mode === "deep_search"
-          ? groupState.activeGroupId
-          : null;
+    // Document modes (library/deep_search/learn) need a group_id or the
+    // backend rejects with "Group is required for grounded chat". When
+    // the active group hasn't propagated (persist-hydration race, store
+    // reset, etc.) but the preview dialog has a current document loaded,
+    // fall back to that document's group_id and reconcile the store so
+    // subsequent sends are consistent.
+    const pdfState = usePDFViewerStore.getState();
+    const currentDoc = pdfState.previewDocument ?? pdfState.currentDocument;
+    let groupId: string | null;
+    if (mode === "standard") {
+      groupId = groupState.activeGroupId ?? groupState.groups[0]?.id ?? null;
+    } else if (mode === "library" || mode === "deep_search" || mode === "learn") {
+      groupId = groupState.activeGroupId ?? currentDoc?.group_id ?? null;
+      if (!groupState.activeGroupId && groupId) {
+        groupState.setActiveGroup(groupId);
+      }
+    } else {
+      groupId = null;
+    }
     const documentIds = documentState.selectedDocumentIds;
     const activeConversationProjectId =
       conversationState.activeConversation?.project_id ??
