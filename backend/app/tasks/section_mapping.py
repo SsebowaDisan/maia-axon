@@ -438,6 +438,257 @@ def _extract_skeleton_from_nav_links(
     return _build_tree_from_entries(entries, page_count)
 
 
+# Languages we recognise the TOC header in. Match is case-insensitive
+# and against the FIRST non-blank line of a page so a stray occurrence
+# inside body prose doesn't trigger a false positive.
+_TOC_HEADERS = (
+    "sommaire",
+    "table des matieres",
+    "table des matières",
+    "table of contents",
+    "contents",
+    "inhalt",
+    "inhaltsverzeichnis",
+    "indice",
+    "índice",
+    "indice general",
+    "índice general",
+)
+
+# A TOC line matches:  <prefix>? <title> <dot-leader> <page>
+# Captures the page number; the rest is sliced from the original line.
+# The leader allows even a single dot because some OCRs collapse long
+# leaders to one or two characters. False positives are bounded by the
+# body-length + alphabetic-content filters in ``_parse_toc_lines``.
+_TOC_LINE_PAGE_RE = __import__("re").compile(
+    r"^(?P<body>.+?)"            # title body (lazy)
+    r"(?:\s*(?:[\.…·]\s*){1,})"  # dot leader (≥1 dot, allow gaps)
+    r"\s*(?P<page>\d{1,4})"      # printed page number
+    r"[A-Za-z]?\s*$"             # optional trailing letter suffix
+)
+
+# Fallback for OCR'd TOC entries where the dot leader was lost
+# entirely: "1.1.1 Définition des ventilateurs                11".
+_TOC_LINE_TRAILING_PAGE_RE = __import__("re").compile(
+    r"^(?P<body>.+?)\s{2,}(?P<page>\d{1,4})\s*$"
+)
+
+
+def _looks_like_toc_page(text: str) -> bool:
+    """Return True if the first non-blank line is a TOC header."""
+    for raw in (text or "").splitlines():
+        line = raw.strip().lower()
+        if not line:
+            continue
+        # Strip trailing punctuation/whitespace artefacts before comparing.
+        line = line.rstrip(".:· \t")
+        return any(line.startswith(h) for h in _TOC_HEADERS)
+    return False
+
+
+def _toc_continuation_density(text: str) -> float:
+    """Rough heuristic: fraction of non-blank lines that parse as a
+    TOC entry (have a dot leader + trailing page number, or a wide gap
+    + trailing page number). Used to decide whether a page that
+    DOESN'T start with a TOC header is still part of an ongoing TOC.
+    """
+    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        return 0.0
+    hits = 0
+    for ln in lines:
+        if _TOC_LINE_PAGE_RE.match(ln) or _TOC_LINE_TRAILING_PAGE_RE.match(ln):
+            hits += 1
+    return hits / len(lines)
+
+
+# Standalone chapter prefix that the OCR pushed onto its own line
+# (very common: "1.1\nLes différents types ..."). When we hit one of
+# these, we join it onto the FOLLOWING content line so the chapter
+# level is preserved.
+_TOC_PREFIX_ONLY_RE = __import__("re").compile(r"^\s*\d+(?:\.\d+){0,4}\.?\s*$")
+
+
+def _line_has_trailing_page(line: str) -> bool:
+    """True if the line already ends in a recognisable page reference."""
+    return bool(
+        _TOC_LINE_PAGE_RE.match(line)
+        or _TOC_LINE_TRAILING_PAGE_RE.match(line)
+    )
+
+
+def _join_prefix_split_lines(lines: list[str]) -> list[str]:
+    """Merge prefix-only lines with their continuation AND merge
+    wrapped TOC entries whose page number landed on the next line.
+
+    OCR'd TOCs commonly look like::
+
+        1.1
+        Les différents types de ventilateurs ............ 11
+        ANNEXE A : Glossaire des termes relatifs
+        des ventilateurs ................................ 101
+
+    Without joining, the prefix-only line never matches a page-number
+    regex (so the chapter-level signal is lost) AND the wrapped line
+    is split between two entries (a no-page first line that drops,
+    and a continuation line that becomes a phantom entry titled "des
+    ventilateurs"). After joining::
+
+        1.1 Les différents types de ventilateurs ........ 11
+        ANNEXE A : Glossaire des termes relatifs des ventilateurs ... 101
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        # Prefix-only line — pull the next non-blank in.
+        if _TOC_PREFIX_ONLY_RE.match(line):
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines):
+                out.append(f"{line.strip()} {lines[j].lstrip()}")
+                i = j + 1
+                continue
+
+        # Wrapped-title line: looks like text but has no trailing
+        # page. If the next non-blank DOES carry a page, merge them.
+        if (
+            line.strip()
+            and not _line_has_trailing_page(line)
+            and any(c.isalpha() for c in line)
+        ):
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines) and _line_has_trailing_page(lines[j]):
+                # Don't merge if the next line starts with its own
+                # chapter prefix — that would glue two real entries
+                # together.
+                next_clean = lines[j].lstrip()
+                if not _CHAPTER_PREFIX.match(next_clean):
+                    out.append(f"{line.rstrip()} {next_clean}")
+                    i = j + 1
+                    continue
+
+        out.append(line)
+        i += 1
+    return out
+
+
+def _parse_toc_lines(
+    lines: Iterable[str],
+    page_offset: int,
+    page_count: int,
+) -> list[tuple[int, str, int]]:
+    """Walk TOC text line-by-line and emit ``(level, title, pdf_page)``
+    tuples for every parseable entry.
+
+    ``page_offset`` converts printed page numbers (what's typeset in
+    the TOC) into PDF page numbers (1-indexed). Set to 0 when the two
+    coincide. The result is clamped to ``[1, page_count]``.
+
+    Lines without a chapter prefix (PREFACE, ANNEXE A, REFERENCES,
+    etc.) are accepted as level-1 entries — same hierarchy weight as
+    a "1" chapter so they appear as siblings in the mindmap.
+    """
+    line_list = _join_prefix_split_lines(list(lines))
+    out: list[tuple[int, str, int]] = []
+    for raw in line_list:
+        line = raw.strip()
+        if not line:
+            continue
+        match = _TOC_LINE_PAGE_RE.match(line) or _TOC_LINE_TRAILING_PAGE_RE.match(line)
+        if not match:
+            continue
+        body = match.group("body").strip()
+        try:
+            printed = int(match.group("page"))
+        except (TypeError, ValueError):
+            continue
+        if not body:
+            continue
+        # Filter obvious non-TOC artefacts: numeric-only bodies, lines
+        # whose body is just the dot leader, and lines that look like
+        # ISBN / phone / date fragments. The body must have meaningful
+        # length too — protects against the relaxed (≥1 dot) leader
+        # rule swallowing short prose fragments that happen to end in
+        # ". 42".
+        if not any(c.isalpha() for c in body):
+            continue
+        if len(body.replace(".", "").strip()) < 4:
+            continue
+        level = _chapter_level_from_title(body) or 1
+        pdf_page = max(1, min(page_count, printed + page_offset))
+        out.append((level, body, pdf_page))
+    return out
+
+
+def _extract_skeleton_from_toc_text(
+    pages: Iterable[Any],
+    page_count: int,
+    printed_page_offset: int | None = None,
+) -> list[SkeletonNode]:
+    """Last-resort fallback: parse the visible TOC text out of the
+    OCR'd pages.
+
+    Triggered when neither the PDF outline nor the OCR's nav_link
+    regions yielded a usable skeleton, but the document DOES include
+    a typeset table of contents (most pre-2010 PDFs do). We:
+
+    1. Scan pages for a TOC header (SOMMAIRE / TABLE DES MATIÈRES /
+       CONTENTS / INHALT / ...). The first match anchors the TOC.
+    2. Continue collecting subsequent pages as long as ≥40 % of
+       their non-blank lines parse as TOC entries — TOCs commonly
+       span 2-4 pages.
+    3. Parse the collected lines into ``(level, title, page)`` tuples
+       via the existing chapter-prefix logic.
+    4. Hand off to ``_build_tree_from_entries`` so the resulting tree
+       uses the same nesting rules as the outline path.
+
+    Returns ``[]`` when no TOC page is found or no entries parse —
+    caller falls back to the explicit RuntimeError.
+    """
+    page_list = list(pages)
+    if not page_list:
+        return []
+
+    # Find the TOC anchor page.
+    anchor_index: int | None = None
+    for i, page in enumerate(page_list):
+        text = _page_text(page)
+        if _looks_like_toc_page(text):
+            anchor_index = i
+            break
+    if anchor_index is None:
+        return []
+
+    # Collect TOC body: anchor + any following pages that look like
+    # TOC continuations (>=40% TOC-shaped lines).
+    collected_lines: list[str] = []
+    for j in range(anchor_index, len(page_list)):
+        text = _page_text(page_list[j])
+        if j != anchor_index and _toc_continuation_density(text) < 0.4:
+            break
+        for line in text.splitlines():
+            collected_lines.append(line)
+
+    # Drop the TOC heading line(s) — they're not entries themselves
+    # and would otherwise get wrapped-joined onto the first real
+    # entry ("SOMMAIRE PRÉFACE ... 5").
+    def _is_header(raw: str) -> bool:
+        cleaned = raw.strip().lower().rstrip(".:· \t")
+        return any(cleaned == h or cleaned.startswith(h + " ") for h in _TOC_HEADERS)
+    collected_lines = [ln for ln in collected_lines if not _is_header(ln)]
+
+    offset = int(printed_page_offset or 0)
+    entries = _parse_toc_lines(collected_lines, offset, page_count)
+    if not entries:
+        return []
+    return _build_tree_from_entries(entries, page_count)
+
+
 def _build_tree_from_entries(
     entries: list[tuple[int, str, int]] | list[list[Any]],
     page_count: int,
@@ -1333,28 +1584,63 @@ def run_section_mapping(db: Session, doc_id: str) -> dict[str, int]:
     page_count = max(page.page_number for page in pages)
     text_by_page: dict[int, str] = {p.page_number: _page_text(p) for p in pages}
 
-    # Step 1: skeleton from PDF outline, fallback to nav_link regions.
+    # Step 1: skeleton from one of three sources, in order of trust.
+    #   * PDF outline (bookmarks) — most authoritative when present.
+    #   * Printed TOC text vs OCR nav_link regions — both are
+    #     heuristic; we pick whichever yields more nodes, since a
+    #     sparse nav_link result on a long book is almost always an
+    #     incomplete extraction (e.g. the OCR only tagged 3 chapter
+    #     links out of a 30+ entry TOC).
+    def _node_count(nodes: list[SkeletonNode]) -> int:
+        total = 0
+        for n in nodes:
+            total += 1 + _node_count(n.children)
+        return total
+
+    roots: list[SkeletonNode] = []
     try:
         pdf_bytes = download_file(f"documents/{doc_id}/original.pdf")
         roots = _extract_skeleton_from_toc(pdf_bytes, page_count)
         logger.info(
-            "[%s] section skeleton built from PDF outline (%d roots)",
+            "[%s] section skeleton built from PDF outline (%d roots, %d nodes)",
             doc_id,
             len(roots),
+            _node_count(roots),
         )
     except ValueError:
-        roots = _extract_skeleton_from_nav_links(pages, page_count)
-        if roots:
+        nav_roots = _extract_skeleton_from_nav_links(pages, page_count)
+        toc_roots = _extract_skeleton_from_toc_text(
+            pages,
+            page_count,
+            printed_page_offset=document.printed_page_offset,
+        )
+        nav_count = _node_count(nav_roots)
+        toc_count = _node_count(toc_roots)
+        if toc_count > nav_count:
+            roots = toc_roots
             logger.info(
-                "[%s] section skeleton built from nav_link regions (%d roots)",
+                "[%s] section skeleton built from printed TOC text "
+                "(%d roots, %d nodes; nav_link had %d)",
                 doc_id,
                 len(roots),
+                toc_count,
+                nav_count,
+            )
+        elif nav_roots:
+            roots = nav_roots
+            logger.info(
+                "[%s] section skeleton built from nav_link regions "
+                "(%d roots, %d nodes)",
+                doc_id,
+                len(roots),
+                nav_count,
             )
         else:
             raise RuntimeError(
-                f"Document {doc_id} has neither an embedded outline nor parseable "
-                "nav_link regions — section mapping cannot proceed. Re-run OCR "
-                "with TOC detection or provide a manual outline."
+                f"Document {doc_id} has neither an embedded outline, parseable "
+                "nav_link regions, nor a recognisable printed table of contents "
+                "— section mapping cannot proceed. Re-run OCR with TOC detection "
+                "or provide a manual outline."
             )
 
     headlines = list(_iter_headlines(roots))
