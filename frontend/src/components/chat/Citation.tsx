@@ -48,6 +48,8 @@ export function CitationChip({
   }, [citation.document_id, citation.page]);
 
   const prefetchPages = usePDFViewerStore((state) => state.prefetchPages);
+  const openCitation = usePDFViewerStore((state) => state.openCitation);
+  const previewDocument = usePDFViewerStore((state) => state.previewDocument);
   const documentsByGroup = useDocumentStore((state) => state.documentsByGroup);
 
   const loadVisiblePageLabel = async (open: boolean) => {
@@ -69,6 +71,15 @@ export function CitationChip({
         citation.page,
         citation.page + 1,
       ]);
+    }
+
+    // Hover-peek: when the preview dialog is open, hovering a citation
+    // chip should already steer the PDF to the cited page and paint the
+    // highlight. The user can then click to commit (no-op) or move on.
+    // Gated on previewDocument so main-app hovers don't surprise the
+    // user by hijacking the chat-side PDF viewer.
+    if (previewDocument && document) {
+      void openCitation(citation, document);
     }
 
     if (
