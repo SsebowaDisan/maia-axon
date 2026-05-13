@@ -657,9 +657,17 @@ export function DocumentPreviewDialog() {
           elements — the Tailwind classes below collapse the content
           and overlay to invisible/non-interactive when closed. */}
       <Dialog.Portal forceMount>
+        {/* ``data-[state=closed]:hidden`` (display:none) on both
+            elements is intentional. ``opacity-0`` alone would leave
+            the Overlay's ``backdrop-blur-[18px]`` applied to the page
+            behind it, so even though the dialog was invisible, the
+            entire app would be blurred. display:none removes the
+            element from rendering altogether — no filter, no paint,
+            no layout. Radix still tracks state via data attributes
+            independently of display. */}
         <Dialog.Overlay
           forceMount
-          className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px] data-[state=closed]:pointer-events-none data-[state=closed]:opacity-0"
+          className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px] data-[state=closed]:hidden"
           onDoubleClick={requestClose}
         />
         <Dialog.Content
@@ -671,7 +679,7 @@ export function DocumentPreviewDialog() {
             width: renderedSize.width,
             height: renderedSize.height,
           }}
-          className={`fixed z-[80] flex flex-col overflow-hidden rounded-[30px] border border-black/[0.06] bg-panel shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none data-[state=closed]:pointer-events-none data-[state=closed]:invisible data-[state=closed]:opacity-0 ${
+          className={`fixed z-[80] flex flex-col overflow-hidden rounded-[30px] border border-black/[0.06] bg-panel shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none data-[state=closed]:hidden ${
             interacting ? "select-none" : ""
           }`}
           onPointerDownOutside={handlePointerDownOutside}
