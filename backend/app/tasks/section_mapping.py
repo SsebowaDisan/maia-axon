@@ -203,8 +203,24 @@ _ADDRESS_LIKE = __import__("re").compile(
     r"\d{2,}\s*,\s*\d{2,}\s*[A-ZÄÖÜ][a-zäöüß]+", __import__("re").UNICODE
 )
 
-# Phone / fax numbers — never section titles.
-_PHONE_LIKE = __import__("re").compile(r"\(\d{2,5}\)\s*\d{3,}|Fax\s*\d")
+# Phone / fax numbers — never section titles. Catches both parenthesised
+# country/area codes ("(040) 389012-0") and plain-prefix forms ("Tel
+# 0472471403", "Tél. +33 1 ...", "Fax 0123 …").
+_PHONE_LIKE = __import__("re").compile(
+    r"\(\d{2,5}\)\s*\d{3,}"
+    r"|(?:^|\b)(?:Tel|T[ée]l|Phone|Fax|Mob|Mobile)\.?\s*[+\d]\d",
+    __import__("re").IGNORECASE,
+)
+
+# Long digit runs (7+ consecutive digits) — phone numbers without an
+# explicit label, product codes, ISBNs. No legitimate German / French
+# chapter title has a 7-digit run in it.
+_LONG_DIGIT_RUN = __import__("re").compile(r"\d{7,}")
+
+# Random capitalisation patterns. Real words don't have multi-letter
+# uppercase runs mid-token after a lowercase letter — "VtUlfWCHE",
+# "abCDEF". OCR'd model numbers / serials are full of this.
+_RANDOM_CAPS = __import__("re").compile(r"[a-z][A-Z]{2,}")
 
 # Tabular row content that looks like a dimension or sizing entry,
 # e.g. "160 mm", "1250 mm", "84 85", "800 900". These crowd parts-list
@@ -245,6 +261,10 @@ def _looks_like_garbage_entry(title: str) -> bool:
     if _ADDRESS_LIKE.search(t):
         return True
     if _PHONE_LIKE.search(t):
+        return True
+    if _LONG_DIGIT_RUN.search(t):
+        return True
+    if _RANDOM_CAPS.search(t):
         return True
     if _TABLE_ROW_LIKE.match(t):
         return True
@@ -398,13 +418,14 @@ def _extract_skeleton_from_nav_links(
             seen_titles.add(key)
             bucket.append((level, content, target_page))
 
-    # If the book has a useful body of chapter-numbered entries, that
-    # is our skeleton. Don't dilute it with the unnumbered residue —
-    # the residue is overwhelmingly noise (address blocks, parts-list
-    # rows, math fragments) on books where the typesetter relied on
-    # numbered headings. We require at least 6 numbered entries to
-    # avoid a misleading skeleton built from a handful of accidents.
-    if len(with_prefix) >= 6:
+    # If the book has any meaningful body of chapter-numbered entries
+    # we trust those exclusively and discard the unnumbered residue —
+    # the residue is overwhelmingly OCR noise (address blocks, model
+    # numbers, table cells) on books where the typesetter used
+    # numbered headings at all. Threshold of 3 lets sparse books
+    # like the French acoustics one (only 3 real chapters) still get
+    # a clean skeleton instead of being swamped by ad/contact noise.
+    if len(with_prefix) >= 3:
         entries = with_prefix
     else:
         entries = with_prefix + no_prefix
