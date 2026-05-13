@@ -20,6 +20,11 @@ class DocumentResponse(BaseModel):
     uploaded_by: UUID
     created_at: datetime
     updated_at: datetime
+    # Number of enriched section rows (topic / subtopic / headline)
+    # the section-mapping pipeline has produced for this document.
+    # 0 means the document has not yet been enriched — the library
+    # card uses this to gate the "Mindmap" badge.
+    section_count: int = 0
 
     model_config = {"from_attributes": True}
 

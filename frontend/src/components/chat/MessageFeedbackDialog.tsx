@@ -113,7 +113,7 @@ export function MessageFeedbackDialog({
         <Dialog.Overlay className="fixed inset-0 z-[80] bg-black/18 backdrop-blur-[18px]" onDoubleClick={requestClose} />
         <Dialog.Content
           aria-describedby={undefined}
-          className="fixed left-1/2 top-1/2 z-[90] w-[min(520px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_30px_80px_rgba(17,17,17,0.16)] outline-none"
+          className="fixed left-1/2 top-1/2 z-[90] w-[min(520px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-panel p-6 shadow-[0_30px_80px_rgba(17,17,17,0.16)] outline-none"
           onPointerDownOutside={handlePointerDownOutside}
           onEscapeKeyDown={handleEscapeKeyDown}
           onFocusOutside={handleFocusOutside}

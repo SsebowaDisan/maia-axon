@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ChevronDown, ChevronUp, Maximize2, Minus, Plus, Search, X } from "lucide-react";
+import { ChevronDown, ChevronUp, GraduationCap, Maximize2, Minus, Network, Plus, Search, X } from "lucide-react";
 
 import type { Document } from "@/lib/types";
 import type { PdfSearchState } from "@/components/pdf/usePdfSearch";
@@ -12,10 +12,12 @@ interface PDFToolbarProps {
   onZoomIn?: () => void;
   onZoomOut?: () => void;
   onFitWidth?: () => void;
+  onOpenLearn?: () => void;
+  onOpenMindmap?: () => void;
   search?: PdfSearchState;
 }
 
-export function PDFToolbar({ document, zoom, onZoomIn, onZoomOut, onFitWidth, search }: PDFToolbarProps) {
+export function PDFToolbar({ document, zoom, onZoomIn, onZoomOut, onFitWidth, onOpenLearn, onOpenMindmap, search }: PDFToolbarProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   // Ctrl/Cmd+F focuses the in-PDF search instead of the browser's find bar.
@@ -108,18 +110,45 @@ export function PDFToolbar({ document, zoom, onZoomIn, onZoomOut, onFitWidth, se
           </button>
         </div>
       ) : null}
-      <div className="flex shrink-0 items-center gap-1">
+      {/*
+        Zoom controls grouped into a single bordered pill so they read
+        as one control instead of three orphan icon buttons. Dividers
+        replace borders between segments.
+      */}
+      {onOpenMindmap ? (
+        <button
+          type="button"
+          onClick={onOpenMindmap}
+          title="Open the section mindmap for this document"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-black/[0.10] bg-white px-2.5 py-[5px] text-[12px] font-medium text-ink transition hover:bg-[#2a2522] hover:text-white"
+        >
+          <Network className="h-3.5 w-3.5" />
+          Mindmap
+        </button>
+      ) : null}
+      {onOpenLearn ? (
+        <button
+          type="button"
+          onClick={onOpenLearn}
+          title="Open learn mode for this document"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-black/[0.10] bg-white px-2.5 py-[5px] text-[12px] font-medium text-ink transition hover:bg-[#2a2522] hover:text-white"
+        >
+          <GraduationCap className="h-3.5 w-3.5" />
+          Learn
+        </button>
+      ) : null}
+      <div className="flex shrink-0 items-center overflow-hidden rounded-md border border-black/[0.10] bg-white">
         <button
           type="button"
           onClick={onZoomOut}
           disabled={!onZoomOut}
           title="Zoom out (Ctrl+−)"
           aria-label="Zoom out"
-          className="flex h-7 w-7 items-center justify-center rounded-md border border-black/[0.10] bg-white text-ink transition hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white disabled:hover:text-ink"
+          className="flex h-7 w-7 items-center justify-center text-ink transition hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink"
         >
           <Minus className="h-3.5 w-3.5" />
         </button>
-        <span className="min-w-[44px] select-none text-center text-[11px] font-medium uppercase tracking-[0.16em] tabular-nums text-muted">
+        <span className="min-w-[48px] select-none border-x border-black/[0.10] px-1 text-center text-[11px] font-medium tabular-nums text-ink">
           {Math.round(zoom * 100)}%
         </span>
         <button
@@ -128,17 +157,18 @@ export function PDFToolbar({ document, zoom, onZoomIn, onZoomOut, onFitWidth, se
           disabled={!onZoomIn}
           title="Zoom in (Ctrl+=)"
           aria-label="Zoom in"
-          className="flex h-7 w-7 items-center justify-center rounded-md border border-black/[0.10] bg-white text-ink transition hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white disabled:hover:text-ink"
+          className="flex h-7 w-7 items-center justify-center text-ink transition hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink"
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
+        <span aria-hidden="true" className="h-5 w-px self-center bg-black/[0.10]" />
         <button
           type="button"
           onClick={onFitWidth}
           disabled={!onFitWidth}
           title="Fit to width (Ctrl+0)"
           aria-label="Fit to width"
-          className="ml-1 flex h-7 w-7 items-center justify-center rounded-md border border-black/[0.10] bg-white text-ink transition hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white disabled:hover:text-ink"
+          className="flex h-7 w-7 items-center justify-center text-ink transition hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink"
         >
           <Maximize2 className="h-3.5 w-3.5" />
         </button>

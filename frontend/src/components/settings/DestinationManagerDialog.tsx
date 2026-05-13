@@ -122,7 +122,7 @@ export function DestinationManagerDialog({
         <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" onDoubleClick={requestClose} />
         <Dialog.Content
           aria-describedby={undefined}
-          className="fixed left-1/2 top-1/2 z-[80] flex w-[min(920px,calc(100vw-2rem))] max-h-[min(860px,calc(100vh-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[32px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
+          className="fixed left-1/2 top-1/2 z-[80] flex w-[min(920px,calc(100vw-2rem))] max-h-[min(860px,calc(100vh-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[32px] border border-black/[0.06] bg-panel p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
           onPointerDownOutside={handlePointerDownOutside}
           onEscapeKeyDown={handleEscapeKeyDown}
           onFocusOutside={handleFocusOutside}

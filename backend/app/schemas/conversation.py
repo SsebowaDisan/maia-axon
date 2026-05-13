@@ -81,7 +81,7 @@ class ChatRequest(BaseModel):
     company_id: UUID | None = None
     document_ids: list[UUID] | None = None
     attachment_ids: list[str] | None = None
-    mode: str = "library"  # "standard", "library", "deep_search", "google_analytics", or "google_ads"
+    mode: str = "library"  # "standard", "library", "deep_search", "google_analytics", "google_ads", or "learn"
     message: str
 
 

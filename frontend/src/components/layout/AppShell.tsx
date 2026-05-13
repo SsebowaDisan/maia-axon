@@ -3,10 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import {
   History,
-  Lightbulb,
   MessageSquareText,
   Network,
-  Settings2,
+  PanelLeftOpen,
+  Search,
+  SquarePen,
 } from "lucide-react";
 import {
   Panel,
@@ -19,8 +20,19 @@ import { ChatPanel } from "@/components/layout/ChatPanel";
 import { DocumentPanel } from "@/components/layout/DocumentPanel";
 import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { cn } from "@/lib/utils";
+import { useAuthStore } from "@/stores/authStore";
 import { useChatStore } from "@/stores/chatStore";
+import { useConversationStore } from "@/stores/conversationStore";
 import { usePDFViewerStore } from "@/stores/pdfViewerStore";
+
+function deriveInitials(name: string | null | undefined): string {
+  if (!name) return "?";
+  const trimmed = name.trim();
+  if (!trimmed) return "?";
+  const parts = trimmed.split(/\s+/);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return ((parts[0]?.[0] ?? "") + (parts[parts.length - 1]?.[0] ?? "")).toUpperCase();
+}
 
 function ResizeHandle() {
   return (
@@ -52,10 +64,36 @@ function useViewportMode() {
 export function AppShell() {
   const mode = useViewportMode();
   const [mobileTab, setMobileTab] = useState<"history" | "chat" | "sources">("chat");
-  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
+  // Sidebar open/closed state persists to localStorage so the choice
+  // sticks across page loads — Claude / ChatGPT both work this way.
+  const [historyDrawerOpen, setHistoryDrawerOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      const raw = window.localStorage.getItem("historyDrawerOpen");
+      return raw === "true";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem("historyDrawerOpen", String(historyDrawerOpen));
+    } catch {
+      /* ignore quota errors */
+    }
+  }, [historyDrawerOpen]);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const closeDrawerTimeoutRef = useRef<number | null>(null);
   const searchMode = useChatStore((state) => state.mode);
+  const startNewConversation = useConversationStore((state) => state.startNewConversation);
+  const authUser = useAuthStore((state) => state.user);
+  const userInitials = deriveInitials(authUser?.name ?? authUser?.email ?? null);
+  // Nonce incremented when the user clicks "Search" from the
+  // collapsed rail. SidebarHistory watches it and opens its search
+  // input + focus. Use a nonce (not a bool) so repeated clicks while
+  // the drawer is already open re-fire the focus.
+  const [searchOpenNonce, setSearchOpenNonce] = useState(0);
   const currentDocument = usePDFViewerStore((state) => state.currentDocument);
   const currentWebCitation = usePDFViewerStore((state) => state.currentWebCitation);
   const closeViewer = usePDFViewerStore((state) => state.close);
@@ -156,11 +194,108 @@ export function AppShell() {
 
   return (
     <ErrorBoundary>
-      <div className="relative h-screen bg-bg py-3 pl-[76px] pr-3 app-grid">
-        <div className="relative h-[calc(100vh-1.5rem)] rounded-[28px] bg-panel/70 p-1 shadow-[0_20px_45px_rgba(15,23,42,0.05)]">
+      {/*
+        Full-bleed flex layout, ChatGPT-style: no outer padding, no
+        rounded card chrome, no shadows. Sidebar and main content sit
+        directly against the viewport edges, separated only by a
+        hairline divider where the sidebar meets the main column.
+      */}
+      <div className="relative flex h-screen bg-panel app-grid">
+        <div
+          className={cn(
+            "flex h-full shrink-0 flex-col overflow-hidden border-r border-black/[0.08] bg-panel transition-[width] duration-200 ease-out",
+            historyDrawerOpen ? "w-[260px]" : "w-[56px]",
+          )}
+        >
+          <div
+            className={cn(
+              "flex h-full w-[56px] shrink-0 flex-col items-center gap-1 px-2 py-3 transition-opacity",
+              historyDrawerOpen ? "pointer-events-none absolute opacity-0" : "opacity-100",
+            )}
+          >
+            {/* ChatGPT/Claude-style collapsed rail. Each icon is a
+                separate action: expand, new chat, search — not three
+                buttons that all just open the drawer. */}
+            <button
+              type="button"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-muted transition hover:bg-black/[0.05] hover:text-ink focus:outline-none focus:ring-2 focus:ring-black/10"
+              onClick={openHistoryDrawer}
+              aria-label="Expand sidebar"
+              aria-expanded={historyDrawerOpen}
+              title="Expand sidebar"
+            >
+              <PanelLeftOpen className="h-5 w-5" />
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-muted transition hover:bg-black/[0.05] hover:text-ink focus:outline-none focus:ring-2 focus:ring-black/10"
+              onClick={() => startNewConversation()}
+              aria-label="New chat"
+              title="New chat"
+            >
+              <SquarePen className="h-5 w-5" />
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-muted transition hover:bg-black/[0.05] hover:text-ink focus:outline-none focus:ring-2 focus:ring-black/10"
+              onClick={() => {
+                openHistoryDrawer();
+                setSearchOpenNonce((current) => current + 1);
+              }}
+              aria-label="Search chats"
+              title="Search chats"
+            >
+              <Search className="h-5 w-5" />
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-muted transition hover:bg-black/[0.05] hover:text-ink focus:outline-none focus:ring-2 focus:ring-black/10"
+              onClick={openHistoryDrawer}
+              aria-label="Open chat history"
+              title="History"
+            >
+              <History className="h-5 w-5" />
+            </button>
+            <div className="mt-auto flex flex-col items-center">
+              {/* Single account avatar — combines Suggest idea +
+                  Settings + Logout into one entry point. Clicking it
+                  expands the sidebar, where the full AccountBar
+                  surfaces the menu. */}
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-black text-[10px] font-semibold uppercase tracking-wider text-white transition hover:scale-[1.05] focus:outline-none focus:ring-2 focus:ring-black/20"
+                onClick={openHistoryDrawer}
+                aria-label="Open account menu"
+                title={authUser?.name ?? authUser?.email ?? "Account"}
+              >
+                {userInitials}
+              </button>
+            </div>
+          </div>
+
+          <div
+            className={cn(
+              "h-full min-h-0 w-[260px] overflow-hidden transition-opacity duration-150",
+              historyDrawerOpen ? "opacity-100" : "pointer-events-none opacity-0",
+            )}
+          >
+            <SidebarHistory
+              onModalStateChange={setHistoryModalOpen}
+              onCollapseSidebar={() => setHistoryDrawerOpen(false)}
+              searchOpenNonce={searchOpenNonce}
+            />
+          </div>
+        </div>
+        {/*
+          Main content column. Full-bleed: no card wrapper, no
+          rounded corners, no shadow. Chat fills the column directly.
+          Sources panel (when present) is separated by the
+          ResizeHandle's vertical line.
+        */}
+        <div className="relative h-full min-w-0 flex-1 bg-panel">
           <PanelGroup direction="horizontal" className="h-full min-h-0">
             <Panel defaultSize={56} minSize={40}>
-              <div className="h-full min-h-0 overflow-hidden rounded-[24px] bg-panel">
+              <div className="h-full min-h-0 overflow-hidden bg-panel">
                 <ChatPanel />
               </div>
             </Panel>
@@ -168,70 +303,13 @@ export function AppShell() {
               <>
                 <ResizeHandle />
                 <Panel defaultSize={28} minSize={20} maxSize={42}>
-                  <div className="h-full min-h-0 overflow-hidden rounded-[24px] bg-panel">
+                  <div className="h-full min-h-0 overflow-hidden border-l border-black/[0.08] bg-panel">
                     <DocumentPanel />
                   </div>
                 </Panel>
               </>
             ) : null}
           </PanelGroup>
-        </div>
-        <div
-          className={cn(
-            "absolute inset-y-3 left-3 z-30 flex max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[24px] border border-black/8 bg-panel shadow-[0_24px_50px_rgba(15,23,42,0.12)] transition-[width] duration-200 ease-out",
-            historyDrawerOpen ? "w-[352px]" : "w-[56px]",
-          )}
-          onMouseEnter={openHistoryDrawer}
-          onMouseLeave={scheduleCloseDrawer}
-          onFocus={openHistoryDrawer}
-        >
-          <div
-            className={cn(
-              "flex h-full w-[56px] shrink-0 flex-col items-center px-2 py-4 transition-opacity",
-              historyDrawerOpen ? "pointer-events-none absolute opacity-0" : "opacity-100",
-            )}
-          >
-            <button
-              type="button"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-black text-white shadow-[0_12px_26px_rgba(15,23,42,0.16)] transition hover:scale-[1.03] focus:outline-none focus:ring-2 focus:ring-black/20"
-              onClick={openHistoryDrawer}
-              aria-label="Open history"
-              aria-expanded={historyDrawerOpen}
-              title="History"
-            >
-              <History className="h-5 w-5" />
-            </button>
-            <div className="mt-auto flex flex-col items-center gap-2">
-              <button
-                type="button"
-                className="inline-flex h-10 w-10 items-center justify-center rounded-full text-muted transition hover:bg-black/[0.05] hover:text-ink focus:outline-none focus:ring-2 focus:ring-black/10"
-                onClick={openHistoryDrawer}
-                aria-label="Suggest an idea"
-                title="Suggest idea"
-              >
-                <Lightbulb className="h-5 w-5" />
-              </button>
-              <button
-                type="button"
-                className="inline-flex h-10 w-10 items-center justify-center rounded-full text-muted transition hover:bg-black/[0.05] hover:text-ink focus:outline-none focus:ring-2 focus:ring-black/10"
-                onClick={openHistoryDrawer}
-                aria-label="Open settings"
-                title="Settings"
-              >
-                <Settings2 className="h-5 w-5" />
-              </button>
-            </div>
-          </div>
-
-          <div
-            className={cn(
-              "h-full min-h-0 w-[352px] overflow-hidden transition-opacity duration-150",
-              historyDrawerOpen ? "opacity-100" : "pointer-events-none opacity-0",
-            )}
-            onMouseEnter={cancelCloseDrawer}
-          >
-            <SidebarHistory onModalStateChange={setHistoryModalOpen} />
-          </div>
         </div>
       </div>
     </ErrorBoundary>

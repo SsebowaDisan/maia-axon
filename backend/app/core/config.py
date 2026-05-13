@@ -22,8 +22,14 @@ class Settings(BaseSettings):
     s3_secret_key: str = "maia_secret_key"
     s3_bucket_name: str = "maia-axon"
 
-    # LLM Provider (OpenAI — used for chat, vision, embeddings)
+    # LLM Provider (OpenAI — used for chat, vision, embeddings,
+    # section enrichment, path generation, and rubric grading).
     openai_api_key: str = ""
+    # Model used for the deeper-reasoning offline passes (section
+    # enrichment, path generation, free-text rubric grading). gpt-4o
+    # is the cost/quality sweet spot; gpt-4o-mini is too weak for
+    # the structured-output discipline these passes need.
+    openai_reasoning_model: str = "gpt-4o"
 
     # Google integrations
     google_service_account_email: str = ""

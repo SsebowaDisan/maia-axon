@@ -11,9 +11,12 @@ import { PDFOutline, pdfHasOutline } from "@/components/pdf/PDFOutline";
 import { PDFPageJS } from "@/components/pdf/PDFPageJS";
 import { PDFToolbar } from "@/components/pdf/PDFToolbar";
 import { usePdfSearch } from "@/components/pdf/usePdfSearch";
+import { LearnDialog } from "@/components/learn/LearnDialog";
+import { SectionMindmapDialog } from "@/components/learn/SectionMindmapDialog";
+import { useChatStore } from "@/stores/chatStore";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
-import { api, getCachedPageData, getStoredToken } from "@/lib/api";
-import type { Citation, Document, PageData } from "@/lib/types";
+import { api, getStoredToken } from "@/lib/api";
+import type { Document, PageData } from "@/lib/types";
 import { useAnnotationsStore } from "@/stores/annotationsStore";
 import { useAuthStore } from "@/stores/authStore";
 import { usePDFViewerStore } from "@/stores/pdfViewerStore";
@@ -54,19 +57,18 @@ function PDFLoadIndicator({
   );
 }
 
-const INITIAL_PAGE_WINDOW = 4;
-const PAGE_BATCH = 4;
-const PAGE_EDGE_THRESHOLD = 320;
-
 function pageKey(documentId: string, pageNumber: number) {
   return `${documentId}:${pageNumber}`;
 }
 
+// Initial render window kept tight so first-paint only renders one
+// canvas. The scroll-driven effect expands as the user moves; pre-
+// rendering many pages in parallel starves the PDF.js worker and
+// makes first paint feel slow.
 function buildInitialWindow(currentPage: number, pageCount: number | null) {
   const total = Math.max(pageCount ?? currentPage, 1);
-  const pagesBeforeCurrent = Math.min(2, INITIAL_PAGE_WINDOW - 1);
-  const start = Math.max(1, currentPage - pagesBeforeCurrent);
-  const end = Math.min(total, Math.max(currentPage, start + INITIAL_PAGE_WINDOW - 1));
+  const start = Math.max(1, currentPage - 1);
+  const end = Math.min(total, currentPage + 1);
   return { start, end };
 }
 
@@ -74,6 +76,72 @@ function buildCitationWindow(currentPage: number, pageCount: number | null) {
   const total = Math.max(pageCount ?? currentPage, 1);
   const page = Math.min(Math.max(currentPage, 1), total);
   return { start: page, end: page };
+}
+
+// Editable current-page indicator. Type a number, press Enter to
+// jump — same model as Google Drive / Acrobat. Stays controlled-from-
+// outside when not focused so scrolling updates the displayed page;
+// stops syncing while the user is mid-edit so we don't yank their
+// typed value out from under them.
+function PageJumpControl({
+  currentPage,
+  pageCount,
+  onJump,
+}: {
+  currentPage: number;
+  pageCount: number | null;
+  onJump: (pageNumber: number) => void | Promise<void>;
+}) {
+  const [value, setValue] = useState(String(currentPage));
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) {
+      setValue(String(currentPage));
+    }
+  }, [currentPage, editing]);
+
+  const commit = () => {
+    const n = parseInt(value, 10);
+    if (!Number.isNaN(n) && n >= 1 && (!pageCount || n <= pageCount)) {
+      if (n !== currentPage) {
+        void onJump(n);
+      }
+    } else {
+      setValue(String(currentPage));
+    }
+    setEditing(false);
+  };
+
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[11px] tabular-nums text-muted">
+      <input
+        type="text"
+        inputMode="numeric"
+        value={value}
+        onFocus={(event) => {
+          setEditing(true);
+          event.currentTarget.select();
+        }}
+        onChange={(event) => setValue(event.target.value.replace(/[^0-9]/g, ""))}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit();
+            (event.currentTarget as HTMLInputElement).blur();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            setValue(String(currentPage));
+            setEditing(false);
+            (event.currentTarget as HTMLInputElement).blur();
+          }
+        }}
+        onBlur={commit}
+        aria-label="Page number"
+        className="w-12 border border-black/[0.10] bg-white px-1.5 py-0.5 text-center font-medium text-ink outline-none transition focus:border-black"
+      />
+      <span>of {pageCount ?? "—"}</span>
+    </span>
+  );
 }
 
 function PageThumbnail({
@@ -113,26 +181,36 @@ function PageThumbnail({
     return () => observer.disconnect();
   }, [onVisible, pageNumber]);
 
+  // When this thumbnail becomes active (because currentPage changed),
+  // pull it into the rail's viewport. `block: "nearest"` keeps the
+  // scroll quiet — it only runs when the active thumb is actually
+  // off-screen.
+  useEffect(() => {
+    if (active && containerRef.current) {
+      containerRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [active]);
+
   return (
     <button
       ref={containerRef}
       type="button"
       onClick={() => onOpen(pageNumber)}
-      className={`group flex w-full flex-col items-center gap-2 border px-2 py-2 text-left transition ${
+      className={`group flex w-full flex-col items-center gap-2 border-2 px-2 py-2 text-left transition ${
         active
-          ? "border-black/15 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.06)]"
-          : "border-transparent hover:border-black/[0.08] hover:bg-white/60"
+          ? "border-white bg-white shadow-[0_4px_14px_rgba(0,0,0,0.45)]"
+          : "border-transparent hover:bg-white/[0.06]"
       }`}
     >
       <div
-        className={`relative aspect-[0.72] w-full overflow-hidden border ${
-          active ? "border-black/20" : "border-black/[0.10]"
-        } bg-white`}
+        className={`relative aspect-[0.72] w-full overflow-hidden border bg-white ${
+          active ? "border-black/30" : "border-black/[0.10]"
+        }`}
       >
         {cachedPage ? (
           <img
             src={cachedPage.image_url}
-            alt={`Page ${cachedPage.printed_page_label ?? pageNumber}`}
+            alt={`Page ${pageNumber}`}
             className="h-full w-full object-cover object-top"
             loading="lazy"
             decoding="async"
@@ -143,14 +221,23 @@ function PageThumbnail({
           </div>
         )}
       </div>
+      {/*
+        Internal page number, NOT the OCR-derived printed label.
+        printed_page_label is a heuristic that picks up stray numbers
+        from chapter headings / figure refs (e.g. it labels internal
+        page 28 as "96" because that number appeared somewhere in the
+        OCR text) — using it here makes the rail look randomly
+        numbered. The internal number matches the `[27] of 334` jump
+        input above and the page-jump store.
+      */}
       <span
-        className={`min-w-[38px] border px-2 py-1 text-center text-[10px] font-medium tracking-[0.14em] ${
+        className={`min-w-[38px] border px-2 py-1 text-center text-[10px] font-semibold tracking-[0.14em] tabular-nums ${
           active
             ? "border-black bg-black text-white"
-            : "border-black/[0.10] bg-white text-muted"
+            : "border-white/10 bg-[#2a2a2a] text-white/70"
         }`}
       >
-        {cachedPage?.printed_page_label ?? pageNumber}
+        {pageNumber}
       </span>
     </button>
   );
@@ -189,6 +276,65 @@ export function PDFViewer() {
   const [visibleRange, setVisibleRange] = useState({ start: 1, end: 0 });
   const [highlightReadyNonce, setHighlightReadyNonce] = useState(0);
   const [pdfProxy, setPdfProxy] = useState<PDFDocumentProxy | null>(null);
+  // Once a page has been rendered by PDF.js, remember its rendered
+  // height so the slot keeps that height after PDFPageJS unmounts.
+  // Without this, slots shrink back to the estimate when they leave
+  // the render window, scroll height drops, and the browser snaps
+  // the viewport backward — the user perceives this as the page
+  // "jumping back to the top".
+  const [pageHeights, setPageHeights] = useState<Map<number, number>>(new Map());
+  useEffect(() => {
+    // Reset when the document changes — old heights don't apply.
+    setPageHeights(new Map());
+  }, [currentDocument?.id]);
+  const handlePageRendered = useCallback(
+    (info: { pageNumber: number; width: number; height: number }) => {
+      setPageHeights((current) => {
+        const existing = current.get(info.pageNumber);
+        if (existing !== undefined && Math.abs(existing - info.height) < 1) {
+          return current;
+        }
+        const next = new Map(current);
+        next.set(info.pageNumber, info.height);
+        return next;
+      });
+    },
+    [],
+  );
+  // Track the file URL the current pdfProxy belongs to. When pdfFile
+  // changes (user switches documents) we MUST drop the old proxy
+  // before mounting any <Page> children — react-pdf has already torn
+  // down its worker and any getPage() call against the old reference
+  // explodes with "Cannot read properties of null (reading
+  // 'sendWithPromise')".
+  const pdfProxyFileRef = useRef<string | null>(null);
+  // Native PDF page dimensions of the first page — used as the
+  // estimated height for every placeholder slot, so the scroll
+  // container has the correct total height from frame 1 (Drive /
+  // Chrome PDF viewer trick). Books with uniform pages get the exact
+  // right scroll length; books with mixed-size pages get a stable
+  // approximation that slightly adjusts as real pages render.
+  const [firstPageDims, setFirstPageDims] = useState<{ width: number; height: number } | null>(null);
+  useEffect(() => {
+    if (!pdfProxy) {
+      setFirstPageDims(null);
+      return;
+    }
+    let cancelled = false;
+    pdfProxy
+      .getPage(1)
+      .then((page) => {
+        if (cancelled) return;
+        const v = page.getViewport({ scale: 1 });
+        setFirstPageDims({ width: v.width, height: v.height });
+      })
+      .catch(() => {
+        if (!cancelled) setFirstPageDims(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pdfProxy]);
   // Resolve PDF "page labels" (printed page numbers, e.g. "40") to
   // 1-indexed internal pages. A TOC entry says "Chapter 5 ... 40";
   // the user clicks "40" expecting to land on the page that shows
@@ -272,6 +418,31 @@ export function PDFViewer() {
   );
   const [hasOutline, setHasOutline] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"pages" | "outline">("pages");
+  const [learnOpen, setLearnOpen] = useState(false);
+  const [mindmapOpen, setMindmapOpen] = useState(false);
+  const pendingLearnDocId = useChatStore((state) => state.pendingLearnDiagnosticDocumentId);
+  const clearPendingLearn = useChatStore((state) => state.setPendingLearnDiagnosticDocumentId);
+  // When the chat handler signals a learn-mode message hit a doc
+  // without an active path, the chatStore stores the doc id here.
+  // Open the LearnDialog for that doc and clear the flag.
+  useEffect(() => {
+    if (pendingLearnDocId && currentDocument?.id === pendingLearnDocId) {
+      setLearnOpen(true);
+      clearPendingLearn(null);
+    }
+  }, [pendingLearnDocId, currentDocument?.id, clearPendingLearn]);
+
+  // Library-card → "Open mindmap" shortcut: the card sets
+  // pendingAutoOpen on pdfViewerStore right before triggering the
+  // PDF open. The viewer reads + clears it once the doc has mounted.
+  const pendingAutoOpen = usePDFViewerStore((state) => state.pendingAutoOpen);
+  const setPendingAutoOpen = usePDFViewerStore((state) => state.setPendingAutoOpen);
+  useEffect(() => {
+    if (pendingAutoOpen === "mindmap" && currentDocument) {
+      setMindmapOpen(true);
+      setPendingAutoOpen(null);
+    }
+  }, [pendingAutoOpen, currentDocument, setPendingAutoOpen]);
   // Real download progress reported by pdfjs's onLoadProgress. Lets us
   // render a determinate bar instead of an indeterminate spinner so the
   // user sees "we're at 40%, hang on" instead of "is this stuck?".
@@ -285,6 +456,10 @@ export function PDFViewer() {
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const naturalPageWidthRef = useRef<number | null>(null);
   const lastScrollTargetRef = useRef<string | null>(null);
+  // rAF coalescing token for the scroll edge-load handler. While a
+  // frame is pending we drop further scroll events; the queued frame
+  // reads the freshest scroll position from the live DOM.
+  const scrollRafRef = useRef<number | null>(null);
 
   const search = usePdfSearch(pdfProxy);
   const { currentMatch: searchMatch, query: searchQuery, matches: searchMatches } = search;
@@ -299,6 +474,10 @@ export function PDFViewer() {
   // the same document, so PDF.js doesn't reload the PDF on every parent
   // re-render. Auth header threaded via httpHeaders so the streaming
   // /file endpoint accepts us.
+  // Stabilise on document.id only. The store re-creates the
+  // currentDocument object on every loadPage call, so memoising on
+  // the whole reference made react-pdf see a new `file` prop on every
+  // page change and re-download the PDF.
   const pdfFile = useMemo(() => {
     if (!currentDocument) {
       return null;
@@ -309,29 +488,18 @@ export function PDFViewer() {
       httpHeaders: token ? { Authorization: `Bearer ${token}` } : {},
       withCredentials: false as const,
     };
-  }, [currentDocument]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentDocument?.id]);
 
-  const loadPreviousPages = useCallback(() => {
-    if (!currentDocument?.page_count || visibleRange.start <= 1) {
-      return;
+  // Drop the old proxy the moment the file URL changes. react-pdf has
+  // already torn down the worker by this point; if a <Page> renders
+  // before our new onLoadSuccess fires, getPage() will dereference a
+  // null messageHandler and crash the whole panel.
+  useEffect(() => {
+    if (pdfProxyFileRef.current !== (pdfFile?.url ?? null)) {
+      setPdfProxy(null);
     }
-
-    setVisibleRange((current) => ({
-      start: Math.max(1, current.start - PAGE_BATCH),
-      end: current.end,
-    }));
-  }, [currentDocument?.page_count, visibleRange.start]);
-
-  const loadNextPages = useCallback(() => {
-    if (!currentDocument?.page_count || visibleRange.end >= currentDocument.page_count) {
-      return;
-    }
-
-    setVisibleRange((current) => ({
-      start: current.start,
-      end: Math.min(current.end + PAGE_BATCH, currentDocument.page_count ?? current.end + PAGE_BATCH),
-    }));
-  }, [currentDocument?.page_count, visibleRange.end]);
+  }, [pdfFile]);
 
   const warmThumbnailPage = useCallback(
     async (documentId: string, pageNumber: number) => {
@@ -339,20 +507,6 @@ export function PDFViewer() {
         return;
       }
       await prefetchPages(currentDocument, [pageNumber]);
-    },
-    [currentDocument, prefetchPages],
-  );
-
-  const loadPages = useCallback(
-    async (documentId: string, startPage: number, endPage: number) => {
-      if (!currentDocument || currentDocument.id !== documentId) {
-        return;
-      }
-      const pageNumbers = Array.from(
-        { length: endPage - startPage + 1 },
-        (_, index) => startPage + index,
-      );
-      await prefetchPages(currentDocument, pageNumbers);
     },
     [currentDocument, prefetchPages],
   );
@@ -376,13 +530,43 @@ export function PDFViewer() {
     // (otherwise React skips it because doc/page/highlight haven't changed).
   }, [currentDocument, currentPage, hasEvidenceHighlights, openClickNonce]);
 
-  useEffect(() => {
-    if (!currentDocument || visibleRange.end < visibleRange.start) {
-      return;
-    }
+  // (Removed: prefetchPages on visibleRange change.) The main viewer
+  // renders pages from the downloaded PDF via PDF.js — it does not
+  // need /pages/{n} metadata or /pages/{n}/image bytes from the
+  // backend. Those used to fire N+N parallel requests on every range
+  // update, competing with the PDF download itself. Thumbnails still
+  // warm via the per-thumb IntersectionObserver below.
 
-    void loadPages(currentDocument.id, visibleRange.start, visibleRange.end);
-  }, [currentDocument, loadPages, visibleRange]);
+  // Targeted preview prefetch on navigation. currentPage ± 1 so the
+  // jumped-to page paints its JPEG immediately while PDF.js works on
+  // the canvas (Drive trick).
+  useEffect(() => {
+    if (!currentDocument || !currentPage) return;
+    const candidates = [currentPage - 1, currentPage, currentPage + 1].filter(
+      (p) =>
+        p >= 1 && (!currentDocument.page_count || p <= currentDocument.page_count),
+    );
+    void prefetchPages(currentDocument, candidates);
+  }, [currentDocument, currentPage, prefetchPages]);
+
+  // Wider preview prefetch driven by scroll position. Once the PDF
+  // itself has loaded (pdfProxy set), we eagerly fetch JPEG previews
+  // for the visibleRange plus a generous buffer. These become static
+  // placeholders shown in any slot whose PDFPageJS has unmounted —
+  // so as the user scrolls past a page, the canvas goes away but
+  // the JPEG stays, and the user never sees a blank slot. Bandwidth
+  // is bounded by the buffer width, not the document length.
+  useEffect(() => {
+    if (!currentDocument || !pdfProxy) return;
+    const pageCount = currentDocument.page_count;
+    if (!pageCount) return;
+    const PREVIEW_BUFFER = 20;
+    const start = Math.max(1, visibleRange.start - PREVIEW_BUFFER);
+    const end = Math.min(pageCount, visibleRange.end + PREVIEW_BUFFER);
+    const pages: number[] = [];
+    for (let p = start; p <= end; p += 1) pages.push(p);
+    void prefetchPages(currentDocument, pages);
+  }, [currentDocument, pdfProxy, visibleRange, prefetchPages]);
 
   const handleThumbnailVisible = useCallback(
     (pageNumber: number) => {
@@ -454,6 +638,15 @@ export function PDFViewer() {
     return map;
   }, [annotations]);
 
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) {
+        window.cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
+  }, []);
+
   // Track the scroll container's inner width so each PDFPageJS can be
   // told to render at a uniform width — otherwise PDFs with mixed page
   // dimensions read as a ragged column. Ignore sub-pixel changes so a
@@ -481,6 +674,73 @@ export function PDFViewer() {
     observer.observe(el);
     return () => observer.disconnect();
   }, [currentDocument]);
+
+  // Estimated rendered height of every page slot. Used for the
+  // placeholder divs surrounding the visibleRange so the scroll
+  // container has the correct total height even before pdf.js has
+  // rendered each page. Falls back to a sane default until we know
+  // the first page's aspect ratio.
+  const estimatedPageHeight = useMemo(() => {
+    const width = containerInnerWidth && containerInnerWidth > 0 ? containerInnerWidth : 600;
+    if (!firstPageDims) {
+      // ~A4 portrait at the given width.
+      return width * 1.41 * zoom;
+    }
+    const aspect = firstPageDims.height / firstPageDims.width;
+    return Math.max(80, width * aspect * zoom);
+  }, [firstPageDims, containerInnerWidth, zoom]);
+
+  // Scroll-driven visibleRange. Every page slot exists in the DOM with
+  // an estimated height so the scrollbar has the full document length
+  // from frame 1 (Drive / Chrome PDF viewer trick). This effect tracks
+  // the viewport, computes which pages are near it, and updates
+  // visibleRange so only those pages mount a real <PDFPageJS>. Off-
+  // window slots stay as empty placeholders with content-visibility:
+  // auto, which lets the browser skip layout/paint for them entirely.
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    const pageCount = currentDocument?.page_count;
+    if (!container || !pageCount) return;
+
+    // Render window. Slightly wider than the bare viewport so adjacent
+    // pages stay mounted (canvas + selectable text) as the user scrolls
+    // — otherwise the canvas flickers out the moment a page slides off
+    // the viewport edge. The JPEG preview keeps further-out pages
+    // visible even when their PDFPageJS has unmounted.
+    const RENDER_AHEAD = 3;
+    const RENDER_BEHIND = 2;
+
+    const updateRange = () => {
+      scrollRafRef.current = null;
+      const scrollTop = container.scrollTop;
+      const clientHeight = container.clientHeight;
+      const viewportCenter = scrollTop + clientHeight / 2;
+      // Approximate page using estimatedPageHeight. For uniform-page
+      // PDFs (the common case) this is exact; for mixed-size PDFs the
+      // generous RENDER_AHEAD/BEHIND buffer covers the drift.
+      const approxPage = Math.max(
+        1,
+        Math.min(pageCount, Math.floor(viewportCenter / estimatedPageHeight) + 1),
+      );
+      const start = Math.max(1, approxPage - RENDER_BEHIND);
+      const end = Math.min(pageCount, approxPage + RENDER_AHEAD);
+      setVisibleRange((cur) => {
+        if (cur.start === start && cur.end === end) return cur;
+        return { start, end };
+      });
+    };
+
+    const onScroll = () => {
+      if (scrollRafRef.current !== null) return;
+      scrollRafRef.current = window.requestAnimationFrame(updateRange);
+    };
+
+    updateRange();
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      container.removeEventListener("scroll", onScroll);
+    };
+  }, [currentDocument?.page_count, estimatedPageHeight]);
 
   // Detect outline once the doc loads so the sidebar tab can show or hide.
   useEffect(() => {
@@ -576,29 +836,6 @@ export function PDFViewer() {
     });
   }, []);
 
-  const loadedPages = useMemo(() => {
-    if (!currentDocument || visibleRange.end < visibleRange.start) {
-      return [];
-    }
-
-    // Cap at the document's known page count so the prefetch window
-    // walking past the end of a 365-page doc doesn't leave the viewer
-    // rendering ghost "Loading page 366…" placeholders that never resolve.
-    const upperBound = currentDocument.page_count
-      ? Math.min(visibleRange.end, currentDocument.page_count)
-      : visibleRange.end;
-
-    const pages: Array<{ pageNumber: number; pageData: PageData | null }> = [];
-    for (let pageNumber = visibleRange.start; pageNumber <= upperBound; pageNumber += 1) {
-      const key = pageKey(currentDocument.id, pageNumber);
-      pages.push({
-        pageNumber,
-        pageData: pageCache[key] ?? getCachedPageData(currentDocument.id, pageNumber) ?? null,
-      });
-    }
-    return pages;
-  }, [currentDocument, pageCache, visibleRange]);
-
   useEffect(() => {
     if (!currentDocument) {
       return;
@@ -621,6 +858,35 @@ export function PDFViewer() {
       return;
     }
 
+    // Distance-aware scroll behaviour. Smooth-scrolling a jump of
+    // hundreds of pages takes Chrome tens of seconds to animate; for
+    // anything beyond ~1.5 viewports we hard-jump like the Chrome /
+    // Drive native viewers do for TOC navigation.
+    const container = scrollContainerRef.current;
+    const pickBehavior = (): ScrollBehavior => {
+      if (!container) return "auto";
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const distance = Math.abs(
+        targetRect.top - containerRect.top - container.clientHeight / 2,
+      );
+      return distance > container.clientHeight * 1.5 ? "auto" : "smooth";
+    };
+
+    const hasHighlights = highlights.length > 0;
+    // No citation to focus → scroll to the page once and mark this
+    // target done. Without this short-circuit, scrollToEvidence kept
+    // polling for a highlight anchor (24 retries × 80ms) and the
+    // dedupe key wasn't set until the polling ran out — so any later
+    // scroll (e.g. the user scrolling to the bottom of page 1) re-
+    // entered the effect, found a stale ref equal-but-not-set, and
+    // snapped them back to currentPage.
+    if (!hasHighlights) {
+      target.scrollIntoView({ block: "center", behavior: pickBehavior() });
+      lastScrollTargetRef.current = targetKey;
+      return;
+    }
+
     let attempts = 0;
     const maxAttempts = 24;
 
@@ -637,14 +903,17 @@ export function PDFViewer() {
         const delta = anchorRect.top - containerRect.top - scrollContainerRef.current.clientHeight / 2;
         scrollContainerRef.current.scrollTo({
           top: scrollContainerRef.current.scrollTop + delta,
-          behavior: "smooth",
+          behavior:
+            Math.abs(delta) > scrollContainerRef.current.clientHeight * 1.5
+              ? "auto"
+              : "smooth",
         });
         lastScrollTargetRef.current = targetKey;
         return;
       }
 
       if (attempts === 0) {
-        pageElement.scrollIntoView({ block: "center", behavior: "smooth" });
+        pageElement.scrollIntoView({ block: "center", behavior: pickBehavior() });
       }
 
       attempts += 1;
@@ -656,7 +925,12 @@ export function PDFViewer() {
     };
 
     scrollToEvidence();
-  }, [currentDocument, currentPage, highlightReadyNonce, highlights, loadedPages, openClickNonce]);
+    // visibleRange intentionally NOT a dep: with virtual scrolling
+    // every page slot exists from frame 1, so we never need to
+    // re-attempt this effect when more pages "arrive" in the window.
+    // Re-running on scroll caused exactly the snap-back-to-top bug
+    // this effect is designed to prevent.
+  }, [currentDocument, currentPage, highlightReadyNonce, highlights, openClickNonce]);
 
   if (currentWebCitation) {
     return (
@@ -731,34 +1005,59 @@ export function PDFViewer() {
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
         onFitWidth={handleFitWidth}
+        onOpenLearn={() => setLearnOpen(true)}
+        onOpenMindmap={() => setMindmapOpen(true)}
         search={search}
       />
+      <LearnDialog
+        documentId={currentDocument.id}
+        documentName={currentDocument.filename}
+        open={learnOpen}
+        onClose={() => setLearnOpen(false)}
+        onJumpToPage={(page) => {
+          void handleOpenPage(page);
+        }}
+      />
+      <SectionMindmapDialog
+        documentId={currentDocument.id}
+        documentName={currentDocument.filename}
+        open={mindmapOpen}
+        onClose={() => setMindmapOpen(false)}
+        onJumpToPage={(page) => {
+          void handleOpenPage(page);
+        }}
+        onLearnSection={() => {
+          setLearnOpen(true);
+        }}
+      />
       <div className="flex items-center justify-between border-b border-line px-4 py-2 text-[11px] text-muted">
-        <span>
-          {hasEvidenceHighlights && !hasRenderableHighlight
-            ? "Cited page (no precise highlight available) — "
-            : hasEvidenceHighlights
-              ? "Evidence on "
-              : ""}
-          page {pageData?.printed_page_label ?? currentPage}
-        </span>
+        <div className="flex items-center gap-2">
+          {hasEvidenceHighlights ? (
+            <span className="uppercase tracking-[0.16em] text-muted">
+              {hasRenderableHighlight ? "Evidence on" : "Cited page —"}
+            </span>
+          ) : null}
+          <PageJumpControl
+            currentPage={currentPage}
+            pageCount={currentDocument.page_count}
+            onJump={handleOpenPage}
+          />
+        </div>
         {hasEvidenceHighlights ? (
           <button type="button" className="text-accent" onClick={clearHighlights}>
             Clear
           </button>
-        ) : (
-          <span>{currentDocument.page_count ? `${currentDocument.page_count} pages` : ""}</span>
-        )}
+        ) : null}
       </div>
-      <div className="min-h-0 flex flex-1 overflow-hidden bg-[#d9d9d7]">
-        <aside className="hidden w-[200px] shrink-0 flex-col border-r border-black/[0.08] bg-[#ececeb] md:flex">
+      <div className="min-h-0 flex flex-1 overflow-hidden bg-[#4a4a4a]">
+        <aside className="hidden w-[200px] shrink-0 flex-col border-r border-black/40 bg-[#3a3a3a] md:flex">
           {hasOutline ? (
             <div className="flex shrink-0 border-b border-black/[0.08]">
               <button
                 type="button"
                 onClick={() => setSidebarTab("pages")}
                 className={`flex-1 px-2 py-2 text-[10px] font-medium uppercase tracking-[0.18em] transition ${
-                  sidebarTab === "pages" ? "bg-white text-ink" : "text-muted hover:text-ink"
+                  sidebarTab === "pages" ? "bg-[#2a2a2a] text-white" : "text-white/55 hover:text-white"
                 }`}
               >
                 Pages
@@ -767,7 +1066,7 @@ export function PDFViewer() {
                 type="button"
                 onClick={() => setSidebarTab("outline")}
                 className={`flex-1 px-2 py-2 text-[10px] font-medium uppercase tracking-[0.18em] transition ${
-                  sidebarTab === "outline" ? "bg-white text-ink" : "text-muted hover:text-ink"
+                  sidebarTab === "outline" ? "bg-[#2a2a2a] text-white" : "text-white/55 hover:text-white"
                 }`}
               >
                 Outline
@@ -815,25 +1114,9 @@ export function PDFViewer() {
           // Without it the gutter blinks in/out during page loads and
           // every page re-renders at a slightly different width.
           style={{ scrollbarGutter: "stable" }}
-          className="min-h-0 flex-1 overflow-y-scroll overflow-x-hidden bg-[#9b9b9b] px-4 py-5 scrollbar-thin"
-          onScroll={(event) => {
-            if (!currentDocument.page_count) {
-              return;
-            }
-            const target = event.currentTarget;
-            const nearTop = target.scrollTop <= PAGE_EDGE_THRESHOLD;
-            const nearBottom = target.scrollTop + target.clientHeight >= target.scrollHeight - PAGE_EDGE_THRESHOLD;
-
-            if (nearTop) {
-              loadPreviousPages();
-            }
-
-            if (nearBottom) {
-              loadNextPages();
-            }
-          }}
+          className="min-h-0 flex-1 overflow-y-scroll overflow-x-hidden bg-[#525252] px-4 py-5 scrollbar-thin"
         >
-          {loading && !loadedPages.length ? (
+          {loading && visibleRange.end < visibleRange.start ? (
             <div className="flex h-full items-center justify-center">
               <LoadingSpinner className="h-6 w-6 text-white" />
             </div>
@@ -844,7 +1127,10 @@ export function PDFViewer() {
               onLoadProgress={({ loaded, total }: { loaded: number; total: number }) => {
                 setLoadProgress({ loaded, total });
               }}
-              onLoadSuccess={(doc: PDFDocumentProxy) => setPdfProxy(doc)}
+              onLoadSuccess={(doc: PDFDocumentProxy) => {
+                pdfProxyFileRef.current = pdfFile?.url ?? null;
+                setPdfProxy(doc);
+              }}
               loading={<PDFLoadIndicator progress={loadProgress} />}
               error={
                 <div className="mx-auto max-w-[640px] mt-10 border border-black/[0.08] bg-white px-6 py-6 text-center text-sm text-warn">
@@ -854,55 +1140,132 @@ export function PDFViewer() {
               }
             >
               <div className="space-y-6">
-                {visibleRange.start > 1 ? (
-                  <div className="flex justify-center">
-                    <button
-                      type="button"
-                      onClick={loadPreviousPages}
-                      className="border border-white/40 bg-white/90 px-4 py-2 text-[11px] font-medium uppercase tracking-[0.16em] text-ink transition hover:bg-white"
-                    >
-                      Load earlier pages
-                    </button>
-                  </div>
-                ) : null}
-                {loadedPages.map(({ pageNumber }) => (
-                  <div
-                    key={`${currentDocument.id}-${pageNumber}`}
-                    ref={(element) => {
-                      pageRefs.current[pageNumber] = element;
-                    }}
-                    className="space-y-0"
-                  >
-                    <PDFPageJS
-                      pageNumber={pageNumber}
-                      zoom={zoom}
-                      baseWidth={containerInnerWidth}
-                      highlights={pageNumber === currentPage ? highlights : []}
-                      annotations={annotationsByPage.get(pageNumber) ?? []}
-                      documentId={currentDocument.id}
-                      currentUserId={currentUserId}
-                      resolvePageLabel={resolvePageLabel}
-                      searchQuery={searchQuery}
-                      activeSearchIndexInPage={
-                        activeMatchIndexByPage &&
-                        activeMatchIndexByPage.pageNumber === pageNumber
-                          ? activeMatchIndexByPage.indexInPage
-                          : null
-                      }
-                      onHighlightReady={
-                        pageNumber === currentPage
-                          ? handleCurrentHighlightReady
-                          : undefined
-                      }
-                      onActiveSearchHitMounted={
-                        activeMatchIndexByPage &&
-                        activeMatchIndexByPage.pageNumber === pageNumber
-                          ? handleActiveSearchHit
-                          : undefined
-                      }
-                    />
-                  </div>
-                ))}
+                {/*
+                  Only mount Page children once OUR pdfProxy state is
+                  set AND it's the proxy for the *current* file URL.
+                  The file-URL check matters during the render where
+                  pdfFile has just changed but our reset useEffect
+                  hasn't run yet — without it, react-pdf's Document
+                  has already torn down the old proxy internally and
+                  any <Page> mount would explode with "Cannot read
+                  properties of null (reading 'sendWithPromise')".
+                */}
+                {pdfProxy &&
+                  pdfProxyFileRef.current === (pdfFile?.url ?? null) &&
+                  Array.from(
+                  { length: currentDocument.page_count ?? Math.max(0, visibleRange.end - visibleRange.start + 1) },
+                  (_, idx) => {
+                    const pageNumber = idx + 1;
+                    const inWindow =
+                      pageNumber >= visibleRange.start && pageNumber <= visibleRange.end;
+                    // Prefer the *actually rendered* height we've
+                    // already seen for this page; fall back to the
+                    // viewport-based estimate for not-yet-rendered
+                    // pages. Once a page has rendered, its slot
+                    // height is locked at that value so leaving the
+                    // render window never shrinks scrollHeight.
+                    const knownHeight = pageHeights.get(pageNumber);
+                    const slotHeightPx = Math.max(
+                      80,
+                      Math.round(knownHeight ?? estimatedPageHeight),
+                    );
+                    // Slot width tracks the rendered page width so an
+                    // empty slot looks like a blank page (Drive does
+                    // this) instead of a gray strip spanning the
+                    // viewer.
+                    const slotWidthPx =
+                      containerInnerWidth && containerInnerWidth > 0
+                        ? Math.round(containerInnerWidth * zoom)
+                        : null;
+                    // Pull the cached preview JPEG for ANY slot that
+                    // has one, in-window or out. In-window slots pass
+                    // it to PDFPageJS for the canvas-fade-in; out-of-
+                    // window slots paint it directly as a static
+                    // placeholder so the user never sees a blank
+                    // sheet of paper for pages they've already
+                    // scrolled past.
+                    const cachedImage =
+                      pageCache[pageKey(currentDocument.id, pageNumber)]?.image_url ?? null;
+                    return (
+                      <div
+                        key={`${currentDocument.id}-${pageNumber}`}
+                        ref={(element) => {
+                          pageRefs.current[pageNumber] = element;
+                        }}
+                        data-page-number={pageNumber}
+                        className="relative mx-auto bg-white shadow-[0_4px_18px_rgba(15,23,42,0.06)]"
+                        // bg-white + page-shaped width + shadow makes
+                        // every slot read as a blank sheet of paper
+                        // while PDF.js is busy rendering — no more
+                        // grey scroll-container colour bleeding
+                        // through. content-visibility:auto still lets
+                        // the browser skip layout/paint for distant
+                        // slots; contain-intrinsic-size keeps their
+                        // scroll height correct. minHeight gives every
+                        // slot a stable floor so layout never collapses
+                        // while a canvas is mid-render.
+                        style={{
+                          contentVisibility: "auto",
+                          containIntrinsicSize: `auto ${slotHeightPx}px`,
+                          minHeight: `${slotHeightPx}px`,
+                          width: slotWidthPx ?? undefined,
+                          maxWidth: "100%",
+                        }}
+                      >
+                        {/* Static preview JPEG drawn at the slot
+                            level for *every* slot we have one for —
+                            in-window AND out-of-window. PDFPageJS'
+                            canvas, when mounted, overlays this
+                            image (canvas is opaque). When PDFPageJS
+                            unmounts as the user scrolls past, the
+                            image stays so the page never goes blank.
+                            One <img> per slot — no flicker, no
+                            mount/unmount churn for the preview. */}
+                        {cachedImage ? (
+                          <img
+                            src={cachedImage}
+                            alt=""
+                            aria-hidden="true"
+                            draggable={false}
+                            className="pointer-events-none absolute inset-0 h-full w-full object-contain"
+                          />
+                        ) : null}
+                        {inWindow ? (
+                          <PDFPageJS
+                            pageNumber={pageNumber}
+                            zoom={zoom}
+                            baseWidth={containerInnerWidth}
+                            previewImageUrl={cachedImage}
+                            onRenderSuccess={handlePageRendered}
+                            highlights={pageNumber === currentPage ? highlights : []}
+                            annotations={annotationsByPage.get(pageNumber) ?? []}
+                            documentId={currentDocument.id}
+                            currentUserId={currentUserId}
+                            resolvePageLabel={resolvePageLabel}
+                            searchQuery={searchQuery}
+                            activeSearchIndexInPage={
+                              activeMatchIndexByPage &&
+                              activeMatchIndexByPage.pageNumber === pageNumber
+                                ? activeMatchIndexByPage.indexInPage
+                                : null
+                            }
+                            onHighlightReady={
+                              pageNumber === currentPage
+                                ? handleCurrentHighlightReady
+                                : undefined
+                            }
+                            onActiveSearchHitMounted={
+                              activeMatchIndexByPage &&
+                              activeMatchIndexByPage.pageNumber === pageNumber
+                                ? handleActiveSearchHit
+                                : undefined
+                            }
+                          />
+                        ) : null}
+                      </div>
+                    );
+                  },
+                )}
               </div>
             </PDFDocument>
           )}

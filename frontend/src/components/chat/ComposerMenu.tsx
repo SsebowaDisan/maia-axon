@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef } from "react";
-import { BarChart3, BookOpen, Bot, Building2, Globe } from "lucide-react";
+import { BarChart3, BookOpen, Bot, Building2, GraduationCap, Globe } from "lucide-react";
 
 import type { SearchMode } from "@/lib/types";
 
@@ -54,6 +54,21 @@ export const ComposerMenu = forwardRef<HTMLDivElement, {
           Deep Search
         </span>
         {value === "deep_search" ? (
+          <span className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold">Active</span>
+        ) : null}
+      </button>
+      <button
+        type="button"
+        className={`mt-1 flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left text-sm transition ${
+          value === "learn" ? "bg-accentSoft text-accent" : "hover:bg-black/5"
+        }`}
+        onClick={() => onSelect("learn")}
+      >
+        <span className="flex items-center gap-2">
+          <GraduationCap className="h-4 w-4" />
+          Learn
+        </span>
+        {value === "learn" ? (
           <span className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold">Active</span>
         ) : null}
       </button>

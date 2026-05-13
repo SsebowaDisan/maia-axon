@@ -25,7 +25,7 @@ function SuggestedQuestionsRow({ questions }: { questions: string[] }) {
   const sendMessage = useChatStore((state) => state.sendMessage);
   const streaming = useChatStore((state) => state.streaming);
   return (
-    <div className="mt-8 border-t border-black/[0.06] pt-5">
+    <div className="mt-8 pt-5">
       <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-muted">
         Continue learning
       </p>
@@ -36,7 +36,7 @@ function SuggestedQuestionsRow({ questions }: { questions: string[] }) {
             type="button"
             disabled={streaming}
             onClick={() => void sendMessage(question)}
-            className="rounded-full border border-black/10 bg-white px-4 py-2 text-left text-[14px] text-ink transition hover:border-black hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-black/10 disabled:hover:bg-white disabled:hover:text-ink"
+            className="rounded-full border border-black/10 bg-white/55 px-4 py-2 text-left text-[14px] text-ink transition hover:border-black hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-black/10 disabled:hover:bg-white/55 disabled:hover:text-ink"
           >
             {question}
           </button>
@@ -222,7 +222,7 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
       >
         <div
           ref={userBubbleRef}
-          className="group/user min-w-[min(270px,78vw)] max-w-[78%] rounded-[30px] rounded-br-xl border border-black bg-black px-5 py-4 text-[15px] text-white"
+          className="group/user min-w-[min(270px,78vw)] max-w-[78%] rounded-[30px] rounded-br-xl border border-[#2a2522] bg-[#2a2522] px-5 py-4 text-[15px] text-white"
           style={lockedUserBubbleWidth ? { width: lockedUserBubbleWidth } : undefined}
         >
           <div className={`${isInlineEditing ? "mb-2" : "mb-3"} flex min-w-0 items-center justify-between gap-2`}>
@@ -413,7 +413,7 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
               </div>
               {!message.isStreaming && message.status === "done" ? (
                 <div
-                  className={`mt-8 flex flex-wrap items-center justify-end gap-2 border-t border-black/[0.06] pt-4 transition-opacity duration-150 ${assistantActionsVisibilityClass}`}
+                  className={`mt-8 flex flex-wrap items-center justify-end gap-2 pt-4 transition-opacity duration-150 ${assistantActionsVisibilityClass}`}
                 >
                   {isInlineEditing ? (
                     <>
@@ -442,7 +442,7 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
                     className={`inline-flex h-9 items-center gap-2 rounded-full border px-3 text-[12px] font-medium transition ${
                       savedFeedbackRating === "up"
                         ? "border-black bg-black text-white"
-                        : "border-black/8 bg-white text-black/72 hover:border-black/12 hover:bg-black hover:text-white"
+                        : "border-black/8 bg-white/65 text-black/72 hover:border-black/12 hover:bg-black hover:text-white"
                     }`}
                     aria-label="Mark response as helpful"
                     title="Helpful"
@@ -455,7 +455,7 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
                     className={`inline-flex h-9 items-center gap-2 rounded-full border px-3 text-[12px] font-medium transition ${
                       savedFeedbackRating === "down"
                         ? "border-black bg-black text-white"
-                        : "border-black/8 bg-white text-black/72 hover:border-black/12 hover:bg-black hover:text-white"
+                        : "border-black/8 bg-white/65 text-black/72 hover:border-black/12 hover:bg-black hover:text-white"
                     }`}
                     aria-label="Mark response as poor"
                     title="Poor"
@@ -468,7 +468,7 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
                     className={`inline-flex h-9 items-center gap-2 rounded-full border px-3 text-[12px] font-medium transition ${
                       actionFeedback === "copy"
                         ? "border-black bg-black text-white"
-                        : "border-black/8 bg-white text-black/72 hover:border-black/12 hover:bg-black hover:text-white"
+                        : "border-black/8 bg-white/65 text-black/72 hover:border-black/12 hover:bg-black hover:text-white"
                     }`}
                     aria-label="Copy response"
                     title="Copy"

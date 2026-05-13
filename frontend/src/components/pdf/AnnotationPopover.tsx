@@ -202,7 +202,7 @@ export function AnnotationPopover({ draft, saving, onCancel, onSave, onAskMaia, 
   return createPortal(
     <div
       ref={popoverRef}
-      className="maia-popover-in pointer-events-auto fixed z-[120] flex flex-col overflow-hidden rounded-2xl border border-black/[0.08] bg-white shadow-[0_18px_48px_rgba(15,23,42,0.18)]"
+      className="maia-popover-in pointer-events-auto fixed z-[120] flex flex-col overflow-hidden rounded-2xl border border-black/[0.08] bg-panel shadow-[0_18px_48px_rgba(15,23,42,0.18)]"
       style={{
         left: effectiveLeft,
         top: effectiveTop,

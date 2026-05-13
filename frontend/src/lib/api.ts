@@ -1,10 +1,17 @@
 import type {
+  AdminLearnConceptRow,
+  AdminLearnDocumentRow,
+  AdminLearnQuestionRow,
+  AdminLearnSectionDetail,
+  AdminLearnSectionSummary,
   Annotation,
   AnnotationCreatePayload,
   AnnotationUpdatePayload,
   AuthTokenResponse,
   AdminFeatureIdea,
   AdminMessageFeedback,
+  CheckInQuestion,
+  CheckInResult,
   Company,
   CompanyUserAssignment,
   ConversationDetail,
@@ -19,8 +26,11 @@ import type {
   FeatureIdeaPriority,
   Group,
   GroupAssignment,
+  LearnDepth,
+  LearnPath,
   MessageFeedback,
   MessageFeedbackRating,
+  MindmapSectionNode,
   PageData,
   Project,
   PromptAttachment,
@@ -601,5 +611,124 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ text, target_language: targetLanguage }),
     });
+  },
+
+  // ----- Learn mode -----
+
+  startLearningPath(payload: {
+    document_id: string;
+    goal_text: string;
+    depth: LearnDepth;
+    prior_known_concept_ids?: string[];
+  }) {
+    return request<LearnPath>("/learn/path/start", {
+      method: "POST",
+      body: JSON.stringify({
+        document_id: payload.document_id,
+        goal_text: payload.goal_text,
+        depth: payload.depth,
+        prior_known_concept_ids: payload.prior_known_concept_ids ?? [],
+      }),
+    });
+  },
+  getActiveLearningPath(documentId: string) {
+    return request<LearnPath>(`/learn/path/active?document_id=${encodeURIComponent(documentId)}`);
+  },
+  advanceLearningPath(pathId: string, payload: { skip: boolean }) {
+    return request<LearnPath>(`/learn/path/${pathId}/advance`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  getSectionQuestions(sectionId: string) {
+    return request<CheckInQuestion[]>(`/learn/section/${sectionId}/questions`);
+  },
+  submitCheckIn(payload: { question_id: string; user_answer: string }) {
+    return request<CheckInResult>("/learn/check-in", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  getDocumentSections(documentId: string) {
+    return request<MindmapSectionNode[]>(`/learn/document/${documentId}/sections`);
+  },
+
+  // ----- Admin learn-mode review -----
+
+  adminListLearnDocuments() {
+    return request<AdminLearnDocumentRow[]>(`/admin/learn/documents`);
+  },
+  adminListLearnSections(documentId: string, flaggedOnly = false) {
+    const suffix = flaggedOnly ? "?flagged_only=true" : "";
+    return request<AdminLearnSectionSummary[]>(
+      `/admin/learn/documents/${documentId}/sections${suffix}`,
+    );
+  },
+  adminGetLearnSection(sectionId: string) {
+    return request<AdminLearnSectionDetail>(`/admin/learn/sections/${sectionId}`);
+  },
+  adminPatchLearnSection(
+    sectionId: string,
+    payload: {
+      title?: string;
+      content_summary?: string;
+      content_json?: Record<string, unknown>;
+    },
+  ) {
+    return request<AdminLearnSectionDetail>(`/admin/learn/sections/${sectionId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+  adminRegenerateLearnSection(sectionId: string) {
+    return request<AdminLearnSectionDetail>(
+      `/admin/learn/sections/${sectionId}/regenerate`,
+      { method: "POST" },
+    );
+  },
+  adminDeleteLearnSection(sectionId: string) {
+    return request<void>(`/admin/learn/sections/${sectionId}`, { method: "DELETE" });
+  },
+  adminListLearnQuestions(sectionId: string) {
+    return request<AdminLearnQuestionRow[]>(
+      `/admin/learn/sections/${sectionId}/questions`,
+    );
+  },
+  adminPatchLearnQuestion(
+    questionId: string,
+    payload: {
+      stem?: string;
+      explanation?: string;
+      payload?: Record<string, unknown>;
+      difficulty?: number;
+      estimated_seconds?: number;
+    },
+  ) {
+    return request<AdminLearnQuestionRow>(`/admin/learn/questions/${questionId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+  adminDeleteLearnQuestion(questionId: string) {
+    return request<void>(`/admin/learn/questions/${questionId}`, { method: "DELETE" });
+  },
+  adminRegenerateLearnQuestions(sectionId: string) {
+    return request<AdminLearnQuestionRow[]>(
+      `/admin/learn/sections/${sectionId}/questions/regenerate`,
+      { method: "POST" },
+    );
+  },
+  adminListLearnConcepts(documentId?: string) {
+    const suffix = documentId ? `?document_id=${encodeURIComponent(documentId)}` : "";
+    return request<AdminLearnConceptRow[]>(`/admin/learn/concepts${suffix}`);
+  },
+  adminMergeLearnConcepts(payload: { keep_id: string; absorb_id: string }) {
+    return request<AdminLearnConceptRow>(`/admin/learn/concepts/merge`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  adminDeleteLearnConcept(conceptId: string) {
+    return request<void>(`/admin/learn/concepts/${conceptId}`, { method: "DELETE" });
   },
 };

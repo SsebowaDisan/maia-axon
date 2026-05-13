@@ -1370,7 +1370,7 @@ def run_ocr_stage(self, doc_id: str):
             logger.info("[%s] Persisted navigation targets on %s pages", doc_id, navigation_updates)
 
         logger.info("[%s] OCR complete", doc_id)
-        caption_document.delay(doc_id)
+        run_section_mapping_stage.delay(doc_id)
     except Exception as exc:
         logger.error("[%s] OCR failed: %s", doc_id, exc)
         _mark_failed(db, doc_id, str(exc))
@@ -1378,6 +1378,72 @@ def run_ocr_stage(self, doc_id: str):
     finally:
         if pdf_doc is not None:
             pdf_doc.close()
+        db.close()
+
+
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=60)
+def run_section_mapping_stage(self, doc_id: str):
+    """Stage 3: Build the book → topic → subtopic → headline tree
+    and enrich every headline with a structured payload that powers
+    learn mode. Then build this document's concept-graph contribution.
+
+    Section mapping and per-document concept-graph build run together
+    inside this stage — they share the same "this document is being
+    enriched offline" window, and the concept-graph step is a pure
+    function of the section_mapping output, so splitting them across
+    Celery tasks would just double the orchestration without any
+    real benefit. On failure either of them marks the doc failed
+    and triggers Celery's normal retry.
+    """
+    # Lazy imports so a crash in any heavy module doesn't take down
+    # the whole task registry on worker boot.
+    from app.tasks.section_mapping import run_section_mapping
+    from app.tasks.concept_graph import build_concept_graph_for_document
+    from app.tasks.question_generation import generate_questions_for_document
+
+    db = SyncSession()
+    try:
+        logger.info("[%s] Stage 3: Section mapping (enrichment)", doc_id)
+        _start_stage(db, doc_id, "section_mapping")
+        section_stats = run_section_mapping(db, doc_id)
+        logger.info(
+            "[%s] Section mapping complete: %d headlines, %d topics+subtopics, %d embeddings",
+            doc_id,
+            section_stats["headlines"],
+            section_stats["topics_and_subtopics"],
+            section_stats["embeddings"],
+        )
+        # Concept-graph build derives Concept rows + prerequisite
+        # edges from the enriched payloads. Per-document scope; the
+        # cross-book deduplication pass runs separately via the CLI.
+        graph_stats = build_concept_graph_for_document(db, doc_id)
+        logger.info(
+            "[%s] Concept graph build: new=%d reused=%d intros=%d apps=%d edges=%d",
+            doc_id,
+            graph_stats["concepts_created"],
+            graph_stats["concepts_reused"],
+            graph_stats["introductions"],
+            graph_stats["applications"],
+            graph_stats["edges"],
+        )
+        # Question bank: per-headline check-in questions, generated
+        # offline so live check-ins are zero-latency. Math questions
+        # self-grade through the SymPy grader before being stored.
+        question_stats = generate_questions_for_document(db, doc_id)
+        logger.info(
+            "[%s] Question generation: sections=%d kept=%d rejected_schema=%d rejected_math=%d",
+            doc_id,
+            question_stats["sections_processed"],
+            question_stats["questions_kept"],
+            question_stats["questions_rejected_schema"],
+            question_stats["questions_rejected_math"],
+        )
+        caption_document.delay(doc_id)
+    except Exception as exc:
+        logger.error("[%s] Section mapping / concept graph / questions failed: %s", doc_id, exc)
+        _mark_failed(db, doc_id, str(exc))
+        raise self.retry(exc=exc)
+    finally:
         db.close()
 
 

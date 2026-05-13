@@ -7,14 +7,18 @@ import {
   Brain,
   Building2,
   ChartColumn,
+  ChevronUp,
   Cog,
   FileText,
   Folder,
   FolderCog,
   FolderOpen,
   Globe,
+  GraduationCap,
   History,
+  Library,
   Lightbulb,
+  PanelLeftClose,
   LogOut,
   MessageSquareMore,
   Plus,
@@ -35,6 +39,7 @@ import { GroupManager } from "@/components/admin/GroupManager";
 import { DocumentPreviewDialog } from "@/components/pdf/DocumentPreviewDialog";
 import { CompanyManager } from "@/components/admin/CompanyManager";
 import { FeedbackManager } from "@/components/admin/FeedbackManager";
+import { LearnReviewer } from "@/components/admin/LearnReviewer";
 import { UserAssignment } from "@/components/admin/UserAssignment";
 import { FeatureIdeaDialog } from "@/components/chat/FeatureIdeaDialog";
 import { DestinationManagerDialog } from "@/components/settings/DestinationManagerDialog";
@@ -64,6 +69,125 @@ const conversationIconMap = {
   message: MessageSquareMore,
 } as const;
 
+// Derive two-letter initials from a full name. "Disan Ssebowa B" → "DS";
+// single-word names get the first two letters. Falls back to a single
+// person glyph if the name is missing entirely.
+function deriveInitials(name: string | null): string {
+  if (!name) return "?";
+  const trimmed = name.trim();
+  if (!trimmed) return "?";
+  const parts = trimmed.split(/\s+/);
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+  return ((parts[0]?.[0] ?? "") + (parts[parts.length - 1]?.[0] ?? "")).toUpperCase();
+}
+
+function AccountBar({
+  userName,
+  userEmail,
+  onSuggestIdea,
+  onOpenSettings,
+  onLogout,
+}: {
+  userName: string | null;
+  userEmail: string | null;
+  onSuggestIdea: () => void;
+  onOpenSettings: () => void;
+  onLogout: () => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const initials = deriveInitials(userName);
+
+  // Click-outside dismissal. Listens at window level rather than the
+  // button so a click on the menu items doesn't immediately close
+  // before the item's own onClick fires.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handler = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (buttonRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      setMenuOpen(false);
+    };
+    window.addEventListener("mousedown", handler);
+    return () => window.removeEventListener("mousedown", handler);
+  }, [menuOpen]);
+
+  return (
+    <div className="relative mt-2 border-t border-black/[0.05] pt-2">
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setMenuOpen((open) => !open)}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition hover:bg-black/[0.04]"
+      >
+        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-black text-[10px] font-semibold uppercase tracking-wider text-white">
+          {initials}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[14.5px] font-medium text-ink">
+          {userName || userEmail || "Account"}
+        </span>
+        <ChevronUp
+          className={`h-3.5 w-3.5 text-muted transition-transform ${
+            menuOpen ? "" : "rotate-180"
+          }`}
+        />
+      </button>
+      {menuOpen ? (
+        <div
+          ref={menuRef}
+          role="menu"
+          className="absolute bottom-full left-0 right-0 mb-2 overflow-hidden rounded-xl border border-black/[0.08] bg-panel py-1 shadow-[0_18px_44px_rgba(15,23,42,0.16)]"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setMenuOpen(false);
+              onSuggestIdea();
+            }}
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-ink transition hover:bg-black/[0.04]"
+          >
+            <Lightbulb className="h-4 w-4 text-muted" />
+            Suggest an idea
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setMenuOpen(false);
+              onOpenSettings();
+            }}
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-ink transition hover:bg-black/[0.04]"
+          >
+            <Settings2 className="h-4 w-4 text-muted" />
+            Settings
+          </button>
+          <div className="my-1 h-px bg-black/[0.06]" />
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setMenuOpen(false);
+              onLogout();
+            }}
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-danger transition hover:bg-danger/[0.08]"
+          >
+            <LogOut className="h-4 w-4" />
+            Log out
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function mapMessage(message: MessageResponse): ChatMessage {
   return {
     id: message.id,
@@ -89,7 +213,7 @@ function AdminWorkspaceView() {
   const activeGroupId = useGroupStore((state) => state.activeGroupId);
   const companies = useCompanyStore((state) => state.companies);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(groups[0]?.id ?? null);
-  const [adminTab, setAdminTab] = useState<"people" | "companies" | "feedback">("people");
+  const [adminTab, setAdminTab] = useState<"people" | "companies" | "feedback" | "learn">("people");
 
   useEffect(() => {
     if (!selectedGroupId && groups[0]?.id) {
@@ -105,7 +229,16 @@ function AdminWorkspaceView() {
   ).length;
   const isPeopleTab = adminTab === "people";
   const isFeedbackTab = adminTab === "feedback";
-  const panelIcon = isPeopleTab ? <Users className="h-[18px] w-[18px]" /> : isFeedbackTab ? <MessageSquareMore className="h-[18px] w-[18px]" /> : <Building2 className="h-[18px] w-[18px]" />;
+  const isLearnTab = adminTab === "learn";
+  const panelIcon = isLearnTab ? (
+    <GraduationCap className="h-[18px] w-[18px]" />
+  ) : isPeopleTab ? (
+    <Users className="h-[18px] w-[18px]" />
+  ) : isFeedbackTab ? (
+    <MessageSquareMore className="h-[18px] w-[18px]" />
+  ) : (
+    <Building2 className="h-[18px] w-[18px]" />
+  );
 
   return (
     <div className="grid h-full min-h-0 gap-5 lg:grid-cols-[292px_minmax(0,1fr)]">
@@ -117,22 +250,42 @@ function AdminWorkspaceView() {
             </span>
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted">
-                {isPeopleTab ? "People access" : isFeedbackTab ? "Feedback loop" : "Company access"}
+                {isLearnTab
+                  ? "Learn-mode QA"
+                  : isPeopleTab
+                    ? "People access"
+                    : isFeedbackTab
+                      ? "Feedback loop"
+                      : "Company access"}
               </p>
               <p className="mt-1 text-sm font-medium text-muted">
-                {isPeopleTab ? "Roles, users, and workspace visibility" : isFeedbackTab ? "Ratings, ideas, and product signals" : "Google source ownership and availability"}
+                {isLearnTab
+                  ? "Review sections, concepts, and questions"
+                  : isPeopleTab
+                    ? "Roles, users, and workspace visibility"
+                    : isFeedbackTab
+                      ? "Ratings, ideas, and product signals"
+                      : "Google source ownership and availability"}
               </p>
             </div>
           </div>
           <p className="mt-5 font-display text-[1.7rem] font-semibold tracking-[-0.05em] text-ink">
-            {isPeopleTab ? "User control" : isFeedbackTab ? "User signals" : "Source catalog"}
+            {isLearnTab
+              ? "Learn-mode review"
+              : isPeopleTab
+                ? "User control"
+                : isFeedbackTab
+                  ? "User signals"
+                  : "Source catalog"}
           </p>
           <p className="mt-2 text-sm leading-6 text-muted">
-            {isPeopleTab
-              ? "Create Maia users, assign them to groups, and manage workspace access."
-              : isFeedbackTab
-                ? "Review response ratings and collect feature ideas from Maia users."
-                : "Register company source records here. Google setup stays separate from projects and chat structure."}
+            {isLearnTab
+              ? "Spot-check LLM-generated section trees, concept graphs, and check-in questions. Edit, regenerate, or delete the wrong ones."
+              : isPeopleTab
+                ? "Create Maia users, assign them to groups, and manage workspace access."
+                : isFeedbackTab
+                  ? "Review response ratings and collect feature ideas from Maia users."
+                  : "Register company source records here. Google setup stays separate from projects and chat structure."}
           </p>
         </div>
 
@@ -246,6 +399,32 @@ function AdminWorkspaceView() {
               </span>
             </span>
           </button>
+
+          <button
+            type="button"
+            className={`mt-2 flex w-full items-center gap-3 rounded-[20px] px-3.5 py-3.5 text-left transition ${
+              adminTab === "learn"
+                ? "bg-white text-ink shadow-[0_12px_28px_rgba(17,17,17,0.06)]"
+                : "text-ink/90 hover:bg-white/75"
+            }`}
+            onClick={() => setAdminTab("learn")}
+          >
+            <span
+              className={`inline-flex h-11 w-11 items-center justify-center rounded-[16px] border ${
+                adminTab === "learn"
+                  ? "border-black/[0.06] bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(242,242,240,0.92))] text-ink shadow-[0_10px_22px_rgba(17,17,17,0.05)]"
+                  : "border-transparent bg-black/[0.04] text-muted"
+              }`}
+            >
+              <GraduationCap className="h-[18px] w-[18px]" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[15px] font-semibold tracking-[-0.02em]">Learn QA</span>
+              <span className="mt-0.5 block text-xs leading-5 text-muted">
+                Review and correct LLM-generated learn-mode content.
+              </span>
+            </span>
+          </button>
         </div>
 
         {isPeopleTab ? (
@@ -285,17 +464,31 @@ function AdminWorkspaceView() {
         <div className="mb-5 flex items-start justify-between gap-4 border-b border-black/[0.06] pb-4">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
-              {adminTab === "companies" ? "Company management" : adminTab === "feedback" ? "Feedback review" : "People management"}
+              {adminTab === "companies"
+                ? "Company management"
+                : adminTab === "feedback"
+                  ? "Feedback review"
+                  : adminTab === "learn"
+                    ? "Learn-mode review"
+                    : "People management"}
             </p>
             <p className="mt-2 font-display text-[1.55rem] font-semibold tracking-[-0.04em] text-ink">
-              {adminTab === "companies" ? "Company sources" : adminTab === "feedback" ? "Ratings and ideas" : "Users and assignment"}
+              {adminTab === "companies"
+                ? "Company sources"
+                : adminTab === "feedback"
+                  ? "Ratings and ideas"
+                  : adminTab === "learn"
+                    ? "Section, concept, and question QA"
+                    : "Users and assignment"}
             </p>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
               {adminTab === "companies"
                 ? "Create company source records, attach GA4 and Google Ads IDs, and control which users can select them in chat."
                 : adminTab === "feedback"
-                ? "Review thumbs up/down signals, comments, and feature ideas submitted by Maia users."
-                : "Create Maia users and assign them to the library groups they should access."}
+                  ? "Review thumbs up/down signals, comments, and feature ideas submitted by Maia users."
+                  : adminTab === "learn"
+                    ? "Drill into each book to see the LLM-generated section tree, concept graph, and check-in questions. Flagged items appear first; edit or regenerate the ones that look wrong."
+                    : "Create Maia users and assign them to the library groups they should access."}
             </p>
           </div>
         </div>
@@ -305,6 +498,8 @@ function AdminWorkspaceView() {
             <CompanyManager />
           ) : adminTab === "feedback" ? (
             <FeedbackManager />
+          ) : adminTab === "learn" ? (
+            <LearnReviewer />
           ) : selectedGroupId ? (
             <UserAssignment groupId={selectedGroupId} />
           ) : (
@@ -394,26 +589,18 @@ function LibraryDialog({
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/18 backdrop-blur-[18px]" onDoubleClick={requestClose} />
         <Dialog.Content
           aria-describedby={undefined}
-          className="fixed left-1/2 top-1/2 z-[60] flex h-[min(860px,calc(100vh-2rem))] w-[min(1120px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[34px] border border-black/[0.06] bg-white p-6 shadow-[0_30px_80px_rgba(17,17,17,0.14)] outline-none"
+          className="fixed left-1/2 top-1/2 z-[60] flex h-[min(860px,calc(100vh-2rem))] w-[min(1120px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[34px] border border-black/[0.06] bg-panel p-6 shadow-[0_30px_80px_rgba(17,17,17,0.14)] outline-none"
           onPointerDownOutside={handlePointerDownOutside}
           onEscapeKeyDown={handleEscapeKeyDown}
           onFocusOutside={handleFocusOutside}
           onInteractOutside={handleInteractOutside}
         >
-          <div className="flex items-start justify-between gap-4 border-b border-black/[0.06] pb-5">
-            <div className="flex items-center gap-4">
-              <span className="rounded-full bg-black p-3 text-white">
-                <FolderCog className="h-5 w-5" />
-              </span>
-              <div>
-                <Dialog.Title className="font-display text-[1.875rem] font-semibold tracking-[-0.04em] text-ink">
-                  Library
-                </Dialog.Title>
-                <p className="mt-1 text-sm text-muted">
-                  Upload PDFs, create groups, and prepare documents for RAG.
-                </p>
-              </div>
-            </div>
+          {/* Tightened header — single line, no oversized icon or
+              subtitle that the screen wasn't reading. */}
+          <div className="flex items-center justify-between gap-4 pb-4">
+            <Dialog.Title className="text-[1.5rem] font-semibold tracking-[-0.03em] text-ink">
+              Library
+            </Dialog.Title>
             <button
               type="button"
               className="rounded-full p-2 text-muted transition hover:bg-black/[0.05] hover:text-ink"
@@ -424,47 +611,32 @@ function LibraryDialog({
             </button>
           </div>
 
-          <div className="mt-5 grid min-h-0 flex-1 gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
+          <div className="grid min-h-0 flex-1 gap-6 border-t border-black/[0.06] pt-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+            {/* LEFT: just the group list. No stat cards, no
+                duplicated counts — the list itself communicates the
+                same info. */}
             <div className="flex min-h-0 flex-col overflow-hidden">
-              <div className="mb-4 grid grid-cols-2 gap-3">
-                <div className="rounded-[24px] bg-black px-4 py-4 text-white">
-                  <p className="text-2xl font-semibold tracking-[-0.04em]">{groups.length}</p>
-                  <p className="mt-1 text-xs uppercase tracking-[0.16em] text-white/65">Groups</p>
-                </div>
-                <div className="rounded-[24px] bg-black/[0.04] px-4 py-4">
-                  <p className="text-2xl font-semibold tracking-[-0.04em] text-ink">{documentCount}</p>
-                  <p className="mt-1 text-xs uppercase tracking-[0.16em] text-muted">PDFs</p>
-                </div>
+              <GroupManager selectedGroupId={selectedGroupId} onSelectGroup={handleSelectProject} />
+            </div>
+
+            {/* RIGHT: documents in the selected group. The huge "RAG
+                INTAKE / Add PDFs..." explanatory card is gone — the
+                group name + PDF count sit inline as a small header,
+                everything else is the document list / uploader. */}
+            <div className="flex min-h-0 flex-col overflow-hidden">
+              <div className="mb-4 flex items-baseline justify-between gap-3">
+                <p className="text-[1.125rem] font-semibold text-ink">
+                  {selectedGroup?.name ?? "Choose a group"}
+                </p>
+                {selectedGroup ? (
+                  <p className="text-[12px] text-muted">
+                    {selectedGroup.document_count}{" "}
+                    {selectedGroup.document_count === 1 ? "PDF" : "PDFs"}
+                  </p>
+                ) : null}
               </div>
 
               <div className="min-h-0 flex-1">
-                <GroupManager selectedGroupId={selectedGroupId} onSelectGroup={handleSelectProject} />
-              </div>
-            </div>
-
-            <div className="flex min-h-0 flex-col overflow-hidden">
-              <div className="rounded-[28px] bg-black/[0.03] p-5">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
-                      RAG Intake
-                    </p>
-                    <p className="mt-2 text-[1.625rem] font-semibold tracking-[-0.04em] text-ink">
-                      {selectedGroup?.name ?? "Choose a group"}
-                    </p>
-                    <p className="mt-2 max-w-xl text-sm leading-6 text-muted">
-                      {selectedGroup
-                        ? "Add PDFs to this group and the system will index them so they are ready for retrieval and grounded answers."
-                        : "Select a group first. PDF upload stays disabled until a group is selected."}
-                    </p>
-                  </div>
-                  {selectedGroup ? (
-                    <Badge className="bg-black text-white">{selectedGroup.document_count} PDFs</Badge>
-                  ) : null}
-                </div>
-              </div>
-
-              <div className="mt-4 min-h-0 flex-1">
                 {isAdmin ? (
                   <DocumentUploader groupId={selectedGroup?.id ?? null} />
                 ) : (
@@ -582,7 +754,7 @@ function SettingsDialog({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/18 backdrop-blur-[18px]" onDoubleClick={requestClose} />
         <Dialog.Content
           aria-describedby={undefined}
-          className="fixed left-1/2 top-1/2 z-50 flex w-[min(460px,calc(100vw-2rem))] max-h-[min(720px,calc(100vh-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
+          className="fixed left-1/2 top-1/2 z-50 flex w-[min(460px,calc(100vw-2rem))] max-h-[min(720px,calc(100vh-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[30px] border border-black/[0.06] bg-panel p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
           onPointerDownOutside={handlePointerDownOutside}
           onEscapeKeyDown={handleEscapeKeyDown}
           onFocusOutside={handleFocusOutside}
@@ -620,41 +792,13 @@ function SettingsDialog({
               Choose workspace
             </p>
             <p className="mt-2 text-sm leading-6 text-muted">
-              Open the library to manage groups and PDFs, or open admin to manage users and access.
+              Manage your destinations, account, and{isAdmin ? " admin access" : " preferences"}.
             </p>
           </div>
 
           <div className="mt-5 grid gap-3">
-            <button
-              type="button"
-              className="rounded-[28px] bg-black px-5 py-5 text-left text-white transition hover:bg-black/92"
-              onClick={onOpenLibrary}
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-3">
-                    <span className="rounded-full bg-white/12 p-2.5">
-                      <FolderCog className="h-4 w-4" />
-                    </span>
-                    <div>
-                      <p className="text-base font-semibold">Library</p>
-                      <p className="mt-1 text-sm text-white/70">
-                        Groups, PDFs, and document organization.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <Badge className="bg-white/10 text-white">{groups.length} groups</Badge>
-                    <Badge className="bg-white/10 text-white">{documentCount} PDFs</Badge>
-                    <Badge className="bg-white/10 text-white">
-                      {activeGroup?.name ?? "No active group"}
-                    </Badge>
-                  </div>
-                </div>
-                <ArrowLeft className="h-4 w-4 rotate-180 text-white/80" />
-              </div>
-            </button>
-
+            {/* Library entry removed from Settings — now a top-level
+                sidebar item above the project list. */}
             {isAdmin ? (
               <button
                 type="button"
@@ -732,8 +876,19 @@ function SettingsDialog({
 
 export function SidebarHistory({
   onModalStateChange,
+  onCollapseSidebar,
+  searchOpenNonce = 0,
 }: {
   onModalStateChange?: (open: boolean) => void;
+  // When provided, the header renders a collapse button next to
+  // Search / +. Clicking it tells the parent (AppShell) to fold the
+  // sidebar back to its 56px icon rail. Same UX as Claude / ChatGPT.
+  onCollapseSidebar?: () => void;
+  // Bumped by AppShell when the user clicks the Search icon from
+  // the collapsed rail. We pop the search input open and focus it.
+  // Using a nonce (not a boolean) means repeated clicks keep
+  // re-focusing even after the user has dismissed it.
+  searchOpenNonce?: number;
 }) {
   const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
@@ -774,6 +929,16 @@ export function SidebarHistory({
   const [deleteConversationTarget, setDeleteConversationTarget] = useState<ConversationSummary | null>(null);
   const [deletingProject, setDeletingProject] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+
+  // React to the parent's "open search" nonce — clicking the search
+  // icon in the collapsed rail bumps this counter, and we respond by
+  // opening the search row and focusing its input.
+  useEffect(() => {
+    if (searchOpenNonce > 0) {
+      setSearchOpen(true);
+      window.setTimeout(() => searchInputRef.current?.focus(), 60);
+    }
+  }, [searchOpenNonce]);
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
@@ -988,17 +1153,7 @@ export function SidebarHistory({
 
   return (
     <div className="flex h-full flex-col px-4 py-4">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span className="rounded-full bg-black/[0.05] p-2 text-ink">
-            <History className="h-4 w-4" />
-          </span>
-          <div>
-            <p className="font-display text-[1.75rem] font-semibold tracking-[-0.04em] text-ink">
-              History
-            </p>
-          </div>
-        </div>
+      <div className="mb-4 flex items-center justify-start gap-2">
         <div className="flex items-center gap-2">
           <Button
             type="button"
@@ -1020,6 +1175,18 @@ export function SidebarHistory({
           >
             <Plus className="h-4 w-4" />
           </Button>
+          {onCollapseSidebar ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="icon"
+              onClick={onCollapseSidebar}
+              title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -1051,10 +1218,32 @@ export function SidebarHistory({
           </div>
         ) : null}
 
+        {/*
+          Top-level Library entry — pulled out of the Settings dialog
+          so it sits as a first-class sidebar item, the same way
+          ChatGPT puts "Codex" / "GPTs" above the project list.
+          Opens the existing LibraryDialog directly.
+        */}
+        <button
+          type="button"
+          onClick={() => setLibraryOpen(true)}
+          className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-[14.5px] font-medium text-ink transition hover:bg-black/[0.04]"
+        >
+          <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-muted">
+            <Library className="h-4 w-4 stroke-[1.8]" />
+          </span>
+          Library
+        </button>
+
+        {/* Spacer + hairline separator between the Library entry and
+            the chats/projects list — visually marks them as two
+            distinct sections. */}
+        <div className="my-3 h-px bg-black/[0.05]" />
+
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin pr-1">
           {grouped.map((section) => (
-            <div key={section.id} className="mb-5">
-              <div className="group/project-header mb-2 flex items-center justify-between gap-2 px-2">
+            <div key={section.id} className="mb-1.5">
+              <div className="group/project-header flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-black/[0.03]">
                 <button
                   type="button"
                   className="flex min-w-0 items-center gap-2 text-left"
@@ -1067,7 +1256,7 @@ export function SidebarHistory({
                       <Folder className="h-4 w-4 stroke-[1.8]" />
                     )}
                   </span>
-                  <p className="truncate text-xs font-semibold uppercase tracking-[0.18em] text-muted">
+                  <p className="truncate text-[14.5px] font-medium text-ink">
                     {section.label}
                   </p>
                 </button>
@@ -1113,17 +1302,17 @@ export function SidebarHistory({
                     return (
                     <div
                       key={conversation.id}
-                      className={`group/conversation block w-full rounded-[24px] border px-4 py-3 text-left transition ${
+                      className={`group/conversation block w-full rounded-[14px] border px-3 py-2 text-left transition ${
                         isDeletedConversation
                           ? "border-danger/20 bg-danger/5 opacity-70"
                           : activeConversationId === conversation.id
-                          ? "border-black/[0.08] bg-black/[0.03]"
-                          : "border-transparent bg-black/[0.02] hover:bg-black/[0.04]"
+                          ? "border-black/[0.08] bg-black/[0.04]"
+                          : "border-transparent hover:bg-black/[0.04]"
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/[0.04] text-muted">
-                          <ConversationIcon className="h-4 w-4" />
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-black/[0.04] text-muted">
+                          <ConversationIcon className="h-3.5 w-3.5" />
                         </span>
                         <button
                           type="button"
@@ -1137,21 +1326,16 @@ export function SidebarHistory({
                             )
                           }
                         >
-                          <p className="truncate text-sm font-semibold text-ink">
+                          <p className="truncate text-[14.5px] font-medium text-ink">
                             {isDeletedConversation
                               ? "Deleted"
                               : conversation.title || titleFromMessage("Untitled conversation")}
                           </p>
-                          <div className="mt-2">
-                            <span className="text-xs text-muted">
-                              {isDeletedConversation ? "Deleting..." : formatRelativeTime(conversation.updated_at)}
-                            </span>
-                          </div>
                         </button>
                         {isDeletedConversation ? null : (
                           <button
                             type="button"
-                            className="rounded-full p-2 text-muted opacity-0 transition hover:bg-danger/10 hover:text-danger group-hover/conversation:opacity-100 group-focus-within/conversation:opacity-100"
+                            className="rounded-full p-1.5 text-muted opacity-0 transition hover:bg-danger/10 hover:text-danger group-hover/conversation:opacity-100 group-focus-within/conversation:opacity-100"
                             onClick={(event) => {
                               event.stopPropagation();
                               setDeleteConversationTarget(conversation);
@@ -1159,7 +1343,7 @@ export function SidebarHistory({
                             title="Delete"
                             aria-label="Delete conversation"
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         )}
                       </div>
@@ -1184,45 +1368,20 @@ export function SidebarHistory({
         </div>
       </>
 
-      <button
-        type="button"
-        className="mt-4 flex items-center justify-between rounded-[22px] bg-black/[0.03] px-4 py-4 text-left transition hover:bg-black/[0.05]"
-        onClick={() => setIdeaOpen(true)}
-        aria-label="Suggest an idea"
-      >
-        <div className="flex items-center gap-3">
-          <span className="rounded-full bg-white p-2.5 text-ink shadow-[0_4px_12px_rgba(17,17,17,0.06)]">
-            <Lightbulb className="h-3.5 w-3.5" />
-          </span>
-          <div>
-            <p className="font-medium text-ink">Suggest idea</p>
-            <p className="text-xs uppercase tracking-[0.18em] text-muted">Feedback</p>
-          </div>
-        </div>
-        <span className="rounded-full bg-black p-2 text-white">
-          <Plus className="h-4 w-4" />
-        </span>
-      </button>
-
-      <button
-        type="button"
-        className="mt-3 flex items-center justify-between rounded-[22px] bg-black/[0.03] px-4 py-4 text-left transition hover:bg-black/[0.05]"
-        onClick={() => setSettingsOpen(true)}
-        aria-label="Open settings"
-      >
-        <div className="flex items-center gap-3">
-          <span className="rounded-full bg-black p-2.5 text-white">
-            <Settings2 className="h-3.5 w-3.5" />
-          </span>
-          <div>
-            <p className="font-medium text-ink">Settings</p>
-            <p className="text-xs uppercase tracking-[0.18em] text-muted">Account</p>
-          </div>
-        </div>
-        <span className="rounded-full bg-white p-2 text-muted shadow-[0_4px_12px_rgba(17,17,17,0.06)]">
-          <Cog className="h-4 w-4" />
-        </span>
-      </button>
+      {/*
+        Account bar — single ChatGPT-style row: user-initials avatar +
+        truncated name + chevron. Clicking it opens a small popover
+        menu with Suggest idea, Settings, and Log out. One icon, one
+        name when expanded; the icon-rail in AppShell uses the same
+        avatar when the sidebar is collapsed.
+      */}
+      <AccountBar
+        userName={user?.name ?? null}
+        userEmail={user?.email ?? null}
+        onSuggestIdea={() => setIdeaOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onLogout={logout}
+      />
 
       <SettingsDialog
         open={settingsOpen}
@@ -1270,7 +1429,7 @@ export function SidebarHistory({
           <Dialog.Overlay className="fixed inset-0 z-50 bg-black/18 backdrop-blur-[18px]" onDoubleClick={requestAdminClose} />
           <Dialog.Content
             aria-describedby={undefined}
-            className="fixed left-1/2 top-1/2 z-[60] flex h-[min(860px,calc(100vh-2rem))] w-[min(1120px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[34px] border border-black/[0.06] bg-white p-6 shadow-[0_30px_80px_rgba(17,17,17,0.14)] outline-none"
+            className="fixed left-1/2 top-1/2 z-[60] flex h-[min(860px,calc(100vh-2rem))] w-[min(1120px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[34px] border border-black/[0.06] bg-panel p-6 shadow-[0_30px_80px_rgba(17,17,17,0.14)] outline-none"
             onPointerDownOutside={handleAdminPointerDownOutside}
             onEscapeKeyDown={handleAdminEscapeKeyDown}
             onFocusOutside={handleAdminFocusOutside}
@@ -1367,7 +1526,7 @@ export function SidebarHistory({
           <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" onDoubleClick={requestCreateProjectClose} />
           <Dialog.Content
             aria-describedby={undefined}
-            className="fixed left-1/2 top-1/2 z-[80] w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
+            className="fixed left-1/2 top-1/2 z-[80] w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-panel p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
             onPointerDownOutside={handleCreateProjectPointerDownOutside}
             onEscapeKeyDown={handleCreateProjectEscapeKeyDown}
             onFocusOutside={handleCreateProjectFocusOutside}

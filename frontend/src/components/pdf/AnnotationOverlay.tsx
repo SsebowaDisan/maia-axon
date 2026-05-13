@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { MessageSquare, Trash2 } from "lucide-react";
+import { Check, GripHorizontal, Lock, MessageSquare, Trash2, Users, X } from "lucide-react";
 
+import { DeleteConfirmDialog } from "@/components/shared/DeleteConfirmDialog";
 import type { Annotation, AnnotationColor } from "@/lib/types";
 import { useAnnotationsStore } from "@/stores/annotationsStore";
 
@@ -22,6 +23,293 @@ const COLOR_BORDER: Record<AnnotationColor, string> = {
   pink: "rgba(219, 39, 119, 0.55)",
   orange: "rgba(234, 88, 12, 0.55)",
 };
+
+// Swatch fill (more saturated than the highlight fill, so the dots in
+// the color picker pop visually rather than being washed-out).
+const COLOR_SWATCH: Record<AnnotationColor, string> = {
+  yellow: "rgb(252, 211, 77)",
+  green: "rgb(52, 211, 153)",
+  blue: "rgb(96, 165, 250)",
+  pink: "rgb(244, 114, 182)",
+  orange: "rgb(251, 146, 60)",
+};
+
+const ANNOTATION_COLORS: AnnotationColor[] = ["yellow", "green", "blue", "pink", "orange"];
+
+// Popover bounds. MIN keeps content readable, MAX prevents the
+// user from accidentally enlarging it past the viewport.
+const POPOVER_MIN_WIDTH = 300;
+const POPOVER_MIN_HEIGHT = 220;
+const POPOVER_DEFAULT_WIDTH = 340;
+const POPOVER_DEFAULT_HEIGHT = 320;
+
+function HighlightActionsPopover({
+  anchor,
+  annotation,
+  noteDraft,
+  onNoteChange,
+  noteSaving,
+  onSaveNote,
+  onResetNote,
+  onChangeColor,
+  onToggleVisibility,
+  onDelete,
+  onClose,
+}: {
+  anchor: { left: number; top: number };
+  annotation: Annotation;
+  noteDraft: string;
+  onNoteChange: (value: string) => void;
+  noteSaving: boolean;
+  onSaveNote: () => Promise<void> | void;
+  onResetNote: () => void;
+  onChangeColor: (color: AnnotationColor) => void;
+  onToggleVisibility: () => void;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  const isShared = annotation.visibility === "group_shared";
+  const noteDirty = (noteDraft.trim() || null) !== (annotation.comment ?? null);
+  const quote = annotation.highlighted_text ?? "";
+  const quoteShown = quote.length > 140 ? `${quote.slice(0, 140)}…` : quote;
+
+  // Drag offset (added to anchor) + user-resized dimensions. Offset
+  // starts at 0/0 so the popover opens centred on the click anchor
+  // exactly like before; the user can then grab the header to nudge
+  // it out of the way, or pull the bottom-right corner to make
+  // room for a longer note.
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [size, setSize] = useState({
+    width: POPOVER_DEFAULT_WIDTH,
+    height: POPOVER_DEFAULT_HEIGHT,
+  });
+  const [interacting, setInteracting] = useState<null | "drag" | "resize">(null);
+
+  const startDrag = (event: React.MouseEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest("button")) return;
+    event.preventDefault();
+    const startMouseX = event.clientX;
+    const startMouseY = event.clientY;
+    const startOffset = dragOffset;
+    setInteracting("drag");
+    const previousCursor = window.document.body.style.cursor;
+    const previousSelect = window.document.body.style.userSelect;
+    window.document.body.style.cursor = "grabbing";
+    window.document.body.style.userSelect = "none";
+    const onMove = (moveEvent: MouseEvent) => {
+      setDragOffset({
+        x: startOffset.x + (moveEvent.clientX - startMouseX),
+        y: startOffset.y + (moveEvent.clientY - startMouseY),
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.document.body.style.cursor = previousCursor;
+      window.document.body.style.userSelect = previousSelect;
+      setInteracting(null);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const startResize = (event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const startMouseX = event.clientX;
+    const startMouseY = event.clientY;
+    const startSize = size;
+    setInteracting("resize");
+    const previousCursor = window.document.body.style.cursor;
+    const previousSelect = window.document.body.style.userSelect;
+    window.document.body.style.cursor = "nwse-resize";
+    window.document.body.style.userSelect = "none";
+    const onMove = (moveEvent: MouseEvent) => {
+      const maxW =
+        typeof window !== "undefined" ? window.innerWidth - 24 : startSize.width;
+      const maxH =
+        typeof window !== "undefined" ? window.innerHeight - 24 : startSize.height;
+      setSize({
+        width: Math.max(
+          POPOVER_MIN_WIDTH,
+          Math.min(maxW, startSize.width + (moveEvent.clientX - startMouseX)),
+        ),
+        height: Math.max(
+          POPOVER_MIN_HEIGHT,
+          Math.min(maxH, startSize.height + (moveEvent.clientY - startMouseY)),
+        ),
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.document.body.style.cursor = previousCursor;
+      window.document.body.style.userSelect = previousSelect;
+      setInteracting(null);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  // Same accent treatment as the creation popover — the blockquote's
+  // left border previews the chosen highlight color so the swatch
+  // feels tied to what it's about to paint.
+  const accent = COLOR_BORDER[annotation.color] ?? COLOR_BORDER.yellow;
+
+  return (
+    <div
+      data-maia-comment-popover="true"
+      className={`maia-popover-in pointer-events-auto fixed z-[110] flex flex-col overflow-hidden rounded-2xl border border-black/[0.08] bg-panel shadow-[0_18px_48px_rgba(15,23,42,0.18)] ${
+        interacting ? "select-none" : ""
+      }`}
+      style={{
+        top: anchor.top + dragOffset.y,
+        left: anchor.left + dragOffset.x,
+        width: size.width,
+        height: size.height,
+        maxWidth: "calc(100vw - 24px)",
+      }}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      {/* Drag handle bar — matches the creation popover exactly:
+          centred GripHorizontal icon, thin bottom border, cursor
+          flips to grab. */}
+      <div
+        onMouseDown={startDrag}
+        className="flex shrink-0 cursor-grab items-center justify-center border-b border-black/[0.04] py-1.5 text-muted/60 transition hover:text-ink active:cursor-grabbing"
+        title="Drag to move"
+      >
+        <GripHorizontal className="h-4 w-4" />
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col p-3">
+        {/* Color picker + close — same row as creation popover. Each
+            click instantly updates the highlight color via the store
+            (edit mode, not draft mode), so there's no separate save. */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5">
+            {ANNOTATION_COLORS.map((color) => {
+              const selected = color === annotation.color;
+              return (
+                <button
+                  key={color}
+                  type="button"
+                  aria-label={`Change color to ${color}`}
+                  title={`Color · ${color}`}
+                  onClick={() => onChangeColor(color)}
+                  className={`flex h-7 w-7 items-center justify-center rounded-full transition hover:scale-[1.08] ${
+                    selected
+                      ? "ring-2 ring-black/85 ring-offset-2 ring-offset-white"
+                      : "opacity-80 hover:opacity-100"
+                  }`}
+                  style={{ backgroundColor: COLOR_SWATCH[color] }}
+                >
+                  {selected ? (
+                    <Check className="h-3.5 w-3.5 text-black/85" strokeWidth={3} />
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            title="Close (Esc)"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-full text-muted transition hover:bg-black/[0.05] hover:text-ink"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Quoted selection — pull-quote style with the color-tinted
+            left border, matching the create popover. */}
+        {quoteShown ? (
+          <blockquote
+            className="mt-3 min-h-[48px] overflow-y-auto rounded-md bg-black/[0.03] py-2 pl-3 pr-2.5 font-serif text-[13px] italic leading-6 text-ink/90 scrollbar-thin"
+            style={{ borderLeft: `3px solid ${accent}` }}
+          >
+            &ldquo;{quoteShown}&rdquo;
+          </blockquote>
+        ) : null}
+
+        {/* Note editor — flex-1 so it grows to fill whatever height
+            the user has dragged the popover to. */}
+        <textarea
+          value={noteDraft}
+          onChange={(event) => onNoteChange(event.target.value)}
+          placeholder="Add a note (optional)…"
+          className="mt-3 min-h-[60px] w-full flex-1 resize-none rounded-md border border-black/[0.10] bg-white px-2 py-1.5 text-[13px] leading-5 text-ink outline-none transition focus:border-ink/40"
+        />
+
+        {/* Visibility pill — full-width clickable, matches the create
+            popover's "Private / Shared" toggle exactly. */}
+        <button
+          type="button"
+          onClick={onToggleVisibility}
+          title={isShared ? "Visible to teammates" : "Only you can see this"}
+          className="mt-2 flex w-full items-center justify-between rounded-md border border-black/[0.10] bg-white px-2.5 py-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-muted transition hover:text-ink"
+        >
+          <span className="flex items-center gap-2">
+            {isShared ? <Users className="h-3 w-3" /> : <Lock className="h-3 w-3" />}
+            {isShared ? "Shared" : "Private"}
+          </span>
+          <span className="text-[10px] text-muted/70">tap to switch</span>
+        </button>
+
+        {/* Action row — Delete on the left (destructive, isolated by
+            distance), Save changes on the right (only when dirty).
+            Same 32px button height + brand palette as the create
+            popover. */}
+        <div className="mt-3 flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={onDelete}
+            title="Delete highlight"
+            aria-label="Delete highlight"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-danger/30 bg-danger/[0.08] px-2.5 text-[12px] font-semibold text-danger transition hover:bg-danger hover:text-white"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete
+          </button>
+          {noteDirty ? (
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={onResetNote}
+                className="inline-flex h-8 items-center rounded-md px-2.5 text-[12px] font-medium text-muted transition hover:bg-black/[0.05] hover:text-ink"
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                disabled={noteSaving}
+                onClick={() => void onSaveNote()}
+                className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md bg-black px-3 text-[12px] font-semibold text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Check className="h-3.5 w-3.5" />
+                {noteSaving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Resize handle, bottom-right corner. Subtle diagonal stripe so
+          the affordance is discoverable; cursor change confirms drag
+          is available. */}
+      <div
+        aria-hidden="true"
+        onMouseDown={startResize}
+        className="absolute bottom-0 right-0 h-[18px] w-[18px] cursor-nwse-resize"
+        style={{
+          backgroundImage:
+            "linear-gradient(135deg, transparent 0 45%, rgba(0,0,0,0.18) 45% 55%, transparent 55% 70%, rgba(0,0,0,0.18) 70% 80%, transparent 80%)",
+        }}
+      />
+    </div>
+  );
+}
 
 interface AnnotationOverlayProps {
   pageNumber: number;
@@ -51,12 +339,33 @@ export function AnnotationOverlay({
   currentUserId,
 }: AnnotationOverlayProps) {
   const remove = useAnnotationsStore((state) => state.remove);
+  const update = useAnnotationsStore((state) => state.update);
   const [openId, setOpenId] = useState<string | null>(null);
   // Viewport coordinates for the centered comment popover. Captured at
   // click time so the popover anchors in the middle of the PDF panel
   // regardless of where the clicked highlight sits.
   const [popoverAnchor, setPopoverAnchor] = useState<{ left: number; top: number } | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  // Annotation queued for deletion confirmation. Replaces the native
+  // window.confirm() (the "localhost:3000 says…" browser dialog) with
+  // our branded DeleteConfirmDialog.
+  const [deletePending, setDeletePending] = useState<Annotation | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  // Draft state for the note editor. Initialised every time the
+  // popover opens for a different annotation. Saved on user action,
+  // not auto-saved — so accidental typing doesn't permanently mutate
+  // someone else's collaborative note.
+  const [noteDraft, setNoteDraft] = useState("");
+  const [noteSaving, setNoteSaving] = useState(false);
+
+  useEffect(() => {
+    if (!openId) {
+      setNoteDraft("");
+      return;
+    }
+    const annotation = annotations.find((a) => a.id === openId);
+    setNoteDraft(annotation?.comment ?? "");
+  }, [openId, annotations]);
 
   // Close the menu when the user clicks anywhere outside the overlay
   // or the portaled popover.
@@ -202,9 +511,14 @@ export function AnnotationOverlay({
               className="pointer-events-none absolute"
               style={{ left, top, width, height }}
             >
+              {/* No border / no rounding. Highlights are stored as
+                  per-glyph-cluster boxes (no merging), so each box is
+                  small. If we drew borders, adjacent boxes would show
+                  visible seams between every word. A plain fill makes
+                  contiguous selected text read as one solid strip. */}
               <div
-                className="absolute inset-0 rounded-[3px] border"
-                style={{ backgroundColor: fill, borderColor: border }}
+                className="absolute inset-0"
+                style={{ backgroundColor: fill }}
               />
               {/* Sticky-note marker so users see at a glance which
                   highlights have a comment attached. */}
@@ -218,45 +532,41 @@ export function AnnotationOverlay({
               ) : null}
               {isOpen && isLastBox && popoverAnchor && typeof document !== "undefined"
                 ? createPortal(
-                    <div
-                      data-maia-comment-popover="true"
-                      className="pointer-events-auto fixed z-[110] w-[300px] max-w-[calc(100vw_-_24px)] rounded-lg border border-black/[0.10] bg-white p-3 text-left shadow-xl"
-                      style={{ top: popoverAnchor.top, left: popoverAnchor.left }}
-                      onMouseDown={(event) => event.stopPropagation()}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted">
-                          {annotation.user_name || "Note"}
-                          {annotation.visibility === "group_shared" ? " · shared" : " · private"}
-                        </p>
-                        {/* Always render Delete; the backend enforces
-                            owner-only auth (returns 403 otherwise). This
-                            avoids a client-side gating bug from silently
-                            hiding the button when auth state is racy. */}
-                        <button
-                          type="button"
-                          title="Delete highlight"
-                          aria-label="Delete highlight"
-                          onClick={() => {
-                            if (window.confirm("Delete this highlight?")) {
-                              setOpenId(null);
-                              void remove(annotation.id);
-                            }
-                          }}
-                          className="inline-flex h-7 items-center gap-1 rounded-md border border-danger/30 bg-danger/[0.08] px-2.5 text-[11px] font-semibold text-danger transition hover:bg-danger hover:text-white"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          Delete
-                        </button>
-                      </div>
-                      {annotation.comment ? (
-                        <p className="mt-2 whitespace-pre-wrap text-[12px] leading-5 text-ink">
-                          {annotation.comment}
-                        </p>
-                      ) : (
-                        <p className="mt-2 italic text-[11px] text-muted">No note attached.</p>
-                      )}
-                    </div>,
+                    <HighlightActionsPopover
+                      anchor={popoverAnchor}
+                      annotation={annotation}
+                      noteDraft={noteDraft}
+                      onNoteChange={setNoteDraft}
+                      noteSaving={noteSaving}
+                      onSaveNote={async () => {
+                        const next = noteDraft.trim() ? noteDraft : null;
+                        const current = annotation.comment ?? null;
+                        if (next === current) return;
+                        setNoteSaving(true);
+                        try {
+                          await update(annotation.id, { comment: next });
+                        } finally {
+                          setNoteSaving(false);
+                        }
+                      }}
+                      onResetNote={() => setNoteDraft(annotation.comment ?? "")}
+                      onChangeColor={(color) => {
+                        if (color === annotation.color) return;
+                        void update(annotation.id, { color });
+                      }}
+                      onToggleVisibility={() => {
+                        const next =
+                          annotation.visibility === "group_shared"
+                            ? "private"
+                            : "group_shared";
+                        void update(annotation.id, { visibility: next });
+                      }}
+                      onDelete={() => setDeletePending(annotation)}
+                      onClose={() => {
+                        setOpenId(null);
+                        setPopoverAnchor(null);
+                      }}
+                    />,
                     document.body,
                   )
                 : null}
@@ -264,6 +574,49 @@ export function AnnotationOverlay({
           );
         });
       })}
+      {/*
+        Branded delete confirmation. Uses the shared DeleteConfirmDialog
+        (rounded card, branded buttons) so highlights aren't deleted
+        through the OS's native "localhost:3000 says…" alert. No
+        "type DELETE" requirement — a highlight is a low-stakes
+        deletion and friction here would feel punitive.
+      */}
+      <DeleteConfirmDialog
+        open={deletePending !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeletePending(null);
+        }}
+        title="Delete highlight?"
+        description={
+          deletePending?.highlighted_text ? (
+            <span>
+              The selection{" "}
+              <span className="italic text-ink/90">
+                “{deletePending.highlighted_text.length > 80
+                  ? `${deletePending.highlighted_text.slice(0, 80)}…`
+                  : deletePending.highlighted_text}”
+              </span>{" "}
+              and any note attached to it will be removed. This can't be undone.
+            </span>
+          ) : (
+            "This highlight and any note attached to it will be removed. This can't be undone."
+          )
+        }
+        confirmLabel="Delete highlight"
+        isDeleting={isDeleting}
+        requireDeleteText={false}
+        onConfirm={async () => {
+          if (!deletePending) return;
+          setIsDeleting(true);
+          try {
+            setOpenId(null);
+            await remove(deletePending.id);
+            setDeletePending(null);
+          } finally {
+            setIsDeleting(false);
+          }
+        }}
+      />
     </div>
   );
 }

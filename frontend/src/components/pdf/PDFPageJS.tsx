@@ -22,6 +22,11 @@ interface PDFPageJSProps {
   // uniform column instead of a ragged stack. Falls back to scale-based
   // rendering when omitted.
   baseWidth?: number | null;
+  // Pre-rendered page image from the backend. Shown absolute-positioned
+  // behind the canvas the moment the slot mounts, so the user never sees
+  // a blank box while PDF.js's worker churns. Fades out the instant
+  // PDF.js' onRenderSuccess fires.
+  previewImageUrl?: string | null;
   highlights: Citation[];
   annotations?: Annotation[];
   documentId?: string | null;
@@ -52,6 +57,7 @@ export function PDFPageJS({
   pageNumber,
   zoom,
   baseWidth = null,
+  previewImageUrl = null,
   highlights,
   annotations = [],
   documentId = null,
@@ -211,15 +217,12 @@ export function PDFPageJS({
       }
     };
 
+    // Run once now and let the MutationObserver catch every later
+    // text-layer update. Earlier versions also fired setTimeout
+    // retries at 80/320/1000ms, but those just duplicated work the
+    // observer already covers and added per-page CPU during scrolls.
     tagNumbers();
-    const timers = [
-      window.setTimeout(tagNumbers, 80),
-      window.setTimeout(tagNumbers, 320),
-      window.setTimeout(tagNumbers, 1000),
-    ];
 
-    // Re-tag on text-layer mutations (pdf.js sometimes re-renders the
-    // text layer on zoom or after a delay).
     let debounce: number | null = null;
     const debounced = () => {
       if (debounce) window.clearTimeout(debounce);
@@ -248,7 +251,6 @@ export function PDFPageJS({
 
     return () => {
       cancelled = true;
-      timers.forEach((t) => window.clearTimeout(t));
       if (debounce) window.clearTimeout(debounce);
       textLayerObserver?.disconnect();
       rootObserver?.disconnect();
@@ -363,43 +365,37 @@ export function PDFPageJS({
       return;
     }
     const rootRect = root.getBoundingClientRect();
+    // Use the browser's own per-line rects for the selection. We
+    // tried walking text nodes by hand, but PDF.js text-layer DOM
+    // order doesn't always match visual order (footers, multi-
+    // column blocks, etc.) — so `range.intersectsNode` would catch
+    // nodes that are visually outside the user's drag path and
+    // their rects would bleed into the highlight. getClientRects()
+    // is computed against the actual visual selection, which is
+    // what the user sees, so it's the right source of truth.
     const rawRects = Array.from(range.getClientRects()).filter(
       (rect) => rect.width > 1 && rect.height > 1,
     );
     if (rawRects.length === 0) {
       return;
     }
-    // PDF.js renders each word (sometimes each glyph cluster) as its
-    // own text-layer span, so a multi-word selection produces one
-    // DOMRect per span — painting those raw would yield a stripey
-    // word-per-word highlight. Merge rects that share the same visual
-    // line into a single continuous box so the highlight reads as one
-    // contiguous strip per line, the way every PDF reader draws them.
+    // No per-line merging. Every previous attempt at merging
+    // (bridging-anything-on-the-same-line / adjacency thresholds /
+    // tree-walking) ended up dragging the highlight onto words the
+    // user did not select — PDF.js text-layer rects can extend past
+    // the visible glyph cluster, especially for justified runs and
+    // overlapping spans. So we just record each per-character-cluster
+    // rect that the browser already computed against the visual
+    // selection. AnnotationOverlay renders these as solid borderless
+    // tiles, so adjacent rects read as one continuous strip even
+    // though they're stored separately.
     type Strip = { left: number; right: number; top: number; bottom: number };
-    const sorted = [...rawRects].sort(
-      (a, b) => a.top - b.top || a.left - b.left,
-    );
-    const lines: Strip[] = [];
-    for (const rect of sorted) {
-      const last = lines[lines.length - 1];
-      const sameLine =
-        last !== undefined &&
-        Math.abs((last.top + last.bottom) / 2 - (rect.top + rect.bottom) / 2) <
-          Math.min(rect.height, last.bottom - last.top) * 0.6;
-      if (sameLine && last !== undefined) {
-        last.left = Math.min(last.left, rect.left);
-        last.right = Math.max(last.right, rect.right);
-        last.top = Math.min(last.top, rect.top);
-        last.bottom = Math.max(last.bottom, rect.bottom);
-      } else {
-        lines.push({
-          left: rect.left,
-          right: rect.right,
-          top: rect.top,
-          bottom: rect.bottom,
-        });
-      }
-    }
+    const lines: Strip[] = rawRects.map((rect) => ({
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      bottom: rect.bottom,
+    }));
     const scaleX = pageSize.pdfWidth / pageSize.width;
     const scaleY = pageSize.pdfHeight / pageSize.height;
     const boxes = lines.map((line) => {
@@ -509,9 +505,26 @@ export function PDFPageJS({
   return (
     <div
       ref={containerRef}
-      className="relative mx-auto bg-white shadow-[0_4px_18px_rgba(15,23,42,0.06)]"
+      // Slot in PDFViewer owns the page-shaped background + shadow,
+      // so this container just needs to be a positioning context for
+      // the canvas, overlays, and any popovers.
+      className="relative mx-auto"
       onMouseUp={handleMouseUp}
     >
+      {previewImageUrl ? (
+        // Backend JPEG preview painted underneath the canvas. Visible
+        // for the ~hundreds of ms PDF.js needs to render its canvas,
+        // then faded out. Same trick Google Drive and Adobe Reader
+        // web use to avoid the "blank rectangle" wait.
+        <img
+          src={previewImageUrl}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          className="pointer-events-none absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ease-out"
+          style={{ opacity: pageSize ? 0 : 1 }}
+        />
+      ) : null}
       <Page
         pageNumber={pageNumber}
         {...(baseWidth && baseWidth > 0
@@ -521,12 +534,16 @@ export function PDFPageJS({
         renderAnnotationLayer
         onRenderSuccess={handleRenderSuccess}
         loading={
-          <div className="flex h-[600px] w-[480px] items-center justify-center text-sm text-muted">
+          // Thin label only — the slot in PDFViewer already paints a
+          // page-shaped white background, so the user sees a blank
+          // sheet of paper with a small "Loading page N…" caption at
+          // the top instead of a tiny grey-bordered box.
+          <div className="flex w-full justify-center py-10 text-[11px] uppercase tracking-[0.18em] text-muted/60">
             Loading page {pageNumber}…
           </div>
         }
         error={
-          <div className="flex h-[400px] w-[480px] items-center justify-center text-sm text-warn">
+          <div className="flex w-full justify-center py-10 text-[11px] uppercase tracking-[0.18em] text-warn">
             Failed to render page {pageNumber}
           </div>
         }

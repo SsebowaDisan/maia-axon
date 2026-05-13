@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.endpoints import (
+    admin_learn,
     annotations,
     auth,
     chat,
@@ -10,6 +11,7 @@ from app.api.endpoints import (
     export_destinations,
     feedback,
     groups,
+    learn,
     projects,
     translate,
     users,
@@ -51,6 +53,12 @@ api_router.include_router(annotations.router)
 
 # Translate (ephemeral PDF passage translation)
 api_router.include_router(translate.router)
+
+# Learn mode (path generation, check-ins, mindmap data)
+api_router.include_router(learn.router)
+
+# Admin: learn-mode QA / review tools
+api_router.include_router(admin_learn.router)
 
 # WebSocket (mounted at root level, not under /api)
 ws_router = ws.router

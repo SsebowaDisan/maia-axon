@@ -14,6 +14,11 @@ interface PDFViewerState {
   pageCache: Record<string, PageData>;
   pageData: PageData | null;
   loading: boolean;
+  // Optional surface to auto-open once the viewer mounts a document.
+  // Library cards set this to "mindmap" before triggering the open
+  // flow; PDFViewer reads + clears it on first effect.
+  pendingAutoOpen: "mindmap" | null;
+  setPendingAutoOpen: (value: "mindmap" | null) => void;
   // Increments on every openCitation call (even when the user clicks the
   // same chip twice). The PDFViewer scroll/visible-range effects include
   // this nonce in their dedupe keys so a repeat click re-triggers the
@@ -45,6 +50,10 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
   pageData: null,
   loading: false,
   openClickNonce: 0,
+  pendingAutoOpen: null,
+  setPendingAutoOpen(value) {
+    set({ pendingAutoOpen: value });
+  },
   async prefetchPages(document, pageNumbers) {
     const uniquePageNumbers = [...new Set(pageNumbers)]
       .filter((pageNumber) => pageNumber >= 1 && (!document.page_count || pageNumber <= document.page_count));

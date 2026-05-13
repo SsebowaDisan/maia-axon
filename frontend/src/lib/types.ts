@@ -3,7 +3,8 @@ export type SearchMode =
   | "deep_search"
   | "standard"
   | "google_analytics"
-  | "google_ads";
+  | "google_ads"
+  | "learn";
 
 export type StreamingStatus = "idle" | "retrieving" | "reasoning" | "calculating" | "done";
 
@@ -107,6 +108,9 @@ export interface Document {
   uploaded_by: string;
   created_at: string;
   updated_at: string;
+  // 0 until the section-mapping pipeline has run; the library card
+  // surfaces a "Mindmap" badge when this is > 0.
+  section_count?: number;
 }
 
 export type DocumentStatusValue =
@@ -329,8 +333,178 @@ export type WsServerEvent =
   | { type: "visualizations"; data: MessageVisualization[] }
   | { type: "mindmap"; data: MindmapNode }
   | { type: "warnings"; data: string[] }
-  | { type: "done"; conversation_id: string; suggested_questions?: string[] | null }
+  | {
+      type: "done";
+      conversation_id: string;
+      suggested_questions?: string[] | null;
+      // Set by the WS server when learn mode was requested but no
+      // active path exists for the document — the frontend pops the
+      // Start learning dialog.
+      needs_diagnostic?: boolean;
+    }
   | { type: "error"; message: string };
+
+// ---------------------------------------------------------------------------
+// Learn mode
+// ---------------------------------------------------------------------------
+
+export type LearnDepth = "quick" | "normal" | "deep";
+
+export type LearnPathStatus = "active" | "paused" | "completed" | "stale";
+
+export interface LearnPathStep {
+  section_id: string;
+  title: string;
+  rationale: string;
+  page_start: number;
+  page_end: number;
+  is_target: boolean;
+  is_prereq: boolean;
+  status: "pending" | "in_progress" | "completed" | "skipped";
+  completed_at: string | null;
+  mastery_delta_json: Record<string, { previous: number; new: number }> | null;
+}
+
+export interface LearnPath {
+  id: string;
+  document_id: string;
+  user_id: string;
+  status: LearnPathStatus;
+  goal_text: string;
+  depth: LearnDepth;
+  plan: LearnPathStep[];
+  current_step: number;
+  recompute_count: number;
+  started_at: string;
+  last_active_at: string;
+  completed_at: string | null;
+}
+
+export type CheckInQuestionType =
+  | "mcq"
+  | "numeric"
+  | "symbolic"
+  | "free_text"
+  | "counterexample"
+  | "code";
+
+export interface CheckInChoice {
+  label: string;
+  text: string;
+}
+
+export interface CheckInQuestion {
+  id: string;
+  section_id: string;
+  question_type: CheckInQuestionType;
+  stem: string;
+  payload: {
+    choices?: CheckInChoice[];
+    units?: string | null;
+    tolerance?: number | null;
+    variables?: string[];
+    [key: string]: unknown;
+  };
+  difficulty: number;
+  estimated_seconds: number;
+  display_ordinal: number;
+}
+
+export interface MasteryUpdate {
+  concept_id: string;
+  previous_score: number;
+  new_score: number;
+  is_known_now: boolean;
+  became_known: boolean;
+  became_unknown: boolean;
+}
+
+export interface CheckInResult {
+  is_correct: boolean;
+  score: number;
+  feedback: string;
+  explanation: string;
+  misconception_tag: string | null;
+  mastery_updates: MasteryUpdate[];
+  section_completed: boolean;
+}
+
+export interface MindmapSectionNode {
+  id: string;
+  kind: "topic" | "subtopic" | "headline";
+  title: string;
+  page_start: number;
+  page_end: number;
+  ordinal: number;
+  summary: string | null;
+  concept_ids: string[];
+  mastery_score: number | null;
+  children: MindmapSectionNode[];
+}
+
+// ---------------------------------------------------------------------------
+// Admin learn-mode review surface
+// ---------------------------------------------------------------------------
+
+export interface AdminLearnDocumentRow {
+  id: string;
+  filename: string;
+  page_count: number | null;
+  section_count: number;
+  flagged_section_count: number;
+  question_count: number;
+  updated_at: string;
+}
+
+export interface AdminLearnSectionSummary {
+  id: string;
+  parent_id: string | null;
+  kind: "topic" | "subtopic" | "headline";
+  title: string;
+  page_start: number;
+  page_end: number;
+  ordinal: number;
+  review_flags: string[];
+  has_questions: boolean;
+}
+
+export interface AdminLearnSectionDetail {
+  id: string;
+  document_id: string;
+  parent_id: string | null;
+  kind: "topic" | "subtopic" | "headline";
+  title: string;
+  page_start: number;
+  page_end: number;
+  ordinal: number;
+  content_json: Record<string, unknown> | null;
+  question_count: number;
+}
+
+export interface AdminLearnQuestionRow {
+  id: string;
+  section_id: string;
+  question_type: CheckInQuestionType;
+  stem: string;
+  payload: Record<string, unknown>;
+  explanation: string;
+  concept_ids: string[];
+  difficulty: number;
+  estimated_seconds: number;
+  misconception_tags: string[];
+  display_ordinal: number;
+  review_meta: { source_quote?: string; confidence?: number; leakage_flag?: boolean } | null;
+}
+
+export interface AdminLearnConceptRow {
+  id: string;
+  canonical_name: string;
+  canonical_definition: string;
+  aliases: string[] | null;
+  difficulty_tier: number | null;
+  introduction_count: number;
+  application_count: number;
+}
 
 export interface UploadProgressState {
   fileName: string;

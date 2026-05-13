@@ -38,11 +38,14 @@ function formatModeLabel(mode: SearchMode) {
   if (mode === "google_ads") {
     return "Google Ads";
   }
+  if (mode === "learn") {
+    return "Learn";
+  }
   return "Library";
 }
 
 function isDocumentMode(mode: SearchMode) {
-  return mode === "library" || mode === "deep_search";
+  return mode === "library" || mode === "deep_search" || mode === "learn";
 }
 
 function isGoogleMode(mode: SearchMode): mode is Extract<SearchMode, "google_analytics" | "google_ads"> {
@@ -486,24 +489,34 @@ export function Composer() {
       ) : null}
 
       {passageContext ? (
-        <div className="mb-3 flex items-start gap-2 rounded-2xl border border-black/[0.08] bg-white px-3 py-2 shadow-[0_8px_22px_rgba(15,23,42,0.04)]">
-          <Quote className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
-          <div className="min-w-0 flex-1">
-            <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted">
-              {passageContext.documentName ?? "Passage"} · page {passageContext.pageNumber}
-            </p>
-            <p className="mt-1 line-clamp-3 text-[12px] leading-5 text-ink/85">
+        // Pill-style chip matching the Library/#topic chips above.
+        // Hugs its own content (inline-flex + max-w-full) so a short
+        // quote stays short; longer quotes truncate at 280px with an
+        // ellipsis and a title attribute for hover-to-read-full.
+        <div className="mb-2">
+          <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-black/[0.06] bg-[#f7f7f6] py-1.5 pl-3 pr-1.5">
+            <Quote className="h-3 w-3 shrink-0 text-muted/70" />
+            <span
+              className="max-w-[180px] shrink-0 truncate text-[10px] font-medium uppercase tracking-[0.14em] text-muted"
+              title={passageContext.documentName ?? "Passage"}
+            >
+              {passageContext.documentName ?? "Passage"} · p{passageContext.pageNumber}
+            </span>
+            <span
+              className="max-w-[280px] truncate text-[11px] italic text-ink/75"
+              title={passageContext.text}
+            >
               “{passageContext.text}”
-            </p>
+            </span>
+            <button
+              type="button"
+              onClick={clearPassageContext}
+              aria-label="Remove attached passage"
+              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted transition hover:bg-black/[0.08] hover:text-ink"
+            >
+              <X className="h-3 w-3" />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={clearPassageContext}
-            aria-label="Remove attached passage"
-            className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted transition hover:bg-black/[0.06] hover:text-ink"
-          >
-            <X className="h-3 w-3" />
-          </button>
         </div>
       ) : null}
 
@@ -514,7 +527,7 @@ export function Composer() {
             variant="secondary"
             size="icon"
             onClick={() => setShowModeMenu((current) => !current)}
-            className="h-14 w-14 shrink-0 rounded-full bg-black text-white shadow-[0_16px_36px_rgba(15,23,42,0.14)] transition hover:scale-[1.01] hover:bg-black/92"
+            className="h-14 w-14 shrink-0 rounded-full bg-[#2a2522] text-white shadow-[0_16px_36px_rgba(15,23,42,0.14)] transition hover:scale-[1.01] hover:bg-[#1f1b18]"
           >
             <Plus className="h-4 w-4" />
           </Button>
@@ -546,7 +559,7 @@ export function Composer() {
         </div>
 
         <div
-          className={`flex min-h-[60px] flex-1 flex-wrap gap-2 border border-black/[0.08] bg-white px-4 py-2.5 shadow-[0_12px_30px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.92)] transition focus-within:border-black/[0.14] focus-within:ring-4 focus-within:ring-black/[0.035] ${
+          className={`flex min-h-[60px] flex-1 flex-wrap gap-2 border border-black/[0.08] bg-white/70 px-4 py-2.5 shadow-[0_12px_30px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.92)] transition focus-within:border-black/[0.14] focus-within:ring-4 focus-within:ring-black/[0.035] ${
             isExpandedComposer ? "max-h-[260px] items-start overflow-y-auto rounded-[28px] scrollbar-thin" : "items-center rounded-[999px]"
           }`}
         >
@@ -680,7 +693,7 @@ export function Composer() {
         <Button
           type="button"
           size="icon"
-          className="h-14 w-14 shrink-0 rounded-full bg-black text-white shadow-[0_16px_36px_rgba(15,23,42,0.14)] transition hover:scale-[1.01] hover:bg-black/92 disabled:bg-black disabled:text-white disabled:opacity-100 disabled:hover:scale-100"
+          className="h-14 w-14 shrink-0 rounded-full bg-[#2a2522] text-white shadow-[0_16px_36px_rgba(15,23,42,0.14)] transition hover:scale-[1.01] hover:bg-[#1f1b18] disabled:bg-[#2a2522] disabled:text-white disabled:opacity-100 disabled:hover:scale-100"
           onClick={() => {
             if (streaming) {
               stopStreaming();

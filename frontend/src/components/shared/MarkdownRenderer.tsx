@@ -83,25 +83,27 @@ export function MarkdownRenderer({
           return <span className="text-accent">{children}</span>;
         },
         h1({ children }) {
-          return <h1 className="mt-2 text-[1.9rem] font-semibold tracking-[-0.05em] text-ink">{children}</h1>;
+          return <h1 className="mt-4 text-[2.05rem] font-semibold tracking-[-0.04em] text-ink">{children}</h1>;
         },
         h2({ children }) {
-          return <h2 className="mt-10 border-t border-black/6 pt-6 text-[1.34rem] font-semibold tracking-[-0.03em] text-ink">{children}</h2>;
+          return <h2 className="mt-10 pt-2 text-[1.5rem] font-semibold tracking-[-0.025em] text-ink">{children}</h2>;
         },
         h3({ children }) {
-          return <h3 className="mt-7 text-[1.08rem] font-semibold tracking-[-0.02em] text-ink">{children}</h3>;
+          return <h3 className="mt-7 text-[1.225rem] font-semibold tracking-[-0.015em] text-ink">{children}</h3>;
         },
         ul({ children }) {
-          return <ul className="my-5 space-y-3 pl-0">{children}</ul>;
+          // Font size & line-height come from .chat-markdown CSS so
+          // assistant message bodies stay consistent (19px serif).
+          return <ul className="my-5 space-y-3 pl-0 text-ink">{children}</ul>;
         },
         ol({ children }) {
-          return <ol className="my-5 space-y-3 pl-0">{children}</ol>;
+          return <ol className="my-5 space-y-3 pl-0 text-ink">{children}</ol>;
         },
         li({ children }) {
           return <li className="ml-6 pl-1 marker:text-black/35">{children}</li>;
         },
         p({ children }) {
-          return <p className="my-5 text-[16px] leading-9 text-ink">{children}</p>;
+          return <p className="my-5 text-ink">{children}</p>;
         },
         img({ src, alt }) {
           return (

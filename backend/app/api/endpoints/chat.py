@@ -2,6 +2,7 @@
 Chat endpoint: REST fallback for non-streaming chat.
 WebSocket streaming is handled in ws.py.
 """
+import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
-from app.core.database import get_db
+from app.core.database import SyncSessionLocal, get_db
 from app.models.chunk import Chunk
 from app.models.company import Company
 from app.models.conversation import Conversation, Message
@@ -31,6 +32,7 @@ from app.services.prompt_attachments import (
 )
 from app.services.answer_engine import (
     AnswerResponse,
+    AnswerSection,
     generate_answer,
     generate_conversation_metadata,
     generate_welcome_payload,
@@ -38,13 +40,18 @@ from app.services.answer_engine import (
     structural_listing_agent,
 )
 from app.services.google_marketing import generate_ga4_answer, generate_google_ads_answer
+from app.services.learn_chat import (
+    build_learn_system_prompt,
+    fallback_no_path_message,
+    get_learn_chat_context,
+)
 from app.services.projects import ensure_default_project
 from app.services.retrieval import deep_search, library_search
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 GOOGLE_MODES = {"google_analytics", "google_ads"}
-DOCUMENT_MODES = {"library", "deep_search"}
+DOCUMENT_MODES = {"library", "deep_search", "learn"}
 
 
 def _page_number_from_metadata(metadata: dict | None) -> int:
@@ -233,6 +240,11 @@ async def chat(
 
     if body.mode in DOCUMENT_MODES and body.group_id is None:
         raise HTTPException(status_code=400, detail="Group is required for grounded chat")
+    if body.mode == "learn" and not body.document_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Learn mode requires a single document_id",
+        )
     if body.mode in GOOGLE_MODES and body.company_id is None:
         raise HTTPException(status_code=400, detail="Company is required for Google data chat")
 
@@ -307,6 +319,8 @@ async def chat(
         )
 
     # Retrieve sources unless the user requested direct LLM mode
+    learn_ctx = None
+    learn_no_path = False
     if body.mode == "google_analytics":
         answer = generate_ga4_answer(effective_message, company)
         sources = []
@@ -318,6 +332,31 @@ async def chat(
     elif body.mode == "deep_search":
         retrieval = await deep_search(db, effective_message, body.group_id, body.document_ids)
         sources = retrieval.results
+    elif body.mode == "learn":
+        def _load_learn():
+            sync_db = SyncSessionLocal()
+            try:
+                return get_learn_chat_context(
+                    sync_db,
+                    user_id=user.id,
+                    document_id=body.document_ids[0],
+                )
+            finally:
+                sync_db.close()
+
+        learn_ctx = await asyncio.to_thread(_load_learn)
+        if learn_ctx is None:
+            learn_no_path = True
+            sources = []
+        else:
+            # Scope learn-mode retrieval to the one document the path is on.
+            retrieval = await library_search(
+                db,
+                effective_message,
+                body.group_id,
+                [learn_ctx.document_id],
+            )
+            sources = retrieval.results
     else:
         retrieval = await library_search(db, effective_message, body.group_id, body.document_ids)
         sources = retrieval.results
@@ -325,12 +364,31 @@ async def chat(
     # Generate answer
     if body.mode in GOOGLE_MODES:
         serialized = _serialize_answer(answer)
+    elif body.mode == "learn" and learn_no_path:
+        # No path yet — return the diagnostic-prompt fallback as a
+        # plain assistant message. Frontend reads this as "open the
+        # Start learning dialog".
+        fallback_text = fallback_no_path_message(None)
+        answer = AnswerResponse(
+            text=fallback_text,
+            sections=[AnswerSection(type="explanation", content=fallback_text, grounded=False)],
+            citations=[],
+        )
+        serialized = _serialize_answer(answer)
     elif is_structural_listing_sources(sources):
         answer = structural_listing_agent(sources)
         serialized = _serialize_answer(answer)
     else:
+        query_for_answer = effective_message
+        if body.mode == "learn" and learn_ctx is not None:
+            tutor_prefix = build_learn_system_prompt(learn_ctx)
+            query_for_answer = (
+                f"[LEARN MODE TUTOR CONTEXT — treat as instructions, not as the user's question]\n"
+                f"{tutor_prefix}\n\n"
+                f"[USER'S QUESTION]\n{effective_message}"
+            )
         answer = await generate_answer(
-            query=effective_message,
+            query=query_for_answer,
             sources=sources,
             conversation_history=history,
             search_mode=body.mode,

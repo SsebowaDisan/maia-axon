@@ -6,9 +6,16 @@
 @import "@xyflow/react/dist/style.css";
 
 :root {
-  --bg: 245 245 247;
-  --panel: 255 255 255;
-  --line: 226 226 231;
+  /*
+   * Warm coffee-white instead of cold near-white. --bg paints the
+   * canvas (visible behind panels), --panel paints cards and the
+   * chat surface. Both are warm enough to be obviously off-white
+   * but light enough that ink-on-panel contrast still meets WCAG
+   * AA at body-text sizes.
+   */
+  --bg: 244 239 230;
+  --panel: 251 248 242;
+  --line: 226 222 214;
   --ink: 17 17 17;
   --muted: 115 115 115;
   --accent: 17 17 17;
@@ -16,12 +23,19 @@
   --warn: 90 90 90;
   --success: 90 90 90;
   --danger: 17 17 17;
-  --font-display:
-    "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Helvetica Neue",
-    Helvetica, Arial, sans-serif;
+  /*
+   * ONE font family across the whole app. SF Pro on Apple devices,
+   * cascading through system / fallback sans-serif stacks elsewhere.
+   * --font-display kept as an alias of --font-sans so existing
+   * `.font-display` class usages stay valid without rendering a
+   * different font. Hierarchy comes from size / weight / tracking,
+   * not from family. No webfonts are loaded — zero network cost,
+   * zero font-swap flicker.
+   */
   --font-sans:
-    "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Helvetica Neue",
-    Helvetica, Arial, sans-serif;
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-display: var(--font-sans);
   --font-mono: "SF Mono", "SFMono-Regular", ui-monospace, Menlo, Monaco, Consolas, monospace;
 }
 
@@ -45,12 +59,24 @@
 html,
 body,
 #__next {
-  min-height: 100%;
+  height: 100%;
+  /*
+   * The app fills the viewport with `h-screen` shells; all scrolling
+   * happens inside those shells via .scrollbar-thin containers.
+   * Locking the document itself to non-scrollable kills the
+   * platform-native window scrollbar (the one with arrow buttons on
+   * Windows) that would otherwise appear whenever anything ever-so-
+   * slightly pushed past 100vh.
+   */
+  overflow: hidden;
 }
 
 body {
   color: rgb(var(--ink) / 1);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(245, 245, 247, 1));
+  /* Warm gradient from a creamy top to a slightly deeper cream
+     bottom — matches the --bg token and gives the page a paper
+     feel instead of a clinical white. */
+  background: linear-gradient(180deg, rgba(251, 247, 240, 0.92), rgba(244, 239, 230, 1));
   font-family: var(--font-sans), sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -73,21 +99,13 @@ body {
   position: relative;
   min-height: 240px;
   border-radius: 0;
-  border-left: 1px solid rgba(17, 17, 17, 0.08);
+  /* Warm cream that fades into the body gradient — same colour
+     family as --panel so the surface doesn't read as a stark white
+     overlay on the cream canvas. */
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.44) 140px, rgba(255, 255, 255, 0)),
+    linear-gradient(180deg, rgba(251, 248, 242, 0.82), rgba(251, 248, 242, 0.44) 140px, rgba(251, 248, 242, 0)),
     transparent;
   padding: 1.15rem 0 0.5rem 2rem;
-}
-
-.answer-workspace-surface::before {
-  content: "";
-  position: absolute;
-  left: -1px;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: linear-gradient(180deg, rgba(17, 17, 17, 0.12), rgba(17, 17, 17, 0.03));
 }
 
 .answer-workspace-header {
@@ -96,27 +114,24 @@ body {
   max-width: none;
 }
 
-.answer-workspace-header::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 1px;
-  background: linear-gradient(90deg, rgba(17, 17, 17, 0.08), rgba(17, 17, 17, 0.02));
-}
-
 .answer-workspace-body {
   max-width: none;
 }
 
 .answer-workspace-body .chat-markdown {
-  font-size: 1.02rem;
+  /* Single font family across the whole app — SF Pro for both
+     chrome and prose. Inherits from <body> via --font-sans, so
+     we just keep the reading-friendly size + line-height here. */
+  font-size: 1.1875rem; /* 19px — comfortable for long-form reading */
+  line-height: 1.7;
+  letter-spacing: -0.005em;
   max-width: 90ch;
 }
 
 .answer-workspace-body .chat-markdown p {
-  max-width: 74ch;
+  /* Slightly tighter line length to keep paragraphs readable at 19px.
+     Optimal reading length is ~50–75 characters per line. */
+  max-width: 68ch;
 }
 
 .answer-canvas {
@@ -133,12 +148,7 @@ body {
 
 @media (max-width: 768px) {
   .answer-workspace-surface {
-    border-left: 0;
     padding-left: 0;
-  }
-
-  .answer-workspace-surface::before {
-    display: none;
   }
 }
 
@@ -148,6 +158,18 @@ body {
 
 .chat-markdown > :last-child {
   margin-bottom: 0;
+}
+
+/* Headings inherit the body's SF Pro stack via --font-sans —
+   no per-element font-family override. Hierarchy is size + weight
+   + letter-spacing only. */
+.answer-workspace-body .chat-markdown h1,
+.answer-workspace-body .chat-markdown h2,
+.answer-workspace-body .chat-markdown h3,
+.answer-workspace-body .chat-markdown h4,
+.answer-workspace-body .chat-markdown h5,
+.answer-workspace-body .chat-markdown h6 {
+  letter-spacing: -0.02em;
 }
 
 .chat-markdown hr {
@@ -180,22 +202,44 @@ body {
 }
 
 .font-display {
-  font-family: var(--font-display), sans-serif;
+  /* Same family as body (--font-display === --font-sans). Kept as a
+     class so the many existing `font-display` usages on page titles /
+     dialog titles still compile, but it no longer switches family —
+     it's only here as a semantic marker for "display-sized text". */
+  font-family: var(--font-sans), sans-serif;
 }
 
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: rgb(var(--line) / 1) transparent;
+  /* Fully transparent by default; thumb fades in on hover (Mac /
+     ChatGPT-style overlay scrollbars). Keeps the cream surfaces
+     uncluttered when the user isn't actively scrolling. */
+  scrollbar-color: transparent transparent;
+}
+
+.scrollbar-thin:hover,
+.scrollbar-thin:focus-within {
+  scrollbar-color: rgba(17, 17, 17, 0.18) transparent;
 }
 
 .scrollbar-thin::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background: rgb(210 210 210 / 1);
+  background: transparent;
   border-radius: 999px;
+  transition: background 160ms ease-out;
+}
+
+.scrollbar-thin:hover::-webkit-scrollbar-thumb,
+.scrollbar-thin:focus-within::-webkit-scrollbar-thumb {
+  background: rgba(17, 17, 17, 0.22);
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: rgba(17, 17, 17, 0.36);
 }
 
 .scrollbar-thin::-webkit-scrollbar-track {

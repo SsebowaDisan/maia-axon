@@ -117,12 +117,12 @@ export function MessageList({
   if (!messages.length && hasRestorableConversation && (!chatHydrated || !conversationHydrated || conversationLoading)) {
     return (
       <div className="mx-auto flex min-h-full w-full max-w-[980px] flex-col justify-start px-6 pb-10 pt-4">
-        <div className="border-l border-black/10 pl-8">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-muted">
+        <div>
+          <p className="text-[13px] font-medium text-muted">
             Restoring conversation
           </p>
-          <p className="mt-4 text-base leading-8 text-muted">
-            Loading your previous chat...
+          <p className="mt-3 text-base leading-7 text-muted">
+            Loading your previous chat…
           </p>
         </div>
       </div>
@@ -183,14 +183,16 @@ function WelcomeCanvas() {
 
   return (
     <div className="mx-auto flex min-h-full w-full max-w-[980px] flex-col justify-start px-6 pb-10 pt-4">
-      <div className="border-l border-black/10 pl-8">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-muted">
-          Document-grounded chat
-        </p>
-        <p className="mt-3 font-display text-[2.15rem] font-semibold tracking-[-0.05em] text-ink">
+      {/*
+        Welcome canvas now matches the assistant message body styling:
+        no left border line, no tracked-uppercase eyebrow, headings
+        inherit the same SF Pro stack as the rest of the chat.
+      */}
+      <div className="answer-workspace-body">
+        <p className="text-[2.05rem] font-semibold tracking-[-0.04em] text-ink">
           Maia AI
         </p>
-        <div className="mt-6 max-w-[820px]">
+        <div className="mt-6 chat-markdown max-w-[820px]">
           <MarkdownRenderer
             content={displayedMarkdown || buildWelcomeMarkdown(welcome.intro_markdown)}
             citations={[]}
@@ -198,8 +200,8 @@ function WelcomeCanvas() {
         </div>
         {!!welcome.suggested_questions.length && (
           <div className="mt-8">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-muted">
-              Suggested Questions
+            <p className="text-[13px] font-medium text-muted">
+              Suggested questions
             </p>
             <div className="mt-4 flex flex-wrap gap-3">
               {welcome.suggested_questions.map((question) => (
@@ -210,7 +212,7 @@ function WelcomeCanvas() {
                     setDraftMode("compose");
                     setDraft(question);
                   }}
-                  className="rounded-full border border-black/10 bg-white px-4 py-2 text-left text-[14px] text-ink transition hover:border-black hover:bg-black hover:text-white"
+                  className="rounded-full border border-black/10 bg-white/55 px-4 py-2 text-left text-[14px] text-ink transition hover:border-black hover:bg-black hover:text-white"
                 >
                   {question}
                 </button>

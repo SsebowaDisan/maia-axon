@@ -93,13 +93,13 @@ export function GroupManager({
       <div className="flex h-full min-h-0 flex-col gap-4">
         <button
           type="button"
-          className="flex w-full items-center gap-4 rounded-[26px] border border-dashed border-line bg-white/60 px-5 py-5 text-left transition hover:bg-white/80"
+          className="flex w-full shrink-0 items-center gap-4 rounded-[26px] border border-dashed border-line bg-white/60 px-5 py-5 text-left transition hover:bg-white/80"
           onClick={() => {
             resetProjectDraft();
             setProjectDialogOpen(true);
           }}
         >
-          <span className="flex h-12 w-12 items-center justify-center rounded-full bg-black text-white">
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-black text-white">
             <Plus className="h-5 w-5" />
           </span>
           <div>
@@ -192,7 +192,7 @@ export function GroupManager({
           <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" onDoubleClick={requestProjectClose} />
           <Dialog.Content
             aria-describedby={undefined}
-            className="fixed left-1/2 top-1/2 z-[80] w-[min(460px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
+            className="fixed left-1/2 top-1/2 z-[80] w-[min(460px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-panel p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
             onPointerDownOutside={handleProjectPointerDownOutside}
             onEscapeKeyDown={handleProjectEscapeKeyDown}
             onFocusOutside={handleProjectFocusOutside}
@@ -249,7 +249,7 @@ export function GroupManager({
           <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]" onDoubleClick={requestDeleteClose} />
           <Dialog.Content
             aria-describedby={undefined}
-            className="fixed left-1/2 top-1/2 z-[80] w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-white p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
+            className="fixed left-1/2 top-1/2 z-[80] w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[30px] border border-black/[0.06] bg-panel p-6 shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none"
             onPointerDownOutside={handleDeletePointerDownOutside}
             onEscapeKeyDown={handleDeleteEscapeKeyDown}
             onFocusOutside={handleDeleteFocusOutside}

@@ -95,7 +95,9 @@ function OutlineNode({
     <div>
       <div
         className={`group flex items-start gap-1 rounded-md px-1 py-1 text-[12px] leading-5 transition ${
-          isActive ? "bg-black/[0.06] text-ink" : "text-ink/85 hover:bg-black/[0.04]"
+          isActive
+            ? "bg-white/15 text-white"
+            : "text-white/80 hover:bg-white/[0.06] hover:text-white"
         }`}
         style={{ paddingLeft: 4 + depth * 10 }}
       >
@@ -104,7 +106,7 @@ function OutlineNode({
             type="button"
             aria-label={expanded ? "Collapse" : "Expand"}
             onClick={() => setExpanded((value) => !value)}
-            className="mt-0.5 shrink-0 text-muted hover:text-ink"
+            className="mt-0.5 shrink-0 text-white/50 hover:text-white"
           >
             {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
           </button>
@@ -133,7 +135,7 @@ function OutlineNode({
           </button>
         ) : (
           <span
-            className="min-w-0 flex-1 truncate text-left text-muted"
+            className="min-w-0 flex-1 truncate text-left text-white/50"
             title={node.title}
             style={{ fontWeight: node.bold ? 600 : 400, fontStyle: node.italic ? "italic" : "normal" }}
           >
@@ -141,7 +143,7 @@ function OutlineNode({
           </span>
         )}
         {node.pageNumber !== null && !node.url ? (
-          <span className="ml-1 shrink-0 text-[10px] tabular-nums text-muted/70">
+          <span className="ml-1 shrink-0 text-[10px] tabular-nums text-white/45">
             {node.pageNumber}
           </span>
         ) : null}
@@ -196,7 +198,7 @@ export function PDFOutline({ pdf, currentPage, onSelectPage }: PDFOutlineProps) 
 
   if (loading) {
     return (
-      <div className="px-3 py-4 text-[11px] uppercase tracking-[0.16em] text-muted">
+      <div className="px-3 py-4 text-[11px] uppercase tracking-[0.16em] text-white/55">
         Loading outline…
       </div>
     );
@@ -204,7 +206,7 @@ export function PDFOutline({ pdf, currentPage, onSelectPage }: PDFOutlineProps) 
 
   if (!outline || outline.length === 0) {
     return (
-      <div className="px-3 py-4 text-[11px] leading-5 text-muted">
+      <div className="px-3 py-4 text-[11px] leading-5 text-white/55">
         This PDF has no embedded outline.
       </div>
     );

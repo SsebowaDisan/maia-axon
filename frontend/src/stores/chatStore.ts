@@ -103,6 +103,15 @@ interface ChatState {
   passageContext: PassageContext | null;
   setPassageContext: (context: PassageContext | null) => void;
   clearPassageContext: () => void;
+  // Set to a document id when the backend signals the user is in
+  // learn mode but has no active path yet. The PDFViewer watches
+  // this and opens the LearnDialog. Cleared once the dialog opens.
+  pendingLearnDiagnosticDocumentId: string | null;
+  setPendingLearnDiagnosticDocumentId: (id: string | null) => void;
+  // The document id used for the most recent learn-mode chat
+  // request. The WS done-handler reads this when `needs_diagnostic`
+  // is set, so it can route the diagnostic prompt to the right doc.
+  lastLearnDocumentId: string | null;
   setHydrated: () => void;
   initialize: () => void;
   setMode: (mode: SearchMode) => void;
@@ -164,7 +173,7 @@ export const useChatStore = create<ChatState>()(
   includeDashboard: false,
   draftMode: "compose",
   editingMessageId: null,
-  mode: "library",
+  mode: "standard",
   streaming: false,
   welcomeStreaming: false,
   connectionError: null,
@@ -182,6 +191,11 @@ export const useChatStore = create<ChatState>()(
   clearPassageContext() {
     set({ passageContext: null });
   },
+  pendingLearnDiagnosticDocumentId: null,
+  setPendingLearnDiagnosticDocumentId(id) {
+    set({ pendingLearnDiagnosticDocumentId: id });
+  },
+  lastLearnDocumentId: null,
   setHydrated() {
     set({ isHydrated: true });
   },
@@ -308,6 +322,15 @@ export const useChatStore = create<ChatState>()(
               ? event.suggested_questions
               : message.suggestedQuestions,
           }));
+          // Learn mode: backend tells us the user has no active path —
+          // pop the diagnostic dialog so they can create one. Routed
+          // by document id remembered from the request side.
+          if (event.needs_diagnostic) {
+            const docId = get().lastLearnDocumentId;
+            if (docId) {
+              set({ pendingLearnDiagnosticDocumentId: docId });
+            }
+          }
           useConversationStore.getState().setActiveConversationId(event.conversation_id);
           void useConversationStore.getState().fetchConversations();
           set((state) => withConversationCache(state, state.messages, event.conversation_id));
@@ -596,6 +619,14 @@ export const useChatStore = create<ChatState>()(
       message: outboundMessage,
       conversation_id: conversationId,
     };
+
+    // Remember the doc the learn-mode message was sent against so the
+    // done-event handler can open the diagnostic dialog for it.
+    if (mode === "learn" && documentIds.length > 0) {
+      set({ lastLearnDocumentId: documentIds[0] });
+    } else {
+      set({ lastLearnDocumentId: null });
+    }
 
     try {
       await chatSocket.send(payload);

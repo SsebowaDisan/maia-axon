@@ -7,7 +7,7 @@ from collections import Counter
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_admin
@@ -24,7 +24,7 @@ from app.core.storage import (
     upload_pdf,
     uses_browser_direct_upload,
 )
-from app.models.document import Document, Page
+from app.models.document import Document, DocumentSection, Page
 from app.models.group import Group
 from app.models.user import User
 from app.schemas.document import (
@@ -333,7 +333,28 @@ async def list_documents(
         .where(Document.group_id == group_id)
         .order_by(Document.created_at.desc())
     )
-    return [_with_public_file_url(doc) for doc in result.scalars().all()]
+    docs = result.scalars().all()
+    # Single-query section count per doc so the library card can show
+    # an enrichment badge without an N+1 fan-out. Documents with no
+    # enriched sections come back missing from the row set and get
+    # zero filled in by Python.
+    section_counts: dict[UUID, int] = {}
+    if docs:
+        count_rows = await db.execute(
+            select(
+                DocumentSection.document_id,
+                func.count(DocumentSection.id),
+            )
+            .where(DocumentSection.document_id.in_([d.id for d in docs]))
+            .group_by(DocumentSection.document_id)
+        )
+        for doc_id, cnt in count_rows.all():
+            section_counts[doc_id] = int(cnt)
+    for doc in docs:
+        # Stash on the ORM instance; Pydantic's from_attributes picks
+        # it up at serialisation time.
+        doc.section_count = section_counts.get(doc.id, 0)
+    return [_with_public_file_url(doc) for doc in docs]
 
 
 @router.post(
