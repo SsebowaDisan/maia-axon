@@ -763,7 +763,36 @@ function CanvasInner({
   }
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+    <div
+      style={{ position: "relative", width: "100%", height: "100%" }}
+      className="learn-mindmap-canvas"
+    >
+      {/* Override ReactFlow's default node-wrapper styling so each pill
+          renders directly on the canvas rather than inside a white card.
+          ReactFlow ships a baseline background/border/shadow on
+          ``.react-flow__node`` that's only appropriate for the built-in
+          node types; we want the pill's branch colour to be the only
+          fill the user sees. */}
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+            .learn-mindmap-canvas .react-flow__node {
+              background: transparent !important;
+              border: none !important;
+              padding: 0 !important;
+              border-radius: 0 !important;
+              box-shadow: none !important;
+              width: auto !important;
+            }
+            .learn-mindmap-canvas .react-flow__node.selected,
+            .learn-mindmap-canvas .react-flow__node:focus,
+            .learn-mindmap-canvas .react-flow__node:focus-visible {
+              box-shadow: none !important;
+              outline: none !important;
+            }
+          `,
+        }}
+      />
       <ReactFlow
         nodes={flow.nodes}
         edges={flow.edges}
