@@ -106,7 +106,7 @@ const ROOT_ID = "__book_root__";
 // room to bend gracefully, with comparatively tight vertical stacking.
 // ---------------------------------------------------------------------------
 
-const LEVEL_X = 560;
+const LEVEL_X = 640;
 const LEAF_Y = 48;
 const NODE_W = 300;
 const NODE_W_ROOT = 320;
@@ -524,6 +524,12 @@ function SweepEdge({
   style,
   markerEnd,
 }: EdgeProps) {
+  // Curvature must stay strictly below 0.5 — at 0.5 both control
+  // points land on the midpoint, and anything above causes the
+  // source control to overshoot past the target control. That
+  // crossover is why my earlier 0.55 setting collapsed every curve
+  // into a vertical-ish band at the parent's edge. 0.4 gives a
+  // pronounced sweep without the artefact.
   const [path] = getBezierPath({
     sourceX,
     sourceY,
@@ -531,7 +537,7 @@ function SweepEdge({
     targetX,
     targetY,
     targetPosition,
-    curvature: 0.55,
+    curvature: 0.4,
   });
   return <BaseEdge id={id} path={path} style={style} markerEnd={markerEnd} />;
 }
