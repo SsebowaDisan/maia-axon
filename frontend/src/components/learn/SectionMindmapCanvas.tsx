@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  BaseEdge,
   Background,
   BackgroundVariant,
   Controls,
@@ -9,10 +10,12 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
+  getBezierPath,
   getNodesBounds,
   getViewportForBounds,
   useReactFlow,
   type Edge,
+  type EdgeProps,
   type Node,
   type NodeMouseHandler,
   type NodeProps,
@@ -287,13 +290,12 @@ function layoutSubtree(
     id: `${parentId}->${id}`,
     source: parentId,
     target: id,
-    // Smooth bezier curves. With handles anchored on the right edge
-    // of the parent and the left edge of the child, ReactFlow's
-    // default bezier produces the NotebookLM-style S-curve where
-    // sibling lines fan out from a single point on the parent.
-    type: "default",
+    // High-curvature bezier (see SweepEdge) so vertical sibling
+    // runs still leave the parent with horizontal tangents and
+    // sweep gracefully into the child.
+    type: "sweep",
     style: {
-      stroke: "rgba(110,90,55,0.42)",
+      stroke: "rgba(110,90,55,0.45)",
       strokeWidth: 1.4,
     },
   });
@@ -502,6 +504,40 @@ function SectionNodeView({ data }: NodeProps<Node<NodePayload>>) {
 const nodeTypes = { section: SectionNodeView };
 
 // ---------------------------------------------------------------------------
+// Custom edge — high-curvature bezier so the curves leave the parent
+// horizontally and sweep gracefully into the child, matching the
+// long-arc S-curves in NotebookLM / genealogy-style mindmaps. The
+// default ReactFlow curvature (0.25) makes nearly-vertical sibling
+// runs look orthogonal instead of curvy; 0.55 pulls the control
+// points out further so the tangents stay horizontal at each end.
+// ---------------------------------------------------------------------------
+
+function SweepEdge({
+  id,
+  sourceX,
+  sourceY,
+  sourcePosition,
+  targetX,
+  targetY,
+  targetPosition,
+  style,
+  markerEnd,
+}: EdgeProps) {
+  const [path] = getBezierPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+    curvature: 0.55,
+  });
+  return <BaseEdge id={id} path={path} style={style} markerEnd={markerEnd} />;
+}
+
+const edgeTypes = { sweep: SweepEdge };
+
+// ---------------------------------------------------------------------------
 // Canvas
 // ---------------------------------------------------------------------------
 
@@ -692,6 +728,7 @@ function CanvasInner({
         nodes={flow.nodes}
         edges={flow.edges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         fitView
         fitViewOptions={{ padding: 0.2, minZoom: 0.3, maxZoom: 1.2 }}
         nodesDraggable={false}
@@ -700,9 +737,9 @@ function CanvasInner({
         onNodeClick={handleNodeClick}
         proOptions={{ hideAttribution: true }}
         defaultEdgeOptions={{
-          type: "default",
+          type: "sweep",
           style: {
-            stroke: "rgba(110,90,55,0.42)",
+            stroke: "rgba(110,90,55,0.45)",
             strokeWidth: 1.4,
           },
         }}
