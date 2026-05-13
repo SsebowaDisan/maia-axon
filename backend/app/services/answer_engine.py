@@ -250,11 +250,19 @@ def detect_query_language(query: str) -> str:
             {
                 "role": "system",
                 "content": (
-                "Identify the primary natural language of the user's message. "
-                "Reply with only the language name in English, such as English, Persian, German, Arabic, or French. "
-                "Distinguish Persian from Arabic carefully. "
-                "If the text is Persian/Farsi written in Persian script, return Persian, not Arabic. "
-                "If the message is mixed, return the dominant language."
+                "Identify the language the user is WRITING IN. Reply with only the "
+                "language name in English (e.g. English, Persian, German, Arabic, "
+                "French, Dutch, Spanish).\n\n"
+                "Rules:\n"
+                "1. Look at the function words and sentence structure (wh-words, "
+                "auxiliary verbs, articles, prepositions), NOT at proper nouns or "
+                "technical terms. 'what is Axialventilatoren about?' is ENGLISH "
+                "(English structure with a German technical noun). 'Was sind "
+                "axial fans?' is GERMAN (German structure with an English term).\n"
+                "2. If the user mixes languages, return the language of the "
+                "QUESTION STRUCTURE, not the language of the topic.\n"
+                "3. Persian/Farsi in Persian script → Persian, not Arabic.\n"
+                "4. Reply with one word only."
             ),
             },
             {"role": "user", "content": query},
@@ -268,12 +276,18 @@ def language_instruction_for_query(query: str) -> str:
     language = detect_query_language(query)
     if language.lower() == "persian":
         return (
-            "The user's current question is written primarily in Persian (Farsi). "
-            "Respond fully in Persian (Farsi). Do not switch to Arabic or English except for unavoidable proper nouns, formulas, or file names."
+            "CRITICAL — LANGUAGE: The user wrote in Persian (Farsi). Respond "
+            "FULLY in Persian, even if the source documents are in another "
+            "language. Translate any cited content into Persian; keep only "
+            "unavoidable proper nouns, formula symbols, and filenames in their "
+            "original form. Do not switch to Arabic or English."
         )
     return (
-        f"The user's current question is written primarily in {language}. "
-        f"Respond fully in {language} unless the user explicitly asks for another language."
+        f"CRITICAL — LANGUAGE: The user wrote in {language}. Respond FULLY in "
+        f"{language}, even when the source documents are in a different language "
+        f"— translate the cited content into {language}. Keep only proper nouns, "
+        f"formula symbols, equation labels, and filenames in their original "
+        f"language. Do NOT default to the source document's language."
     )
 
 
