@@ -30,6 +30,7 @@ import type {
   LearnPath,
   MessageFeedback,
   MessageFeedbackRating,
+  MindmapChapterGroup,
   MindmapSectionNode,
   PageData,
   Project,
@@ -651,6 +652,11 @@ export const api = {
   },
   getDocumentSections(documentId: string) {
     return request<MindmapSectionNode[]>(`/learn/document/${documentId}/sections`);
+  },
+  getDocumentChapterGroups(documentId: string) {
+    return request<MindmapChapterGroup[]>(
+      `/learn/document/${documentId}/chapter-groups`,
+    );
   },
 
   // ----- Admin learn-mode review -----

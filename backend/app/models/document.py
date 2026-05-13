@@ -60,6 +60,12 @@ class Document(Base):
     # Cached printed-page-number to internal-page-index offset (LLM-
     # resolved on first viewer open). NULL = not yet computed.
     printed_page_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Thematic groupings over top-level chapter sections. Generated
+    # offline by an LLM clustering pass at the tail of section_mapping
+    # so the mindmap UI can render a Book → Group → Chapter level
+    # above the raw chapters. Shape is documented on the alembic 028
+    # migration. NULL = not yet generated (legacy or older books).
+    chapter_groups_json: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     uploaded_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )

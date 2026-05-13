@@ -442,6 +442,15 @@ export interface MindmapSectionNode {
   children: MindmapSectionNode[];
 }
 
+// Thematic clustering over a document's top-level chapters. The
+// mindmap inserts a synthetic node layer between root and chapters
+// when this list is non-empty.
+export interface MindmapChapterGroup {
+  name: string;
+  rationale: string;
+  section_ids: string[];
+}
+
 // ---------------------------------------------------------------------------
 // Admin learn-mode review surface
 // ---------------------------------------------------------------------------

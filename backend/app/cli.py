@@ -268,6 +268,86 @@ def _cmd_dedupe_concepts(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_group_chapters(args: argparse.Namespace) -> int:
+    """Re-run only the thematic chapter-grouping LLM call on a
+    document that already has sections persisted. Useful when
+    iterating on the grouping prompt without re-enriching all
+    headlines."""
+    from app.tasks.section_mapping import _generate_chapter_groups, _get_openai_client
+    from dataclasses import dataclass, field
+
+    try:
+        document_uuid = uuid.UUID(args.document_id)
+    except ValueError:
+        print(f"Invalid document_id: {args.document_id!r}", file=sys.stderr)
+        return 2
+
+    @dataclass
+    class _FakeNode:
+        # Minimal duck-type for what _generate_chapter_groups reads
+        # off SkeletonNode: title, content_json, page_start. We avoid
+        # importing SkeletonNode (and dragging in fitz) so the CLI
+        # stays lightweight.
+        title: str
+        content_json: dict | None
+        page_start: int
+        children: list = field(default_factory=list)
+
+    db = SyncSession()
+    try:
+        document = db.query(Document).filter(Document.id == document_uuid).first()
+        if document is None:
+            print(f"Document {args.document_id} not found.", file=sys.stderr)
+            return 1
+        chapter_rows = (
+            db.query(DocumentSection)
+            .filter(DocumentSection.document_id == document_uuid)
+            .filter(DocumentSection.parent_id.is_(None))
+            .order_by(DocumentSection.page_start.asc(), DocumentSection.ordinal.asc())
+            .all()
+        )
+        if not chapter_rows:
+            print("No top-level chapters; run enrich-document first.", file=sys.stderr)
+            return 1
+        print(
+            f"Grouping {len(chapter_rows)} chapter(s) for "
+            f"'{document.filename}' (id={document.id}) …",
+            file=sys.stderr,
+        )
+        fake_roots = [
+            _FakeNode(
+                title=row.title,
+                content_json=row.content_json,
+                page_start=row.page_start,
+            )
+            for row in chapter_rows
+        ]
+        root_ids = {i: str(row.id) for i, row in enumerate(chapter_rows)}
+        client = _get_openai_client()
+        groups = _generate_chapter_groups(client, fake_roots, root_ids)
+        if not groups:
+            print(
+                "Grouping returned empty — likely too few chapters or "
+                "LLM validator failed. Existing groups unchanged.",
+                file=sys.stderr,
+            )
+            return 1
+        document.chapter_groups_json = groups
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logging.exception("chapter grouping failed for %s", args.document_id)
+        print(f"FAILED: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        db.close()
+
+    print(
+        f"OK: {len(groups)} group(s): " + ", ".join(g["name"] for g in groups),
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _cmd_generate_questions(args: argparse.Namespace) -> int:
     """Rebuild one document's per-section check-in questions."""
     from app.tasks.question_generation import generate_questions_for_document
@@ -378,6 +458,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="UUID of the document whose questions should be regenerated.",
     )
     gen_questions.set_defaults(func=_cmd_generate_questions)
+
+    group_chapters = subparsers.add_parser(
+        "group-chapters",
+        help="Re-run the chapter-grouping LLM call for one document.",
+    )
+    group_chapters.add_argument(
+        "document_id",
+        help="UUID of the document to (re-)group.",
+    )
+    group_chapters.set_defaults(func=_cmd_group_chapters)
 
     return parser
 

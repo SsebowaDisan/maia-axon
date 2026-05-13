@@ -52,6 +52,7 @@ from app.models.question import SectionQuestion
 from app.models.user import User
 from app.schemas.learn import (
     AdvanceStepRequest,
+    ChapterGroupResponse,
     CheckInAnswerRequest,
     CheckInQuestionResponse,
     CheckInResultResponse,
@@ -490,3 +491,48 @@ async def get_document_sections(
 
     mastery_by_concept = await asyncio.to_thread(_snapshot)
     return _build_section_tree(sections, mastery_by_concept, intros_by_section)
+
+
+@router.get(
+    "/document/{document_id}/chapter-groups",
+    response_model=list[ChapterGroupResponse],
+)
+async def get_document_chapter_groups(
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> list[ChapterGroupResponse]:
+    """Thematic groupings over the document's top-level chapters.
+
+    Drives the synthetic group layer in the mindmap (book → group →
+    chapter). Empty list when grouping was skipped (book has < 4
+    chapters) or hasn't been generated yet (older book — run
+    ``python -m app.cli group-chapters <doc_id>`` to backfill).
+    """
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    raw = doc.chapter_groups_json or []
+    if not isinstance(raw, list):
+        return []
+    out: list[ChapterGroupResponse] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            out.append(
+                ChapterGroupResponse(
+                    name=str(item.get("name") or ""),
+                    rationale=str(item.get("rationale") or ""),
+                    section_ids=[
+                        uuid.UUID(s)
+                        for s in (item.get("section_ids") or [])
+                        if isinstance(s, str)
+                    ],
+                )
+            )
+        except (ValueError, TypeError):
+            # Skip malformed group entries rather than 500ing — the
+            # rest of the page is still useful without them.
+            continue
+    return out

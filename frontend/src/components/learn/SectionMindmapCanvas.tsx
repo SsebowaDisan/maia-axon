@@ -21,7 +21,7 @@ import { toPng } from "html-to-image";
 import { ChevronRight, Download, GraduationCap, Loader2, Minus } from "lucide-react";
 
 import { api } from "@/lib/api";
-import type { MindmapSectionNode } from "@/lib/types";
+import type { MindmapChapterGroup, MindmapSectionNode } from "@/lib/types";
 
 import "@xyflow/react/dist/style.css";
 
@@ -32,7 +32,52 @@ interface CanvasProps {
   onLearnSection?: (sectionId: string, title: string) => void;
 }
 
-type Kind = "root" | "topic" | "subtopic" | "headline";
+type Kind = "root" | "group" | "topic" | "subtopic" | "headline";
+
+// Synthetic node inserted between the book root and its chapters
+// when thematic groups exist. ``id`` is a deterministic local key
+// (not a section uuid).
+interface SyntheticGroup {
+  id: string;
+  name: string;
+  rationale: string;
+  children: MindmapSectionNode[];
+}
+
+function buildGroupedTree(
+  tree: MindmapSectionNode[],
+  groups: MindmapChapterGroup[],
+): { groups: SyntheticGroup[]; ungrouped: MindmapSectionNode[] } | null {
+  if (!groups.length) return null;
+  const byId = new Map(tree.map((node) => [node.id, node] as const));
+  const used = new Set<string>();
+  const out: SyntheticGroup[] = [];
+  groups.forEach((g, idx) => {
+    const children = g.section_ids
+      .map((sid) => byId.get(sid))
+      .filter((n): n is MindmapSectionNode => !!n);
+    if (!children.length) return;
+    children.forEach((c) => used.add(c.id));
+    out.push({
+      id: `__group_${idx}__`,
+      name: g.name,
+      rationale: g.rationale,
+      children,
+    });
+  });
+  // Any chapter the LLM forgot to assign falls into a residual
+  // "Other" group so it doesn't disappear from the tree.
+  const ungrouped = tree.filter((n) => !used.has(n.id));
+  if (ungrouped.length) {
+    out.push({
+      id: "__group_other__",
+      name: "Other",
+      rationale: "Chapters that didn't fit the main thematic groups.",
+      children: ungrouped,
+    });
+  }
+  return { groups: out, ungrouped: [] };
+}
 
 interface NodePayload {
   title: string;
@@ -68,6 +113,24 @@ const NODE_W_ROOT = 320;
 function visibleLeafCount(node: MindmapSectionNode, expanded: Set<string>): number {
   if (!node.children.length || !expanded.has(node.id)) return 1;
   return node.children.reduce((acc, c) => acc + visibleLeafCount(c, expanded), 0);
+}
+
+// Wrap a synthetic group as a MindmapSectionNode-shaped object so
+// the existing layout walks it transparently. The fake kind is
+// validated downstream via the buildFlow ``isGroup`` predicate.
+function groupAsSectionNode(g: SyntheticGroup): MindmapSectionNode {
+  return {
+    id: g.id,
+    kind: "topic", // placeholder — overridden to "group" in buildFlow
+    title: g.name,
+    page_start: g.children[0]?.page_start ?? 0,
+    page_end: g.children[g.children.length - 1]?.page_end ?? 0,
+    ordinal: 0,
+    summary: g.rationale,
+    concept_ids: [],
+    mastery_score: null,
+    children: g.children,
+  };
 }
 
 function rollupMastery(node: MindmapSectionNode): number | null {
@@ -113,6 +176,18 @@ function themeFor(kind: Kind, mastery: number | null): Theme {
       shadow: "0 18px 40px rgba(17,12,8,0.28), 0 2px 4px rgba(17,12,8,0.18)",
     };
   }
+  if (kind === "group") {
+    // Warm copper/amber gradient — distinct from chapter cards so
+    // the synthetic layer reads as "scope" rather than content.
+    return {
+      bg: "linear-gradient(180deg, #f7ecd9 0%, #ead8b8 100%)",
+      border: "rgba(166,124,73,0.4)",
+      text: "rgba(78,52,22,0.95)",
+      muted: "rgba(110,80,40,0.7)",
+      accent: "rgba(166,124,73,0.95)",
+      shadow: "0 10px 26px rgba(78,52,22,0.10), 0 1px 2px rgba(78,52,22,0.05)",
+    };
+  }
   if (kind === "topic") {
     return {
       bg: "linear-gradient(180deg, #faf8f3 0%, #f1ede2 100%)",
@@ -145,6 +220,7 @@ function themeFor(kind: Kind, mastery: number | null): Theme {
 
 function kindLabel(kind: Kind): string {
   if (kind === "root") return "Book";
+  if (kind === "group") return "Theme";
   if (kind === "topic") return "Chapter";
   if (kind === "subtopic") return "Section";
   return "Sub-section";
@@ -166,6 +242,7 @@ function layoutSubtree(
   parentId: string,
   expanded: Set<string>,
   acc: FlowAccumulator,
+  forceKind?: Kind,
 ): void {
   const id = node.id;
   const isExpanded = expanded.has(id);
@@ -175,8 +252,9 @@ function layoutSubtree(
   const blockHeight = leafCount * LEAF_Y;
   const centerY = yOffset + blockHeight / 2 - LEAF_Y / 2;
   const mastery = rollupMastery(node);
-  const resolvedKind: Kind =
-    node.kind === "headline" || node.kind === "subtopic" || node.kind === "topic"
+  const resolvedKind: Kind = forceKind
+    ? forceKind
+    : node.kind === "headline" || node.kind === "subtopic" || node.kind === "topic"
       ? node.kind
       : "topic";
 
@@ -229,14 +307,30 @@ function buildFlow(
   documentName: string,
   tree: MindmapSectionNode[],
   expanded: Set<string>,
+  syntheticGroups: SyntheticGroup[] | null,
 ): FlowAccumulator {
   const acc: FlowAccumulator = { nodes: [], edges: [] };
   const rootIsExpanded = expanded.has(ROOT_ID);
-  const visibleTops = rootIsExpanded ? tree : [];
+
+  // When thematic groups exist, the top level of the tree becomes
+  // those synthetic group nodes; chapters live one level deeper.
+  // Without groups we fall back to the flat Book → Chapter layout.
+  const tops: MindmapSectionNode[] = rootIsExpanded
+    ? syntheticGroups && syntheticGroups.length > 0
+      ? syntheticGroups.map(groupAsSectionNode)
+      : tree
+    : [];
+
+  const topsAreGroups =
+    rootIsExpanded && !!syntheticGroups && syntheticGroups.length > 0;
 
   const totalLeaves =
-    visibleTops.reduce((acc, t) => acc + visibleLeafCount(t, expanded), 0) || 1;
+    tops.reduce((acc, t) => acc + visibleLeafCount(t, expanded), 0) || 1;
   const totalHeight = totalLeaves * LEAF_Y;
+
+  const rootChildCount = topsAreGroups
+    ? syntheticGroups!.length
+    : tree.length;
 
   acc.nodes.push({
     id: ROOT_ID,
@@ -252,16 +346,24 @@ function buildFlow(
       sectionId: null,
       summary: null,
       mastery: null,
-      hasChildren: tree.length > 0,
+      hasChildren: rootChildCount > 0,
       isExpanded: rootIsExpanded,
-      childCount: tree.length,
+      childCount: rootChildCount,
     },
   });
 
   let y = 0;
-  for (const top of visibleTops) {
+  for (const top of tops) {
     const leaves = visibleLeafCount(top, expanded);
-    layoutSubtree(top, 1, y, ROOT_ID, expanded, acc);
+    layoutSubtree(
+      top,
+      1,
+      y,
+      ROOT_ID,
+      expanded,
+      acc,
+      topsAreGroups ? "group" : undefined,
+    );
     y += leaves * LEAF_Y;
   }
   return acc;
@@ -456,6 +558,7 @@ function CanvasInner({
   onLearnSection,
 }: CanvasProps) {
   const [tree, setTree] = useState<MindmapSectionNode[] | null>(null);
+  const [chapterGroups, setChapterGroups] = useState<MindmapChapterGroup[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([ROOT_ID]));
   const reactFlow = useReactFlow();
@@ -463,13 +566,19 @@ function CanvasInner({
   useEffect(() => {
     let cancelled = false;
     setTree(null);
+    setChapterGroups([]);
     setError(null);
     setExpanded(new Set([ROOT_ID]));
-    api
-      .getDocumentSections(documentId)
-      .then((data) => {
+    // Fetch sections + groups in parallel; groups are optional, so a
+    // 404 / empty list there should not block the mindmap.
+    Promise.all([
+      api.getDocumentSections(documentId),
+      api.getDocumentChapterGroups(documentId).catch(() => [] as MindmapChapterGroup[]),
+    ])
+      .then(([sections, groups]) => {
         if (cancelled) return;
-        setTree(data);
+        setTree(sections);
+        setChapterGroups(groups);
       })
       .catch((err: Error) => !cancelled && setError(err.message));
     return () => {
@@ -486,9 +595,22 @@ function CanvasInner({
     });
   }, []);
 
+  // Group splicing — if the backend produced chapter groups, render
+  // them as a synthetic layer between root and chapters. Otherwise
+  // fall back to the flat Book → Chapter tree.
+  const synthetic = useMemo(
+    () => (tree ? buildGroupedTree(tree, chapterGroups) : null),
+    [tree, chapterGroups],
+  );
+
   const flow = useMemo(() => {
     if (!tree) return { nodes: [], edges: [] };
-    const built = buildFlow(documentName, tree, expanded);
+    const built = buildFlow(
+      documentName,
+      tree,
+      expanded,
+      synthetic ? synthetic.groups : null,
+    );
     built.nodes = built.nodes.map((node) => ({
       ...node,
       data: {
@@ -498,7 +620,7 @@ function CanvasInner({
       },
     }));
     return built;
-  }, [tree, documentName, expanded, onLearnSection, toggle]);
+  }, [tree, synthetic, documentName, expanded, onLearnSection, toggle]);
 
   // Re-fit the viewport whenever the set of visible nodes changes.
   // We delay one frame so ReactFlow has measured the new layout

@@ -150,6 +150,19 @@ class AdvanceStepRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ChapterGroupResponse(BaseModel):
+    """One thematic cluster of chapters (top-level sections).
+
+    Generated offline by ``_generate_chapter_groups`` in
+    ``app.tasks.section_mapping``. Drives the synthetic group layer
+    the mindmap renders between the book root and its chapters.
+    """
+
+    name: str
+    rationale: str
+    section_ids: list[UUID]
+
+
 class SectionNodeResponse(BaseModel):
     """One node of the document's section tree (book → topic →
     subtopic → headline). The frontend uses this to render the

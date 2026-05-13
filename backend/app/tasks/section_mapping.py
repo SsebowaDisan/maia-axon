@@ -1012,6 +1012,188 @@ def _generate_embeddings(
 
 
 # ---------------------------------------------------------------------------
+# Thematic chapter grouping
+# ---------------------------------------------------------------------------
+
+
+_CHAPTER_GROUPING_SYSTEM = """\
+You are organising the chapters of a technical book into a small \
+number of thematic groups so a reader can see the book's structure \
+at a glance.
+
+You will receive a list of top-level chapters, each with a title and \
+a short summary. Cluster them into 3-6 thematic groups. Output STRICT \
+JSON ONLY in this exact shape:
+
+{
+  "groups": [
+    {
+      "name": <string, 2-5 words, sentence case, no numbering>,
+      "rationale": <string, one short sentence explaining what unites these chapters>,
+      "section_ids": [<string uuid>, ...]
+    },
+    ...
+  ]
+}
+
+Rules:
+  - EVERY input chapter id MUST appear in exactly one group. No duplicates, no omissions.
+  - Aim for 3-6 groups. With only 4-5 chapters, prefer 2-3 groups.
+  - Group names should be substantive and specific to the book — "Acoustics" is good, "Topics A" is not.
+  - Order groups by reading order: the group whose earliest chapter comes first in the book goes first.
+  - Within each group, order section_ids by reading order (lowest page first).
+  - rationale stays one sentence, no Markdown.
+
+Output ONLY the JSON object.\
+"""
+
+
+def _generate_chapter_groups(
+    client: openai.OpenAI,
+    roots: list[SkeletonNode],
+    root_ids: dict[int, str],
+) -> list[dict[str, Any]]:
+    """Cluster top-level chapters into thematic groups using one LLM call.
+
+    ``root_ids`` is a positional → uuid map filled in by the caller
+    after persistence (the SkeletonNode tree doesn't know its DB ids
+    until ``_persist_tree`` runs). Returns the validated group list
+    or ``[]`` when grouping is skipped (too few chapters, validator
+    rejects, retries exhausted).
+    """
+    if len(roots) < 4:
+        # Two or three chapters is below the threshold where grouping
+        # adds clarity — render them flat under the book root.
+        return []
+
+    chapters: list[dict[str, Any]] = []
+    for idx, node in enumerate(roots):
+        node_id = root_ids.get(idx)
+        if not node_id:
+            continue
+        summary = ""
+        if isinstance(node.content_json, dict):
+            summary = (node.content_json.get("summary") or "").strip()
+        chapters.append(
+            {
+                "id": node_id,
+                "title": node.title[:200],
+                "summary": summary[:400] or "(no summary)",
+                "page_start": node.page_start,
+            }
+        )
+
+    if not chapters:
+        return []
+
+    user_prompt = (
+        f"Chapters (in reading order, {len(chapters)} total):\n"
+        f"{json.dumps(chapters, ensure_ascii=False, indent=2)}"
+    )
+
+    valid_ids = {c["id"] for c in chapters}
+    last_error: str | None = None
+    last_raw: str | None = None
+
+    for attempt in range(_MAX_CORRECTIVE_RETRIES + 1):
+        prompt = user_prompt
+        if attempt > 0:
+            prompt = (
+                "Your previous response was invalid: "
+                f"{last_error}\n\n"
+                f"Previous response (DO NOT REPEAT THE SAME MISTAKE):\n{last_raw}\n\n"
+                "Re-run the original task and output ONLY a corrected "
+                "JSON object. Original task input:\n\n"
+                f"{user_prompt}"
+            )
+        try:
+            completion = client.chat.completions.create(
+                model=settings.openai_reasoning_model,
+                messages=[
+                    {"role": "system", "content": _CHAPTER_GROUPING_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0,
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_error = f"openai call failed: {exc}"
+            logger.warning("chapter_groups_call_failed attempt=%d %s", attempt, exc)
+            continue
+
+        last_raw = (completion.choices[0].message.content or "").strip()
+        try:
+            payload = json.loads(last_raw)
+        except json.JSONDecodeError as exc:
+            last_error = f"output was not valid JSON ({exc.msg})"
+            continue
+
+        groups = payload.get("groups") if isinstance(payload, dict) else None
+        if not isinstance(groups, list) or not groups:
+            last_error = "'groups' must be a non-empty list"
+            continue
+
+        seen_ids: set[str] = set()
+        normalised: list[dict[str, Any]] = []
+        ok = True
+        for i, g in enumerate(groups):
+            if not isinstance(g, dict):
+                last_error = f"groups[{i}] must be an object"
+                ok = False
+                break
+            name = (g.get("name") or "").strip()
+            rationale = (g.get("rationale") or "").strip()
+            section_ids = g.get("section_ids")
+            if not name:
+                last_error = f"groups[{i}].name is required"
+                ok = False
+                break
+            if not isinstance(section_ids, list) or not section_ids:
+                last_error = f"groups[{i}].section_ids must be a non-empty list"
+                ok = False
+                break
+            cleaned_ids: list[str] = []
+            for sid in section_ids:
+                if not isinstance(sid, str) or sid not in valid_ids:
+                    last_error = (
+                        f"groups[{i}] references unknown section id {sid!r}"
+                    )
+                    ok = False
+                    break
+                if sid in seen_ids:
+                    last_error = (
+                        f"groups[{i}] duplicates section id {sid!r} already in another group"
+                    )
+                    ok = False
+                    break
+                seen_ids.add(sid)
+                cleaned_ids.append(sid)
+            if not ok:
+                break
+            normalised.append(
+                {"name": name, "rationale": rationale, "section_ids": cleaned_ids}
+            )
+        if not ok:
+            continue
+
+        missing = valid_ids - seen_ids
+        if missing:
+            last_error = (
+                f"{len(missing)} chapter(s) were not assigned to any group"
+            )
+            continue
+
+        return normalised
+
+    logger.warning(
+        "chapter grouping failed after %d attempts: %s",
+        _MAX_CORRECTIVE_RETRIES + 1,
+        last_error,
+    )
+    return []
+
+
+# ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
 
@@ -1020,9 +1202,13 @@ def _persist_tree(
     db: Session,
     doc_id: str,
     roots: list[SkeletonNode],
-) -> None:
+) -> dict[int, str]:
     """Replace any existing sections for this document with the new
-    tree. One transaction — partial trees never reach the DB."""
+    tree. One transaction — partial trees never reach the DB.
+
+    Returns a positional → uuid map for the top-level (root) nodes
+    so the caller can pass it into the chapter-grouping pass.
+    """
 
     document_uuid = uuid.UUID(doc_id)
     # Delete the previous tree wholesale. CASCADE on the FK takes care
@@ -1059,9 +1245,12 @@ def _persist_tree(
             _insert(child, row.id)
         return row.id
 
-    for root in roots:
-        _insert(root, None)
+    root_ids: dict[int, str] = {}
+    for idx, root in enumerate(roots):
+        row_id = _insert(root, None)
+        root_ids[idx] = str(row_id)
     db.commit()
+    return root_ids
 
 
 # ---------------------------------------------------------------------------
@@ -1198,11 +1387,27 @@ def run_section_mapping(db: Session, doc_id: str) -> dict[str, int]:
     _generate_embeddings(client, headlines)
 
     # Step 5: persist the full tree in one transaction.
-    _persist_tree(db, doc_id, roots)
+    root_ids = _persist_tree(db, doc_id, roots)
     logger.info("[%s] section_mapping complete: tree persisted", doc_id)
+
+    # Step 6: thematic chapter grouping. One extra LLM call clusters
+    # the top-level chapters into 3-6 named groups so the mindmap can
+    # render Book → Group → Chapter → Subtopic → Headline. Failure
+    # here is non-fatal: the mindmap falls back to Book → Chapter.
+    chapter_groups = _generate_chapter_groups(client, roots, root_ids)
+    if chapter_groups:
+        document.chapter_groups_json = chapter_groups
+        db.commit()
+        logger.info(
+            "[%s] generated %d chapter group(s): %s",
+            doc_id,
+            len(chapter_groups),
+            ", ".join(g["name"] for g in chapter_groups),
+        )
 
     return {
         "headlines": len(headlines),
         "topics_and_subtopics": len(non_headlines),
         "embeddings": sum(1 for h in headlines if h.embedding is not None),
+        "chapter_groups": len(chapter_groups),
     }
