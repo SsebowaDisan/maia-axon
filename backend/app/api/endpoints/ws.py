@@ -843,14 +843,24 @@ async def websocket_chat(websocket: WebSocket):
                         )
                     else:
                         # No path yet — open tutor mode, document-scoped.
+                        # The first turn (no prior assistant message in
+                        # this conversation) flips the prompt into a
+                        # discovery-question opener so we tailor depth +
+                        # angle for everything after; subsequent turns
+                        # answer normally.
                         doc_name = None
                         if document_ids:
                             doc_obj = await db.scalar(
                                 select(Document).where(Document.id == document_ids[0])
                             )
                             doc_name = doc_obj.filename if doc_obj else None
+                        is_first_turn = not any(
+                            m["role"] == "assistant" for m in history
+                        )
                         system_content = (
-                            build_open_learn_system_prompt(doc_name)
+                            build_open_learn_system_prompt(
+                                doc_name, is_first_turn=is_first_turn
+                            )
                             + "\n\n"
                             + system_content
                         )

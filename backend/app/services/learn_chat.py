@@ -262,7 +262,11 @@ def fallback_no_path_message(document_filename: str | None) -> str:
     )
 
 
-def build_open_learn_system_prompt(document_filename: str | None) -> str:
+def build_open_learn_system_prompt(
+    document_filename: str | None,
+    *,
+    is_first_turn: bool = False,
+) -> str:
     """Tutor-voice system prompt used when learn mode is on but no
     structured path has been generated yet.
 
@@ -270,10 +274,15 @@ def build_open_learn_system_prompt(document_filename: str | None) -> str:
     chat surface without forcing the path-diagnostic popup. They can
     still opt into a generated path later via the Learn dialog —
     that path-aware prompt simply replaces this one.
+
+    ``is_first_turn`` flips the prompt into discovery mode: the very
+    first learn-mode response opens with one short question to learn
+    the user's goal and level, then attempts a brief first-pass answer.
+    Subsequent turns drop the discovery question and answer normally.
     """
 
     name = f'"{document_filename}"' if document_filename else "this document"
-    return (
+    base = (
         f"You are tutoring the user in learn mode for {name}. They have not "
         "generated a structured learning path yet — they're exploring the "
         "book and asking questions as they go. "
@@ -287,3 +296,18 @@ def build_open_learn_system_prompt(document_filename: str | None) -> str:
         "4) If they seem to want a guided path through the book, mention that "
         "they can tap **Start learning** to generate one — don't push it."
     )
+    if not is_first_turn:
+        return base
+    discovery = (
+        " "
+        "FIRST-TURN BEHAVIOUR (this is the user's first message in learn mode "
+        "for this document): open your response with ONE short discovery "
+        "question on its own line so you can tailor depth and angle going "
+        "forward. Phrase it conversationally, e.g. 'Quick question first — "
+        "are you trying to design something specific, prep for an exam, or "
+        "just build intuition about this book?'. After that single question, "
+        "give a brief first-pass answer to whatever the user asked (2-4 "
+        "sentences, still cited from the sources) so they're not left "
+        "hanging. Do NOT ask multiple discovery questions — one is enough."
+    )
+    return base + discovery
