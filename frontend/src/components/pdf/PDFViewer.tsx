@@ -11,7 +11,6 @@ import { PDFOutline, pdfHasOutline } from "@/components/pdf/PDFOutline";
 import { PDFPageJS } from "@/components/pdf/PDFPageJS";
 import { PDFToolbar } from "@/components/pdf/PDFToolbar";
 import { usePdfSearch } from "@/components/pdf/usePdfSearch";
-import { LearnDialog } from "@/components/learn/LearnDialog";
 import { SectionMindmapDialog } from "@/components/learn/SectionMindmapDialog";
 import { useChatStore } from "@/stores/chatStore";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
@@ -444,7 +443,6 @@ export function PDFViewer() {
   );
   const [hasOutline, setHasOutline] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"pages" | "outline">("pages");
-  const [learnOpen, setLearnOpen] = useState(false);
   const [mindmapOpen, setMindmapOpen] = useState(false);
   // Page-sidebar layout state. Width is resizable via a drag handle
   // on its right edge; collapsed flips the whole thing to a tiny
@@ -525,18 +523,6 @@ export function PDFViewer() {
     },
     [sidebarCollapsed, sidebarWidth],
   );
-  const pendingLearnDocId = useChatStore((state) => state.pendingLearnDiagnosticDocumentId);
-  const clearPendingLearn = useChatStore((state) => state.setPendingLearnDiagnosticDocumentId);
-  // When the chat handler signals a learn-mode message hit a doc
-  // without an active path, the chatStore stores the doc id here.
-  // Open the LearnDialog for that doc and clear the flag.
-  useEffect(() => {
-    if (pendingLearnDocId && currentDocument?.id === pendingLearnDocId) {
-      setLearnOpen(true);
-      clearPendingLearn(null);
-    }
-  }, [pendingLearnDocId, currentDocument?.id, clearPendingLearn]);
-
   // Library-card → "Open mindmap" shortcut: the card sets
   // pendingAutoOpen on pdfViewerStore right before triggering the
   // PDF open. The viewer reads + clears it once the doc has mounted.
@@ -1113,15 +1099,6 @@ export function PDFViewer() {
         onOpenMindmap={() => setMindmapOpen(true)}
         search={search}
       />
-      <LearnDialog
-        documentId={currentDocument.id}
-        documentName={currentDocument.filename}
-        open={learnOpen}
-        onClose={() => setLearnOpen(false)}
-        onJumpToPage={(page) => {
-          void handleOpenPage(page);
-        }}
-      />
       <SectionMindmapDialog
         documentId={currentDocument.id}
         documentName={currentDocument.filename}
@@ -1133,8 +1110,19 @@ export function PDFViewer() {
           // page they just navigated to without an extra click.
           setMindmapOpen(false);
         }}
-        onLearnSection={() => {
-          setLearnOpen(true);
+        onLearnSection={(_sectionId, title) => {
+          // Conversational learn flow: instead of opening the path-
+          // generation popup, switch the composer to learn mode and
+          // send a kickoff message about this section. The tutor
+          // system prompt handles discovery questions in-conversation.
+          setMindmapOpen(false);
+          const chatStore = useChatStore.getState();
+          chatStore.setMode("learn");
+          void chatStore.sendMessage(
+            `I want to learn the section "${title}" in this book. ` +
+              "Walk me through it and ask me what I already know so you can " +
+              "tailor the explanation.",
+          );
         }}
       />
       <div className="flex items-center justify-between border-b border-line px-4 py-2 text-[11px] text-muted">
