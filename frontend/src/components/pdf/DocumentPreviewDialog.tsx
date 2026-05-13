@@ -646,7 +646,16 @@ export function DocumentPreviewDialog() {
     `absolute z-40 ${edge} ${cursor} ${maximized ? "pointer-events-none opacity-0" : ""}`;
 
   return (
-    <Dialog.Root open={document !== null} onOpenChange={handleOpenChange}>
+    // ``modal`` is tied to ``open``: when the dialog is closed (after a
+    // forceMount keep-alive) we MUST set ``modal=false`` or Radix's
+    // internal ``react-remove-scroll`` keeps ``pointer-events: none`` on
+    // <body>, locking out the entire app. Only the open state is truly
+    // modal.
+    <Dialog.Root
+      open={document !== null}
+      modal={document !== null}
+      onOpenChange={handleOpenChange}
+    >
       {/* ``forceMount`` on both Portal and Content keeps the entire
           dialog subtree (including the heavy <PDFViewer>) in the React
           tree even when the dialog is closed. That preserves the
