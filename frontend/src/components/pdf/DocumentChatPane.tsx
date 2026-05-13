@@ -30,7 +30,11 @@ export function DocumentChatPane() {
         ref={scrollContainerRef}
         className="min-h-0 overflow-y-auto px-3 pb-2 pt-3 scrollbar-thin"
       >
-        <MessageList messages={messages} scrollContainerRef={scrollContainerRef} />
+        <MessageList
+          messages={messages}
+          scrollContainerRef={scrollContainerRef}
+          variant="document"
+        />
       </div>
       <div className="sticky bottom-0 border-t border-black/[0.05] bg-panel px-2.5 pb-2 pt-2">
         <DocumentChatComposer />

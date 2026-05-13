@@ -9,6 +9,7 @@ import type { ChatMessage, WelcomePayload } from "@/lib/types";
 import { useChatStore } from "@/stores/chatStore";
 import { useConversationStore } from "@/stores/conversationStore";
 import { useGroupStore } from "@/stores/groupStore";
+import { usePDFViewerStore } from "@/stores/pdfViewerStore";
 
 const FALLBACK_WELCOME: WelcomePayload = {
   intro_markdown:
@@ -23,9 +24,15 @@ function buildWelcomeMarkdown(introMarkdown: string) {
 export function MessageList({
   messages,
   scrollContainerRef,
+  variant = "app",
 }: {
   messages: ChatMessage[];
   scrollContainerRef: RefObject<HTMLDivElement | null>;
+  // ``app``: full sidebar chat with #group / @document selectors.
+  // ``document``: doc-scoped chat inside the preview dialog — the
+  // welcome canvas swaps to a PDF-aware message (% lists topics,
+  // Learn opens the study flow) since # and @ aren't available.
+  variant?: "app" | "document";
 }) {
   const streaming = useChatStore((state) => state.streaming);
   const chatHydrated = useChatStore((state) => state.isHydrated);
@@ -130,7 +137,7 @@ export function MessageList({
   }
 
   if (!messages.length) {
-    return <WelcomeCanvas />;
+    return variant === "document" ? <DocumentWelcomeCanvas /> : <WelcomeCanvas />;
   }
 
     return (
@@ -140,6 +147,38 @@ export function MessageList({
         ))}
       </div>
     );
+}
+
+// Welcome shown inside the PDF preview dialog's chat pane. The
+// main-app welcome talks about `#group` and `@document` selectors, but
+// neither exists in the doc-scoped composer — the conversation is
+// already pinned to one PDF. So we name the document, hint at the
+// surfaces that DO exist here (% to list topics, Learn, Library), and
+// leave it at that.
+function DocumentWelcomeCanvas() {
+  const document = usePDFViewerStore((s) => s.currentDocument);
+  const title = document?.filename ?? "this document";
+  const markdown = [
+    `You're chatting with **${title}**.`,
+    "",
+    "Ask anything grounded in this PDF — definitions, summaries, comparisons, calculations, or \"show me the supporting pages.\"",
+    "",
+    "- Type `%` to browse the topics this document covers.",
+    "- Tap **Learn** to study a section step-by-step.",
+    "- **Library** in the composer widens the scope to every PDF in the workspace.",
+  ].join("\n");
+  return (
+    <div className="mx-auto flex min-h-full w-full max-w-[820px] flex-col justify-start px-5 pb-10 pt-4">
+      <div className="answer-workspace-body">
+        <p className="text-[1.7rem] font-semibold tracking-[-0.03em] text-ink">
+          Maia AI
+        </p>
+        <div className="mt-4 chat-markdown">
+          <MarkdownRenderer content={markdown} citations={[]} />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function WelcomeCanvas() {
