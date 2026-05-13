@@ -2,23 +2,23 @@
 
 import { useRef } from "react";
 
-import { Composer } from "@/components/chat/Composer";
 import { MessageList } from "@/components/chat/MessageList";
+import { DocumentChatComposer } from "@/components/pdf/DocumentChatComposer";
 import { useChatStore } from "@/stores/chatStore";
 
 /**
- * Slim chat surface that lives next to the PDF inside the preview
- * dialog. Reuses the same MessageList + Composer the main app uses,
- * driven by the same chatStore — so the conversation persists when
- * the user closes the preview and goes back to the regular chat
- * panel.
+ * Chat surface that lives next to the PDF inside the preview dialog.
  *
- * Differences from {@link ChatPanel}:
- * * No big "Chat" header — the dialog already shows the doc name.
- * * Narrower column max-width — the dialog's right pane is ~420px
- *   wide, so we drop the 1120px content cap.
- * * Tighter padding so the composer doesn't eat half the vertical
- *   real estate.
+ * Reuses {@link MessageList} (which already renders citations / pages
+ * / mindmaps for assistant messages) driven by the same chatStore the
+ * main-app chat uses, but isolates the conversation via
+ * DocumentPreviewDialog's stash-and-restore so the user only ever
+ * sees messages about this PDF here.
+ *
+ * The composer is the slim {@link DocumentChatComposer}, not the full
+ * main-app one — it strips Standard / Google / Deep-Search modes and
+ * the #group / @document selectors so the 420px chat column doesn't
+ * spend two thirds of its height on chrome.
  */
 export function DocumentChatPane() {
   const messages = useChatStore((state) => state.messages);
@@ -32,8 +32,8 @@ export function DocumentChatPane() {
       >
         <MessageList messages={messages} scrollContainerRef={scrollContainerRef} />
       </div>
-      <div className="sticky bottom-0 border-t border-black/[0.05] bg-panel px-3 pb-2 pt-2">
-        <Composer />
+      <div className="sticky bottom-0 border-t border-black/[0.05] bg-panel px-2.5 pb-2 pt-2">
+        <DocumentChatComposer />
       </div>
     </div>
   );
