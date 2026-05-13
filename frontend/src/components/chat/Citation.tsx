@@ -105,7 +105,11 @@ export function CitationChip({
         <Tooltip.Portal>
           <Tooltip.Content
             sideOffset={8}
-            className="z-50 max-w-[280px] rounded-[22px] border border-black/10 bg-white px-3 py-3 text-left text-xs text-ink shadow-[0_18px_48px_rgba(15,23,42,0.08)]"
+            // z-[120] sits above the preview dialog (z-[80]) and its
+            // overlay (z-[70]) so hover cards appear over the chat pane
+            // inside the dialog, not behind it. Main-app chat is fine
+            // either way (no parent stacking context above z-50).
+            className="z-[120] max-w-[280px] rounded-[22px] border border-black/10 bg-white px-3 py-3 text-left text-xs text-ink shadow-[0_18px_48px_rgba(15,23,42,0.08)]"
           >
             <p className="font-semibold">{citation.document_name || citation.title || "Source"}</p>
             <p className="mt-1 text-muted">
