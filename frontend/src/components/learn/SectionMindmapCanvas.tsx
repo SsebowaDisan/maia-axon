@@ -93,6 +93,12 @@ interface NodePayload {
   hasChildren: boolean;
   isExpanded: boolean;
   childCount: number;
+  // Index into BRANCH_HUES — every non-root node carries the index
+  // of the top-level branch it descends from so the renderer can
+  // pick the right hue for that whole subtree. ``null`` only on
+  // the synthetic book root.
+  branchIndex: number | null;
+  depth: number; // 0 root, 1 group/topic, 2 subtopic, 3 headline, ...
   onToggle?: () => void;
   onLearn?: (sectionId: string, title: string) => void;
   [key: string]: unknown;
@@ -149,8 +155,17 @@ function rollupMastery(node: MindmapSectionNode): number | null {
 }
 
 // ---------------------------------------------------------------------------
-// Per-kind visual themes. Each kind gets a coherent (background,
-// border, text, accent) palette so the tree reads at a glance.
+// Per-branch colour palette. NotebookLM gives each top-level branch
+// of the mindmap its own hue and tints all descendants with lighter
+// shades of the same colour. We do the same: every top-level node
+// (group when grouped, else chapter) picks one hue from this rotating
+// palette; its subtree inherits a depth-dependent tint of that hue;
+// the edges connecting nodes within the branch use the branch's
+// accent colour so the eye can follow a path at a glance.
+//
+// Hue choice is deterministic by branch position so re-renders stay
+// stable. Saturation/lightness curves are tuned so deeper depths
+// fade toward white without losing the branch identity.
 // ---------------------------------------------------------------------------
 
 interface Theme {
@@ -162,19 +177,17 @@ interface Theme {
   shadow: string;
 }
 
-function masteryAccent(score: number | null): string {
-  if (score == null) return "rgba(110,103,93,0.6)";
-  if (score >= 0.85) return "rgba(5,150,105,0.9)";
-  if (score >= 0.65) return "rgba(217,119,6,0.9)";
-  if (score >= 0.35) return "rgba(234,88,12,0.9)";
-  return "rgba(225,29,72,0.9)";
-}
+// Hues spread evenly around the wheel + tuned to feel friendly on a
+// cream backdrop (skipping aggressive primaries). 8 entries handles
+// any reasonable number of top-level branches without colour repeats.
+const BRANCH_HUES = [165, 25, 200, 280, 340, 50, 215, 105];
 
-function themeFor(kind: Kind, mastery: number | null): Theme {
-  // Compact-pill mindmap: each level has a distinct fill that reads at
-  // a glance without needing a text label on the node. Shadows are
-  // intentionally subtle — the pills sit on the canvas, they don't
-  // hover above it. Edges remain the primary visual structure.
+function branchTheme(
+  kind: Kind,
+  depth: number,
+  branchIndex: number | null,
+  mastery: number | null,
+): Theme {
   if (kind === "root") {
     return {
       bg: "#2a2522",
@@ -185,45 +198,50 @@ function themeFor(kind: Kind, mastery: number | null): Theme {
       shadow: "0 2px 6px rgba(17,12,8,0.12)",
     };
   }
-  if (kind === "group") {
-    return {
-      bg: "#f3e6c9",
-      border: "rgba(166,124,73,0.42)",
-      text: "rgba(78,52,22,0.94)",
-      muted: "rgba(110,80,40,0.7)",
-      accent: "rgba(166,124,73,0.95)",
-      shadow: "0 1px 3px rgba(78,52,22,0.06)",
-    };
-  }
-  if (kind === "topic") {
-    return {
-      bg: "#e9e3d1",
-      border: "rgba(146,128,90,0.38)",
-      text: "rgba(31,27,24,0.94)",
-      muted: "rgba(89,80,71,0.7)",
-      accent: "rgba(110,90,55,0.85)",
-      shadow: "0 1px 3px rgba(17,12,8,0.05)",
-    };
-  }
-  if (kind === "subtopic") {
+  if (branchIndex == null) {
+    // Defensive fallback — should never trigger in practice because
+    // every non-root node is assigned a branch by buildFlow.
     return {
       bg: "#f1ebd9",
-      border: "rgba(166,156,128,0.38)",
+      border: "rgba(166,156,128,0.4)",
       text: "rgba(31,27,24,0.92)",
       muted: "rgba(89,80,71,0.65)",
       accent: "rgba(110,90,55,0.75)",
-      shadow: "0 1px 3px rgba(17,12,8,0.04)",
+      shadow: "0 1px 3px rgba(17,12,8,0.05)",
     };
   }
-  // headline — mastery-tinted soft fill (always readable)
+  const hue = BRANCH_HUES[branchIndex % BRANCH_HUES.length];
+  // Depth 1 (group): full branch colour. Each deeper level pulls
+  // the lightness toward 96% and trims saturation, so descendant
+  // pills feel like a soft echo of their parent.
+  const level = depth - 1; // 0-indexed within the branch
+  const sat = Math.max(18, 38 - level * 6);
+  const light = Math.min(96, 82 + level * 4);
+  const bg = `hsl(${hue} ${sat}% ${light}%)`;
+  const border = `hsl(${hue} ${Math.min(60, sat + 20)}% ${Math.max(45, light - 30)}% / 0.55)`;
+  const muted = `hsl(${hue} 38% 32%)`;
+  const accent = `hsl(${hue} 50% 38%)`;
+  const text =
+    kind === "headline"
+      ? "rgba(31,27,24,0.92)"
+      : "rgba(31,27,24,0.94)";
   return {
-    bg: "#ffffff",
-    border: masteryAccent(mastery),
-    text: "rgba(31,27,24,0.92)",
-    muted: "rgba(89,80,71,0.65)",
-    accent: masteryAccent(mastery),
-    shadow: "0 1px 3px rgba(17,12,8,0.06)",
+    bg,
+    border,
+    text,
+    muted,
+    accent,
+    shadow: "0 1px 3px rgba(17,12,8,0.05)",
   };
+}
+
+// Edge stroke uses the branch's accent so the line that connects
+// "Mechanical components" → "12.1.1 Verluste …" carries the same
+// colour as both pills — visually wires the subtree together.
+function branchEdgeColor(branchIndex: number | null): string {
+  if (branchIndex == null) return "rgba(110,80,40,0.65)";
+  const hue = BRANCH_HUES[branchIndex % BRANCH_HUES.length];
+  return `hsl(${hue} 50% 50% / 0.7)`;
 }
 
 function kindLabel(kind: Kind): string {
@@ -250,6 +268,7 @@ function layoutSubtree(
   parentId: string,
   expanded: Set<string>,
   acc: FlowAccumulator,
+  branchIndex: number,
   forceKind?: Kind,
 ): void {
   const id = node.id;
@@ -283,6 +302,8 @@ function layoutSubtree(
       hasChildren,
       isExpanded,
       childCount: node.children.length,
+      branchIndex,
+      depth,
     },
   });
 
@@ -292,10 +313,11 @@ function layoutSubtree(
     target: id,
     // High-curvature bezier (see SweepEdge) so vertical sibling
     // runs still leave the parent with horizontal tangents and
-    // sweep gracefully into the child.
+    // sweep gracefully into the child. Stroke colour matches the
+    // branch so the eye can follow a subtree at a glance.
     type: "sweep",
     style: {
-      stroke: "rgba(110,80,40,0.7)",
+      stroke: branchEdgeColor(branchIndex),
       strokeWidth: 1.8,
       strokeLinecap: "round" as const,
     },
@@ -305,7 +327,7 @@ function layoutSubtree(
     let childY = yOffset;
     for (const child of node.children) {
       const childLeaves = visibleLeafCount(child, expanded);
-      layoutSubtree(child, depth + 1, childY, id, expanded, acc);
+      layoutSubtree(child, depth + 1, childY, id, expanded, acc, branchIndex);
       childY += childLeaves * LEAF_Y;
     }
   }
@@ -357,11 +379,15 @@ function buildFlow(
       hasChildren: rootChildCount > 0,
       isExpanded: rootIsExpanded,
       childCount: rootChildCount,
+      branchIndex: null,
+      depth: 0,
     },
   });
 
+  // Each top-level child gets its own branch index. Children
+  // inherit the parent's index, so a whole subtree shares a hue.
   let y = 0;
-  for (const top of tops) {
+  tops.forEach((top, idx) => {
     const leaves = visibleLeafCount(top, expanded);
     layoutSubtree(
       top,
@@ -370,10 +396,11 @@ function buildFlow(
       ROOT_ID,
       expanded,
       acc,
+      idx,
       topsAreGroups ? "group" : undefined,
     );
     y += leaves * LEAF_Y;
-  }
+  });
   return acc;
 }
 
@@ -382,7 +409,7 @@ function buildFlow(
 // ---------------------------------------------------------------------------
 
 function SectionNodeView({ data }: NodeProps<Node<NodePayload>>) {
-  const t = themeFor(data.kind, data.mastery);
+  const t = branchTheme(data.kind, data.depth, data.branchIndex, data.mastery);
   const isRoot = data.kind === "root";
   const width = isRoot ? NODE_W_ROOT : NODE_W;
   const titleTooltip =
