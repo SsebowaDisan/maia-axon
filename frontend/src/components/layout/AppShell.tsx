@@ -18,6 +18,7 @@ import {
 import { SidebarHistory } from "@/components/layout/SidebarHistory";
 import { ChatPanel } from "@/components/layout/ChatPanel";
 import { DocumentPanel } from "@/components/layout/DocumentPanel";
+import { DocumentPreviewDialog } from "@/components/pdf/DocumentPreviewDialog";
 import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/authStore";
@@ -96,8 +97,12 @@ export function AppShell() {
   const [searchOpenNonce, setSearchOpenNonce] = useState(0);
   const currentDocument = usePDFViewerStore((state) => state.currentDocument);
   const currentWebCitation = usePDFViewerStore((state) => state.currentWebCitation);
+  const sourcesPanelHidden = usePDFViewerStore((state) => state.sourcesPanelHidden);
   const closeViewer = usePDFViewerStore((state) => state.close);
-  const showSourcesPanel = searchMode !== "standard" && (!!currentDocument || !!currentWebCitation);
+  const showSourcesPanel =
+    searchMode !== "standard" &&
+    !sourcesPanelHidden &&
+    (!!currentDocument || !!currentWebCitation);
 
   useEffect(() => {
     if (searchMode === "standard") {
@@ -157,6 +162,10 @@ export function AppShell() {
   if (mode !== "desktop") {
     return (
       <ErrorBoundary>
+        {/* Single preview-dialog mount. forceMount keeps the heavy
+            <PDFViewer> alive across open/close so re-opening the same
+            PDF is instant — see DocumentPreviewDialog for details. */}
+        <DocumentPreviewDialog />
         <div className="flex h-screen flex-col gap-4 bg-bg p-4">
           <div className="grid grid-cols-3 gap-2 rounded-[24px] bg-panel p-2 shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
             {[
@@ -194,6 +203,10 @@ export function AppShell() {
 
   return (
     <ErrorBoundary>
+      {/* Single preview-dialog mount — see comment in the mobile branch
+          above. Keeping it outside the PanelGroup means the loaded PDF
+          survives layout reflows too. */}
+      <DocumentPreviewDialog />
       {/*
         Full-bleed flex layout, ChatGPT-style: no outer padding, no
         rounded card chrome, no shadows. Sidebar and main content sit

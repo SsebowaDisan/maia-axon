@@ -1129,6 +1129,9 @@ export function PDFViewer() {
         onClose={() => setMindmapOpen(false)}
         onJumpToPage={(page) => {
           void handleOpenPage(page);
+          // Close the floating mindmap so the user can see the
+          // page they just navigated to without an extra click.
+          setMindmapOpen(false);
         }}
         onLearnSection={() => {
           setLearnOpen(true);

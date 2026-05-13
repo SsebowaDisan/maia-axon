@@ -7,7 +7,6 @@ import { CompanySelector } from "@/components/chat/CompanySelector";
 import { ComposerMenu } from "@/components/chat/ComposerMenu";
 import { DocumentSelector } from "@/components/chat/DocumentSelector";
 import { GroupSelector } from "@/components/chat/GroupSelector";
-import { DocumentPreviewDialog } from "@/components/pdf/DocumentPreviewDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -17,6 +16,7 @@ import { useCompanyStore } from "@/stores/companyStore";
 import { useConversationStore } from "@/stores/conversationStore";
 import { useDocumentStore } from "@/stores/documentStore";
 import { useGroupStore } from "@/stores/groupStore";
+import { usePDFViewerStore } from "@/stores/pdfViewerStore";
 
 const groupRegex = /(^|\s)#([^\s#@]*)$/;
 const documentRegex = /(^|\s)@([^\s#@]*)$/;
@@ -131,7 +131,14 @@ export function Composer() {
   const [forceGroupOpen, setForceGroupOpen] = useState(false);
   const [forceDocumentOpen, setForceDocumentOpen] = useState(false);
   const [forceCompanyOpen, setForceCompanyOpen] = useState(false);
-  const [previewDocument, setPreviewDocument] = useState<Document | null>(null);
+  // Preview dialog is mounted once at AppShell. Use a local shim so
+  // call sites keep their existing setter signature.
+  const openPreview = usePDFViewerStore((s) => s.openPreview);
+  const closePreview = usePDFViewerStore((s) => s.closePreview);
+  const setPreviewDocument = (doc: Document | null) => {
+    if (doc) openPreview(doc);
+    else closePreview();
+  };
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -709,14 +716,6 @@ export function Composer() {
         </Button>
       </div>
 
-      <DocumentPreviewDialog
-        document={previewDocument}
-        onOpenChange={(open) => {
-          if (!open) {
-            setPreviewDocument(null);
-          }
-        }}
-      />
     </div>
   );
 }

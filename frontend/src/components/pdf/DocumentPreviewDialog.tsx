@@ -145,13 +145,17 @@ function clampPosition(position: Position, size: Size): Position {
 
 type ResizeDirection = "se" | "sw" | "ne" | "nw";
 
-export function DocumentPreviewDialog({
-  document,
-  onOpenChange,
-}: {
-  document: Document | null;
-  onOpenChange: (open: boolean) => void;
-}) {
+// Mounted ONCE at AppShell. The store drives ``previewDocument`` so all
+// trigger points (sidebar library, admin uploader, composer attachment
+// picker) feed the same dialog — which means a single ``<PDFViewer>``
+// instance, and its loaded PDFDocumentProxy survives close/re-open
+// cycles. That's the whole point of this single-mount setup.
+export function DocumentPreviewDialog() {
+  const document = usePDFViewerStore((s) => s.previewDocument);
+  const closePreview = usePDFViewerStore((s) => s.closePreview);
+  const onOpenChange = (open: boolean) => {
+    if (!open) closePreview();
+  };
   const loadPage = usePDFViewerStore((state) => state.loadPage);
   const closeStore = usePDFViewerStore((state) => state.close);
   // We auto-select this PDF in the document store on open so the
@@ -643,12 +647,23 @@ export function DocumentPreviewDialog({
 
   return (
     <Dialog.Root open={document !== null} onOpenChange={handleOpenChange}>
-      <Dialog.Portal>
+      {/* ``forceMount`` on both Portal and Content keeps the entire
+          dialog subtree (including the heavy <PDFViewer>) in the React
+          tree even when the dialog is closed. That preserves the
+          PDFDocumentProxy react-pdf parsed on open, so re-opening the
+          same document is instant instead of triggering a full
+          re-download + re-parse. Visibility is driven by the
+          ``data-state="open"|"closed"`` attribute Radix sets on the
+          elements — the Tailwind classes below collapse the content
+          and overlay to invisible/non-interactive when closed. */}
+      <Dialog.Portal forceMount>
         <Dialog.Overlay
-          className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px]"
+          forceMount
+          className="fixed inset-0 z-[70] bg-black/18 backdrop-blur-[18px] data-[state=closed]:pointer-events-none data-[state=closed]:opacity-0"
           onDoubleClick={requestClose}
         />
         <Dialog.Content
+          forceMount
           aria-describedby={undefined}
           style={{
             left: renderedPos.x,
@@ -656,7 +671,7 @@ export function DocumentPreviewDialog({
             width: renderedSize.width,
             height: renderedSize.height,
           }}
-          className={`fixed z-[80] flex flex-col overflow-hidden rounded-[30px] border border-black/[0.06] bg-panel shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none ${
+          className={`fixed z-[80] flex flex-col overflow-hidden rounded-[30px] border border-black/[0.06] bg-panel shadow-[0_24px_60px_rgba(17,17,17,0.12)] outline-none data-[state=closed]:pointer-events-none data-[state=closed]:invisible data-[state=closed]:opacity-0 ${
             interacting ? "select-none" : ""
           }`}
           onPointerDownOutside={handlePointerDownOutside}
@@ -709,7 +724,12 @@ export function DocumentPreviewDialog({
           </div>
           <div className="min-h-0 flex flex-1 overflow-hidden">
             <div className="min-h-0 min-w-0 flex-1">
-              {document ? <PDFViewer /> : null}
+              {/* PDFViewer is mounted unconditionally so the loaded
+                  PDFDocumentProxy survives the dialog being closed.
+                  It reads ``currentDocument`` from the shared store —
+                  if no document has ever been opened, it renders an
+                  empty state internally. */}
+              <PDFViewer />
             </div>
             {chatVisible ? (
               <>

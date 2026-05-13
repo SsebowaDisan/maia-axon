@@ -673,15 +673,14 @@ function CanvasInner({
   const handleNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => {
       const data = node.data as NodePayload;
-      if (data.hasChildren) {
-        toggle(node.id);
-        return;
-      }
+      // Clicking the node body jumps to its first page. The chevron
+      // button on parents still toggles expand/collapse via its own
+      // handler (stopPropagation), so the tree stays navigable.
       if (data.pageStart && data.kind !== "root") {
         onJumpToPage(data.pageStart);
       }
     },
-    [onJumpToPage, toggle],
+    [onJumpToPage],
   );
 
   const [downloading, setDownloading] = useState(false);

@@ -36,7 +36,7 @@ import {
 import { DocumentUploader } from "@/components/admin/DocumentUploader";
 import { IndexingStatus } from "@/components/admin/IndexingStatus";
 import { GroupManager } from "@/components/admin/GroupManager";
-import { DocumentPreviewDialog } from "@/components/pdf/DocumentPreviewDialog";
+import { usePDFViewerStore } from "@/stores/pdfViewerStore";
 import { CompanyManager } from "@/components/admin/CompanyManager";
 import { FeedbackManager } from "@/components/admin/FeedbackManager";
 import { LearnReviewer } from "@/components/admin/LearnReviewer";
@@ -531,10 +531,10 @@ function LibraryDialog({
   const clearSelection = useDocumentStore((state) => state.clearSelection);
   const documentsByGroup = useDocumentStore((state) => state.documentsByGroup);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(activeGroupId ?? groups[0]?.id ?? null);
-  // Preview dialog for the non-admin read-only library view. Admin
-  // view manages its own preview state inside DocumentUploader, so we
-  // only wire this when the read-only list is rendered.
-  const [previewDocument, setPreviewDocument] = useState<Document | null>(null);
+  // Preview dialog is mounted once at AppShell level so the loaded
+  // PDFDocumentProxy survives close/re-open cycles. Library cards
+  // dispatch to the store; the dialog reads ``previewDocument``.
+  const openPreview = usePDFViewerStore((s) => s.openPreview);
 
   const documentCount = useMemo(
     () => groups.reduce((total, group) => total + group.document_count, 0),
@@ -643,7 +643,7 @@ function LibraryDialog({
                   <ReadOnlyDocumentList
                     documents={selectedGroup ? documentsByGroup[selectedGroup.id] ?? [] : []}
                     groupId={selectedGroup?.id ?? ""}
-                    onOpen={(doc) => setPreviewDocument(doc)}
+                    onOpen={(doc) => openPreview(doc)}
                   />
                 )}
               </div>
@@ -651,12 +651,6 @@ function LibraryDialog({
           </div>
         </Dialog.Content>
       </Dialog.Portal>
-      <DocumentPreviewDialog
-        document={previewDocument}
-        onOpenChange={(nextOpen) => {
-          if (!nextOpen) setPreviewDocument(null);
-        }}
-      />
     </Dialog.Root>
   );
 }

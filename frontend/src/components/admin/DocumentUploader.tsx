@@ -6,11 +6,10 @@ import { FileUp, Plus, X } from "lucide-react";
 import { useDropzone } from "react-dropzone";
 
 import { IndexingStatus } from "@/components/admin/IndexingStatus";
-import { DocumentPreviewDialog } from "@/components/pdf/DocumentPreviewDialog";
 import { Button } from "@/components/ui/button";
 import { useDialogDismiss } from "@/hooks/useDialogDismiss";
-import type { Document } from "@/lib/types";
 import { useDocumentStore } from "@/stores/documentStore";
+import { usePDFViewerStore } from "@/stores/pdfViewerStore";
 
 export function DocumentUploader({ groupId }: { groupId: string | null }) {
   const uploadDocument = useDocumentStore((state) => state.uploadDocument);
@@ -56,7 +55,7 @@ export function DocumentUploader({ groupId }: { groupId: string | null }) {
     [documentStatuses, documents, uploadStates],
   );
 
-  const [previewDocument, setPreviewDocument] = useState<Document | null>(null);
+  const openPreview = usePDFViewerStore((s) => s.openPreview);
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [pendingAutoCloseFiles, setPendingAutoCloseFiles] = useState<string[]>([]);
   const {
@@ -157,7 +156,7 @@ export function DocumentUploader({ groupId }: { groupId: string | null }) {
                     key={document.id}
                     document={document}
                     groupId={groupId ?? ""}
-                    onOpen={(selected) => setPreviewDocument(selected)}
+                    onOpen={(selected) => openPreview(selected)}
                   />
                 ))}
               </div>
@@ -264,14 +263,6 @@ export function DocumentUploader({ groupId }: { groupId: string | null }) {
         </Dialog.Portal>
       </Dialog.Root>
 
-      <DocumentPreviewDialog
-        document={previewDocument}
-        onOpenChange={(open) => {
-          if (!open) {
-            setPreviewDocument(null);
-          }
-        }}
-      />
     </>
   );
 }

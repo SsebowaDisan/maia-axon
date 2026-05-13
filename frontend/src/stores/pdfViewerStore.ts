@@ -8,12 +8,28 @@ import type { Citation, Document, PageData } from "@/lib/types";
 interface PDFViewerState {
   currentDocument: Document | null;
   currentWebCitation: Citation | null;
+  // The document currently being previewed in the floating preview
+  // dialog. Distinct from ``currentDocument``: the latter is the PDF
+  // react-pdf has loaded (might persist past a dialog close so re-open
+  // is instant), the former controls whether the dialog is visible.
+  // Set via ``openPreview()`` / cleared via ``closePreview()``.
+  previewDocument: Document | null;
   currentPage: number;
   zoom: number;
   highlightCitations: Citation[];
   pageCache: Record<string, PageData>;
   pageData: PageData | null;
   loading: boolean;
+  // When the user actively dismisses the chat-side sources panel
+  // (X button) or closes the preview dialog, we set this flag
+  // instead of wiping ``currentDocument`` — that keeps the loaded
+  // PDFDocumentProxy alive on react-pdf so the next open of the
+  // same doc is instant. AppShell respects the flag for the
+  // chat-side panel; the preview dialog manages its own visibility
+  // independently. Reset to ``false`` whenever the user clicks a
+  // citation or programmatically loads a page so the panel can
+  // re-appear.
+  sourcesPanelHidden: boolean;
   // Optional surface to auto-open once the viewer mounts a document.
   // Library cards set this to "mindmap" before triggering the open
   // flow; PDFViewer reads + clears it on first effect.
@@ -38,6 +54,8 @@ interface PDFViewerState {
   prefetchPages: (document: Document, pageNumbers: number[]) => Promise<void>;
   openCitation: (citation: Citation, document?: Document | null) => Promise<void>;
   loadPage: (document: Document, pageNumber: number, highlightCitations?: Citation[]) => Promise<void>;
+  openPreview: (document: Document) => void;
+  closePreview: () => void;
   nextPage: () => Promise<void>;
   previousPage: () => Promise<void>;
   setZoom: (zoom: number) => void;
@@ -53,12 +71,14 @@ function pageKey(documentId: string, pageNumber: number) {
 export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
   currentDocument: null,
   currentWebCitation: null,
+  previewDocument: null,
   currentPage: 1,
   zoom: 1,
   highlightCitations: [],
   pageCache: {},
   pageData: null,
   loading: false,
+  sourcesPanelHidden: false,
   openClickNonce: 0,
   pendingAutoOpen: null,
   setPendingAutoOpen(value) {
@@ -150,6 +170,7 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
         pageData: null,
         highlightCitations: [citation],
         loading: false,
+        sourcesPanelHidden: false,
       }));
       return;
     }
@@ -216,6 +237,7 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
       loading: !cached,
       pageData: cached ?? state.pageData,
       openClickNonce: state.openClickNonce + 1,
+      sourcesPanelHidden: false,
     }));
 
     if (cached) {
@@ -277,11 +299,29 @@ export const usePDFViewerStore = create<PDFViewerState>((set, get) => ({
     set({ highlightCitations: [] });
   },
   close() {
+    // Hide the panel without unloading the PDF. The
+    // PDFDocumentProxy that react-pdf parsed stays alive on the
+    // mounted ``<PDFViewer>``, so re-opening the same document is
+    // instant. ``currentWebCitation`` and ``highlightCitations`` are
+    // cleared because they're per-citation state — keeping them
+    // would mean a stale evidence highlight reappears on next open.
     set({
-      currentDocument: null,
+      sourcesPanelHidden: true,
       currentWebCitation: null,
-      pageData: null,
       highlightCitations: [],
     });
+  },
+  openPreview(document) {
+    // Drive the floating preview dialog. ``previewDocument`` controls
+    // visibility; the actual PDF load is triggered by the dialog
+    // effect calling ``loadPage`` when it observes ``previewDocument``
+    // changing.
+    set({ previewDocument: document });
+  },
+  closePreview() {
+    // Dismiss the dialog without unloading the PDF. The next open of
+    // the same document hits the still-mounted <PDFViewer>'s cached
+    // PDFDocumentProxy and renders instantly.
+    set({ previewDocument: null });
   },
 }));
