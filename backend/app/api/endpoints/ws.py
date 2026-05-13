@@ -26,6 +26,7 @@ from app.core.database import SyncSessionLocal, async_session
 from app.core.security import decode_access_token
 from app.models.company import Company
 from app.models.conversation import Conversation, Message
+from app.models.document import Document
 from app.models.group import Group
 from app.models.project import Project
 from app.models.user import User
