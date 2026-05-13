@@ -3,7 +3,7 @@
 import "@/components/pdf/pdfjsSetup";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ExternalLink, FileSearch2, Globe2 } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, ExternalLink, FileSearch2, Globe2 } from "lucide-react";
 import { Document as PDFDocument } from "react-pdf";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
@@ -446,6 +446,85 @@ export function PDFViewer() {
   const [sidebarTab, setSidebarTab] = useState<"pages" | "outline">("pages");
   const [learnOpen, setLearnOpen] = useState(false);
   const [mindmapOpen, setMindmapOpen] = useState(false);
+  // Page-sidebar layout state. Width is resizable via a drag handle
+  // on its right edge; collapsed flips the whole thing to a tiny
+  // toolbar so the PDF can fill more horizontal space. Both prefs
+  // are persisted in localStorage so reopening a PDF keeps the
+  // layout the user settled on.
+  const SIDEBAR_DEFAULT = 200;
+  const SIDEBAR_MIN = 140;
+  const SIDEBAR_MAX = 360;
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    if (typeof window === "undefined") return SIDEBAR_DEFAULT;
+    try {
+      const raw = window.localStorage.getItem("pdfSidebarWidth");
+      const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+      if (Number.isFinite(parsed) && parsed >= SIDEBAR_MIN && parsed <= SIDEBAR_MAX) {
+        return parsed;
+      }
+    } catch {
+      /* ignore */
+    }
+    return SIDEBAR_DEFAULT;
+  });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem("pdfSidebarCollapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [resizingSidebar, setResizingSidebar] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || resizingSidebar) return;
+    try {
+      window.localStorage.setItem("pdfSidebarWidth", String(Math.round(sidebarWidth)));
+    } catch {
+      /* ignore */
+    }
+  }, [sidebarWidth, resizingSidebar]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        "pdfSidebarCollapsed",
+        sidebarCollapsed ? "true" : "false",
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [sidebarCollapsed]);
+  const startSidebarResize = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (sidebarCollapsed) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const startX = event.clientX;
+      const startWidth = sidebarWidth;
+      setResizingSidebar(true);
+      const previousCursor = window.document.body.style.cursor;
+      const previousSelect = window.document.body.style.userSelect;
+      window.document.body.style.cursor = "col-resize";
+      window.document.body.style.userSelect = "none";
+      const onMove = (e: MouseEvent) => {
+        const delta = e.clientX - startX;
+        setSidebarWidth(
+          Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, startWidth + delta)),
+        );
+      };
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        window.document.body.style.cursor = previousCursor;
+        window.document.body.style.userSelect = previousSelect;
+        setResizingSidebar(false);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [sidebarCollapsed, sidebarWidth],
+  );
   const pendingLearnDocId = useChatStore((state) => state.pendingLearnDiagnosticDocumentId);
   const clearPendingLearn = useChatStore((state) => state.setPendingLearnDiagnosticDocumentId);
   // When the chat handler signals a learn-mode message hit a doc
@@ -1075,9 +1154,27 @@ export function PDFViewer() {
         ) : null}
       </div>
       <div className="min-h-0 flex flex-1 overflow-hidden bg-[#4a4a4a]">
-        <aside className="hidden w-[200px] shrink-0 flex-col border-r border-black/40 bg-[#3a3a3a] md:flex">
-          {hasOutline ? (
-            <div className="flex shrink-0 border-b border-black/[0.08]">
+        {sidebarCollapsed ? (
+          // Collapsed rail — a slim 28px strip with only the expand
+          // button so the PDF can fill more horizontal space. Clicks
+          // restore the previous width.
+          <aside className="hidden h-full w-7 shrink-0 flex-col items-center justify-start border-r border-black/40 bg-[#3a3a3a] py-2 md:flex">
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(false)}
+              title="Show page thumbnails"
+              aria-label="Show page thumbnails"
+              className="inline-flex h-6 w-6 items-center justify-center rounded text-white/65 transition hover:bg-white/[0.08] hover:text-white"
+            >
+              <ChevronsRight className="h-3.5 w-3.5" />
+            </button>
+          </aside>
+        ) : (
+          <aside
+            className="relative hidden h-full shrink-0 flex-col border-r border-black/40 bg-[#3a3a3a] md:flex"
+            style={{ width: sidebarWidth }}
+          >
+            <div className="flex shrink-0 items-center border-b border-black/[0.08]">
               <button
                 type="button"
                 onClick={() => setSidebarTab("pages")}
@@ -1087,50 +1184,72 @@ export function PDFViewer() {
               >
                 Pages
               </button>
+              {hasOutline ? (
+                <button
+                  type="button"
+                  onClick={() => setSidebarTab("outline")}
+                  className={`flex-1 px-2 py-2 text-[10px] font-medium uppercase tracking-[0.18em] transition ${
+                    sidebarTab === "outline" ? "bg-[#2a2a2a] text-white" : "text-white/55 hover:text-white"
+                  }`}
+                >
+                  Outline
+                </button>
+              ) : null}
               <button
                 type="button"
-                onClick={() => setSidebarTab("outline")}
-                className={`flex-1 px-2 py-2 text-[10px] font-medium uppercase tracking-[0.18em] transition ${
-                  sidebarTab === "outline" ? "bg-[#2a2a2a] text-white" : "text-white/55 hover:text-white"
-                }`}
+                onClick={() => setSidebarCollapsed(true)}
+                title="Hide page thumbnails"
+                aria-label="Hide page thumbnails"
+                className="ml-auto mr-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-white/55 transition hover:bg-white/[0.08] hover:text-white"
               >
-                Outline
+                <ChevronsLeft className="h-3.5 w-3.5" />
               </button>
             </div>
-          ) : null}
-          <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-            {sidebarTab === "outline" && hasOutline ? (
-              <PDFOutline
-                pdf={pdfProxy}
-                currentPage={currentPage}
-                onSelectPage={(pageNumber) => {
-                  void handleOpenPage(pageNumber);
-                }}
-              />
-            ) : (
-              <div className="px-2 py-3">
-                <div className="space-y-3">
-                  {Array.from({ length: currentDocument.page_count ?? currentPage }, (_, index) => {
-                    const pageNumber = index + 1;
-                    return (
-                      <PageThumbnail
-                        key={`${currentDocument.id}-thumb-${pageNumber}`}
-                        document={currentDocument}
-                        pageNumber={pageNumber}
-                        active={pageNumber === currentPage}
-                        cachedPage={pageCache[pageKey(currentDocument.id, pageNumber)] ?? null}
-                        onVisible={handleThumbnailVisible}
-                        onOpen={(nextPage) => {
-                          void handleOpenPage(nextPage);
-                        }}
-                      />
-                    );
-                  })}
+            <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
+              {sidebarTab === "outline" && hasOutline ? (
+                <PDFOutline
+                  pdf={pdfProxy}
+                  currentPage={currentPage}
+                  onSelectPage={(pageNumber) => {
+                    void handleOpenPage(pageNumber);
+                  }}
+                />
+              ) : (
+                <div className="px-2 py-3">
+                  <div className="space-y-3">
+                    {Array.from({ length: currentDocument.page_count ?? currentPage }, (_, index) => {
+                      const pageNumber = index + 1;
+                      return (
+                        <PageThumbnail
+                          key={`${currentDocument.id}-thumb-${pageNumber}`}
+                          document={currentDocument}
+                          pageNumber={pageNumber}
+                          active={pageNumber === currentPage}
+                          cachedPage={pageCache[pageKey(currentDocument.id, pageNumber)] ?? null}
+                          onVisible={handleThumbnailVisible}
+                          onOpen={(nextPage) => {
+                            void handleOpenPage(nextPage);
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
-        </aside>
+              )}
+            </div>
+            {/* Drag handle on the right edge. 6px visible strip + a
+                wider invisible hit zone so it's easy to grab. */}
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize page sidebar"
+              onMouseDown={startSidebarResize}
+              className={`group absolute inset-y-0 right-[-3px] z-10 w-[6px] cursor-col-resize select-none transition ${
+                resizingSidebar ? "bg-accent/50" : "bg-transparent hover:bg-accent/40"
+              }`}
+            />
+          </aside>
+        )}
         <div
           ref={scrollContainerRef}
           data-pdf-scroll="true"
