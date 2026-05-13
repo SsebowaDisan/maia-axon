@@ -6,6 +6,8 @@ import { BookOpen, FileText, GraduationCap, Layers, Loader2, Paperclip, Quote, S
 import { api } from "@/lib/api";
 import type { MindmapSectionNode, SearchMode } from "@/lib/types";
 import { useChatStore } from "@/stores/chatStore";
+import { useDocumentStore } from "@/stores/documentStore";
+import { useGroupStore } from "@/stores/groupStore";
 import { usePDFViewerStore } from "@/stores/pdfViewerStore";
 
 // "%foo" trigger. Recognised when the cursor is at the end of a token
@@ -156,6 +158,20 @@ export function DocumentChatComposer() {
     const message = draft.trim();
     setDraft("");
     setTopicQuery(null);
+    // Defensive: ensure the doc-scoped chat always sends with the
+    // active document selected AND the doc's group active. The dialog
+    // effect normally handles this on open, but persist hydration
+    // races or a stale store can leave them empty — the backend then
+    // rejects with "Group is required for grounded chat".
+    if (currentDocument) {
+      useDocumentStore.getState().setSelectedDocuments([currentDocument.id]);
+      if (
+        currentDocument.group_id &&
+        useGroupStore.getState().activeGroupId !== currentDocument.group_id
+      ) {
+        useGroupStore.getState().setActiveGroup(currentDocument.group_id);
+      }
+    }
     await sendMessage(message);
   }
 
