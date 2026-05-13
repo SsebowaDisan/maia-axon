@@ -98,16 +98,14 @@ interface NodePayload {
 const ROOT_ID = "__book_root__";
 
 // ---------------------------------------------------------------------------
-// Visual tuning — tight vertical stacking, wide horizontal breathing.
-// Matches NotebookLM's mindmap density: a tall narrow column of compact
-// pill nodes per level, with generous gaps between levels so the bezier
-// curves can curve smoothly without crossing siblings.
+// Visual tuning — compact pills with enough breathing room that long
+// German chapter titles fit on one line and sibling pills don't touch.
 // ---------------------------------------------------------------------------
 
-const LEVEL_X = 280;
-const LEAF_Y = 38;
-const NODE_W = 220;
-const NODE_W_ROOT = 240;
+const LEVEL_X = 340;
+const LEAF_Y = 56;
+const NODE_W = 300;
+const NODE_W_ROOT = 320;
 
 // ---------------------------------------------------------------------------
 // Tree helpers
