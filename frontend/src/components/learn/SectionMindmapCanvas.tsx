@@ -112,10 +112,10 @@ const ROOT_ID = "__book_root__";
 // room to bend gracefully, with comparatively tight vertical stacking.
 // ---------------------------------------------------------------------------
 
-const LEVEL_X = 640;
-const LEAF_Y = 72;
-const NODE_W = 300;
-const NODE_W_ROOT = 320;
+const LEVEL_X = 540;
+const LEAF_Y = 80;
+const NODE_W = 220;
+const NODE_W_ROOT = 240;
 
 // ---------------------------------------------------------------------------
 // Tree helpers
@@ -427,35 +427,39 @@ function SectionNodeView({ data }: NodeProps<Node<NodePayload>>) {
         border: `1px solid ${t.border}`,
         color: t.text,
         width,
-        borderRadius: 8,
-        padding: "3px 10px",
+        borderRadius: 10,
+        padding: "8px 12px",
         boxShadow: t.shadow,
         position: "relative",
         cursor: data.hasChildren ? "pointer" : data.kind === "headline" ? "pointer" : "default",
         display: "flex",
         alignItems: "center",
-        gap: 6,
-        minHeight: 24,
+        gap: 8,
+        minHeight: 44,
         transition: "background 100ms ease, border-color 100ms ease",
       }}
     >
       <Handle type="target" position={Position.Left} style={{ opacity: 0, width: 1, height: 1 }} />
       <Handle type="source" position={Position.Right} style={{ opacity: 0, width: 1, height: 1 }} />
 
-      {/* Single-line title with ellipsis. Color codes the level so
-          we don't need a "TOPIC · P. 13" label cluttering the pill. */}
+      {/* Two-line title with ellipsis. Narrower pills mean German
+          titles like "System performance and pressure management"
+          need to wrap; the 2-line clamp keeps them readable while
+          capping pill height at a predictable value. */}
       <span
         style={{
           flex: 1,
           minWidth: 0,
           fontSize: isRoot ? 12.5 : data.kind === "group" ? 12 : 11.5,
           fontWeight: isRoot ? 700 : data.kind === "group" ? 600 : 500,
-          lineHeight: 1.3,
+          lineHeight: 1.35,
           letterSpacing: "-0.005em",
           color: t.text,
-          whiteSpace: "nowrap",
+          display: "-webkit-box",
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: "vertical",
           overflow: "hidden",
-          textOverflow: "ellipsis",
+          wordBreak: "break-word",
         }}
       >
         {data.title}
