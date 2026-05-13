@@ -60,7 +60,13 @@ export const useAnnotationsStore = create<AnnotationsState>((set, get) => ({
         set((state) => ({ annotations: [...state.annotations, annotation] }));
       }
       return annotation;
-    } catch {
+    } catch (error) {
+      // Surface the error to the console so future failures stop being
+      // invisible (the popover stays open with no feedback otherwise).
+      // The caller checks the return value to decide whether to clear
+      // the draft.
+      // eslint-disable-next-line no-console
+      console.error("Failed to save annotation:", error);
       return null;
     }
   },

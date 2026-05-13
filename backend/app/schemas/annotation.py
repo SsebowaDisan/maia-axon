@@ -24,7 +24,15 @@ class AnnotationCreate(BaseModel):
     visibility: AnnotationVisibility = "private"
     char_start: int | None = Field(default=None, ge=0)
     char_end: int | None = Field(default=None, ge=0)
-    boxes: list[Bbox4] = Field(default_factory=list, max_length=64)
+    # The frontend emits one box per character-cluster rect that
+    # ``range.getClientRects()`` produces — empirically anywhere from
+    # one (a single word) up to several hundred (a multi-paragraph
+    # justified selection). The previous 64 cap was hit constantly,
+    # the backend returned 422, and the frontend store silently
+    # swallowed the error leaving the user with a stuck popover and
+    # no saved highlight. 4096 keeps the row-size predictable while
+    # comfortably covering even page-spanning highlights.
+    boxes: list[Bbox4] = Field(default_factory=list, max_length=4096)
 
 
 class AnnotationUpdate(BaseModel):
