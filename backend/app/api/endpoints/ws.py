@@ -57,7 +57,7 @@ from app.services.concept_neighbors import find_neighbor_concepts
 from app.services.google_marketing import generate_ga4_answer, generate_google_ads_answer
 from app.services.learn_chat import (
     build_learn_system_prompt,
-    fallback_no_path_message,
+    build_open_learn_system_prompt,
     get_learn_chat_context,
 )
 from app.services.projects import ensure_default_project
@@ -564,9 +564,12 @@ async def websocket_chat(websocket: WebSocket):
                     await websocket.send_json({"type": "done", "conversation_id": str(conversation.id), "suggested_questions": list(_local_suggested_questions(locals()))})
                     continue
 
-                # Learn mode: load active path + section context, then
-                # fall through to the streaming retrieval path with a
-                # tutor-flavoured system prompt.
+                # Learn mode: load the active path + section context if
+                # one exists. When the user hasn't generated a path yet
+                # we fall through with a generic tutor prompt instead of
+                # forcing the diagnostic popup — the popup remains
+                # available as an opt-in via the Learn dialog, but
+                # everyday learn-mode questions don't require it.
                 learn_ctx = None
                 if mode == "learn":
                     def _load_learn_ctx():
@@ -581,31 +584,9 @@ async def websocket_chat(websocket: WebSocket):
                             sync_db.close()
 
                     learn_ctx = await asyncio.to_thread(_load_learn_ctx)
-                    if learn_ctx is None:
-                        fallback_text = fallback_no_path_message(None)
-                        await websocket.send_json({"type": "token", "content": fallback_text})
-                        await websocket.send_json({"type": "citations", "data": []})
-                        await websocket.send_json({"type": "visualizations", "data": []})
-                        await websocket.send_json({"type": "mindmap", "data": None})
-                        await _persist_assistant_message(
-                            db,
-                            conversation,
-                            message,
-                            mode,
-                            fallback_text,
-                            [],
-                            [],
-                            None,
-                        )
-                        await websocket.send_json({
-                            "type": "done",
-                            "conversation_id": str(conversation.id),
-                            "suggested_questions": [],
-                            "needs_diagnostic": True,
-                        })
-                        continue
-                    # Scope learn-mode retrieval to the path's document.
-                    document_ids = [learn_ctx.document_id]
+                    if learn_ctx is not None:
+                        # Scope learn-mode retrieval to the path's document.
+                        document_ids = [learn_ctx.document_id]
 
                 # --- Stage 1: Retrieval ---
                 await websocket.send_json({"type": "status", "status": "retrieving"})
@@ -850,12 +831,28 @@ async def websocket_chat(websocket: WebSocket):
                     "or engineering sanity check when the material supports it. "
                     f"{STRUCTURED_RESPONSE_GUIDANCE}"
                 )
-                if mode == "learn" and learn_ctx is not None:
-                    system_content = (
-                        build_learn_system_prompt(learn_ctx)
-                        + "\n\n"
-                        + system_content
-                    )
+                if mode == "learn":
+                    if learn_ctx is not None:
+                        # Path-aware tutor prompt (knows the goal, current
+                        # step, prerequisite vs target, etc.).
+                        system_content = (
+                            build_learn_system_prompt(learn_ctx)
+                            + "\n\n"
+                            + system_content
+                        )
+                    else:
+                        # No path yet — open tutor mode, document-scoped.
+                        doc_name = None
+                        if document_ids:
+                            doc_obj = await db.scalar(
+                                select(Document).where(Document.id == document_ids[0])
+                            )
+                            doc_name = doc_obj.filename if doc_obj else None
+                        system_content = (
+                            build_open_learn_system_prompt(doc_name)
+                            + "\n\n"
+                            + system_content
+                        )
 
                 # Prepend system message
                 messages.insert(0, {

@@ -260,3 +260,30 @@ def fallback_no_path_message(document_filename: str | None) -> str:
         "you'll answer a few quick diagnostic questions, and Maia will lay out a "
         "personalised path through the book."
     )
+
+
+def build_open_learn_system_prompt(document_filename: str | None) -> str:
+    """Tutor-voice system prompt used when learn mode is on but no
+    structured path has been generated yet.
+
+    Lets the user use Learn as a "talk to a tutor about this book"
+    chat surface without forcing the path-diagnostic popup. They can
+    still opt into a generated path later via the Learn dialog —
+    that path-aware prompt simply replaces this one.
+    """
+
+    name = f'"{document_filename}"' if document_filename else "this document"
+    return (
+        f"You are tutoring the user in learn mode for {name}. They have not "
+        "generated a structured learning path yet — they're exploring the "
+        "book and asking questions as they go. "
+        "Tutoring rules: "
+        "1) Ground every claim in the sources you are given. Cite inline as [N]. "
+        "2) Prefer explanation over recitation — use the cited passages as "
+        "scaffolding, not as a script to repeat. Make the underlying ideas "
+        "click, with worked examples or simpler decompositions when useful. "
+        "3) Check the user's understanding lightly when it makes sense — a "
+        "single follow-up question is fine, not a quiz. "
+        "4) If they seem to want a guided path through the book, mention that "
+        "they can tap **Start learning** to generate one — don't push it."
+    )
