@@ -135,15 +135,38 @@ def _get_openai_client() -> openai.OpenAI:
     return openai.OpenAI(api_key=settings.openai_api_key)
 
 
-def _trim_title(title: str) -> str:
-    """Strip whitespace, drop trailing dots / numerals, cap length.
+_TITLE_DOTLEADER_RE = __import__("re").compile(
+    # Optional whitespace, 3+ dots (dot leader), optional whitespace,
+    # optional trailing page-number group (1-4 digits, possibly with
+    # one trailing letter like "12a"). Everything after the dot
+    # leader is OCR'd TOC artefacts, never part of the real title.
+    r"\s*(?:[\.…·]\s*){3,}(?:\s*\d{1,4}[A-Za-z]?\s*)?$"
+)
 
-    PyMuPDF TOC titles often arrive with trailing dot-leaders (a
-    legacy of TOC typesetting) and stray whitespace. The model is
-    less prone to schema drift when titles are clean.
+
+def _trim_title(title: str) -> str:
+    """Normalise a section title for display + downstream prompts.
+
+    Cleans up three classes of OCR / typesetter artefact:
+
+    * **Trailing dot leaders** — long runs of ``.....`` (or unicode
+      ellipsis / middle dots) the OCR captured from a printed TOC.
+      These are never part of the real title; they're typeset gap
+      fillers between the chapter name and the page number.
+    * **Trailing page-number references** — a digit run after the
+      dot leader (``"27 Umlenkstücke ......... 179"``). We strip
+      the leader *and* the page reference together so we don't end
+      up with a title that ends in a stray "179".
+    * **Whitespace + trailing punctuation** — collapse internal
+      runs and drop any remaining trailing dots / commas / spaces.
+
+    Result is then capped to ``_TITLE_TRIM_CHARS``.
     """
-    cleaned = " ".join(title.split())
-    while cleaned.endswith((".", " ")):
+    cleaned = " ".join((title or "").split())
+    cleaned = _TITLE_DOTLEADER_RE.sub("", cleaned).strip()
+    # Drop any stray trailing punctuation left over (commas, semis,
+    # single dots not caught by the dot-leader pattern).
+    while cleaned.endswith((".", ",", ";", ":", " ", "·")):
         cleaned = cleaned[:-1]
     if len(cleaned) > _TITLE_TRIM_CHARS:
         cleaned = cleaned[: _TITLE_TRIM_CHARS - 1] + "…"

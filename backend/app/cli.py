@@ -268,6 +268,43 @@ def _cmd_dedupe_concepts(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_clean_titles(args: argparse.Namespace) -> int:
+    """Re-run the section-title normaliser over every existing
+    section row for one document. Use after improving ``_trim_title``
+    in section_mapping (e.g. when adding a new artefact pattern)
+    without paying the cost of re-enriching all headlines."""
+    from app.tasks.section_mapping import _trim_title
+
+    try:
+        document_uuid = uuid.UUID(args.document_id)
+    except ValueError:
+        print(f"Invalid document_id: {args.document_id!r}", file=sys.stderr)
+        return 2
+
+    db = SyncSession()
+    try:
+        rows = (
+            db.query(DocumentSection)
+            .filter(DocumentSection.document_id == document_uuid)
+            .all()
+        )
+        if not rows:
+            print("No sections to clean.", file=sys.stderr)
+            return 0
+        changed = 0
+        for row in rows:
+            new_title = _trim_title(row.title)
+            if new_title and new_title != row.title:
+                row.title = new_title
+                changed += 1
+        db.commit()
+    finally:
+        db.close()
+
+    print(f"OK: cleaned {changed}/{len(rows)} section title(s).", file=sys.stderr)
+    return 0
+
+
 def _cmd_group_chapters(args: argparse.Namespace) -> int:
     """Re-run only the thematic chapter-grouping LLM call on a
     document that already has sections persisted. Useful when
@@ -468,6 +505,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="UUID of the document to (re-)group.",
     )
     group_chapters.set_defaults(func=_cmd_group_chapters)
+
+    clean_titles = subparsers.add_parser(
+        "clean-titles",
+        help="Re-apply the title normaliser to every section in a document.",
+    )
+    clean_titles.add_argument(
+        "document_id",
+        help="UUID of the document whose section titles should be cleaned.",
+    )
+    clean_titles.set_defaults(func=_cmd_clean_titles)
 
     return parser
 
