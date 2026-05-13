@@ -198,6 +198,12 @@ class AnswerResponse:
     # clickable chips below the answer to turn Library into a guided
     # learning interface.
     suggested_questions: list[str] = field(default_factory=list)
+    # Set to True when the answer is a pivot (the user's question
+    # wasn't well-covered by the document, or the retrieval found
+    # only related-but-different sources). The frontend renders an
+    # "Answer anyway from general knowledge" pill below such replies
+    # so the user can opt into a non-grounded answer.
+    needs_general_knowledge_optin: bool = False
 
 
 class _VisibleTextExtractor(HTMLParser):
@@ -2240,3 +2246,299 @@ def _build_mindmap(answer: AnswerResponse) -> MindmapNode:
         ))
 
     return root
+
+
+# ---------------------------------------------------------------------------
+# Grounding-fit assessment + not-in-document pivot
+# ---------------------------------------------------------------------------
+#
+# Two failure modes we explicitly defend against:
+#
+# 1. The user's question isn't covered by the document at all.
+#    Retrieval is empty or scores below the relevance floor.
+#
+# 2. Retrieval found chunks that look semantically close but are
+#    about a DIFFERENT subject — e.g. user asks about water nozzles,
+#    book is about coatings and discusses paint nozzles. To an
+#    embedding, "water nozzle" and "paint nozzle" cluster tightly,
+#    so retrieval returns the paint chunks. Without an explicit
+#    check, the LLM blends them and presents paint-nozzle facts as
+#    if they answered a water-nozzle question.
+#
+# ``assess_grounding_fit`` runs one cheap structured-output LLM call
+# that classifies each source as DIRECT / RELATED / UNRELATED vs the
+# user's question. The caller routes on the verdict:
+#
+#   * well_covered (>=1 DIRECT) -> normal grounded answer.
+#   * subject_mismatch (only RELATED) -> not_in_document_agent
+#     produces a pivot naming the distinction.
+#   * not_in_doc (all UNRELATED / empty) -> pivot with closest
+#     concept-neighbour suggestions instead.
+
+
+_GROUNDING_FIT_SYSTEM = (
+    "You are a retrieval-quality classifier. The user asked a question against a document; "
+    "retrieval returned up to a handful of source chunks. Decide whether each source actually "
+    "answers the user's question or whether it's a related-but-different topic that would "
+    "mislead the user if presented as an answer.\n\n"
+    "Output STRICT JSON ONLY in this shape:\n\n"
+    "{\n"
+    '  "user_subject": "<short phrase naming the specific subject of the user\'s question>",\n'
+    '  "sources": [\n'
+    "    {\n"
+    '      "index": <1-based source index>,\n'
+    '      "source_subject": "<short phrase naming what THIS source is actually about>",\n'
+    '      "classification": "DIRECT" | "RELATED" | "UNRELATED",\n'
+    '      "rationale": "<one short clause>"\n'
+    "    },\n"
+    "    ...\n"
+    "  ],\n"
+    '  "verdict": "well_covered" | "subject_mismatch" | "not_in_doc"\n'
+    "}\n\n"
+    "Classification rules:\n"
+    "  - DIRECT: source is about the same subject the user asked about. Same noun phrase, same scope.\n"
+    "  - RELATED: same family / category but a different specific subject. E.g. user asked about water nozzles, source discusses paint nozzles; user asked about axial fans, source discusses centrifugal fans. Substituting one for the other would mislead.\n"
+    "  - UNRELATED: the source has nothing meaningful to do with the user's question.\n\n"
+    "Verdict rules:\n"
+    "  - well_covered: at least one source is DIRECT.\n"
+    "  - subject_mismatch: zero DIRECT sources, but at least one RELATED.\n"
+    "  - not_in_doc: all sources are UNRELATED.\n\n"
+    "Output ONLY the JSON object."
+)
+
+
+@dataclass
+class _ClassifiedSource:
+    index: int  # 1-based
+    classification: str  # "DIRECT" | "RELATED" | "UNRELATED"
+    source_subject: str
+    rationale: str
+
+
+@dataclass
+class GroundingFit:
+    verdict: str  # "well_covered" | "subject_mismatch" | "not_in_doc"
+    user_subject: str
+    sources: list[_ClassifiedSource] = field(default_factory=list)
+
+    @property
+    def direct_indices(self) -> list[int]:
+        return [s.index for s in self.sources if s.classification == "DIRECT"]
+
+    @property
+    def related_indices(self) -> list[int]:
+        return [s.index for s in self.sources if s.classification == "RELATED"]
+
+
+def assess_grounding_fit(
+    query: str, sources: list[RetrievalResult]
+) -> GroundingFit:
+    """Run a cheap subject-match check before the main answer call.
+
+    Empty retrieval is a fast path — no LLM call needed; verdict is
+    ``not_in_doc`` with an empty source list. For any non-empty
+    retrieval we ask the project's standard reasoning model to
+    classify each source and return a verdict.
+
+    The function NEVER raises — on parse / API failure we fall back
+    to ``well_covered`` because that preserves today's behaviour
+    (the existing grounded-answer path runs and the user is no
+    worse off than before this assessor existed).
+    """
+    if not sources:
+        return GroundingFit(verdict="not_in_doc", user_subject=query.strip()[:120])
+
+    # Compose a compact view: one bullet per source with a short
+    # excerpt and a page reference. Cap at 8 sources — deeper
+    # sources rarely change the verdict.
+    bullets: list[str] = []
+    for i, src in enumerate(sources[:8], start=1):
+        snippet = (src.content or "").strip().replace("\n", " ")[:400]
+        page_ref = f" (p. {src.page_number})" if src.page_number else ""
+        bullets.append(f"[{i}]{page_ref}: {snippet}")
+    user_prompt = (
+        f"User question: {query!r}\n\nRetrieved sources:\n"
+        + "\n\n".join(bullets)
+    )
+
+    try:
+        completion = _get_client().chat.completions.create(
+            model=settings.openai_reasoning_model,
+            messages=[
+                {"role": "system", "content": _GROUNDING_FIT_SYSTEM},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0,
+            max_tokens=600,
+        )
+        raw = (completion.choices[0].message.content or "").strip()
+        payload = json.loads(raw)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("grounding_fit_assessor_failed: %s", exc)
+        return GroundingFit(verdict="well_covered", user_subject=query.strip()[:120])
+
+    verdict = payload.get("verdict")
+    if verdict not in ("well_covered", "subject_mismatch", "not_in_doc"):
+        verdict = "well_covered"
+    user_subject = str(payload.get("user_subject") or query)[:200]
+    classified: list[_ClassifiedSource] = []
+    for entry in payload.get("sources", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            idx = int(entry.get("index"))
+        except (TypeError, ValueError):
+            continue
+        cls = entry.get("classification")
+        if cls not in ("DIRECT", "RELATED", "UNRELATED"):
+            continue
+        classified.append(
+            _ClassifiedSource(
+                index=idx,
+                classification=cls,
+                source_subject=str(entry.get("source_subject") or "")[:200],
+                rationale=str(entry.get("rationale") or "")[:280],
+            )
+        )
+
+    return GroundingFit(
+        verdict=verdict, user_subject=user_subject, sources=classified
+    )
+
+
+_NOT_IN_DOC_SYSTEM = (
+    "You are a document-grounded assistant. The user asked a question that the current "
+    "document does NOT answer well. Write a short, honest response that routes the user to "
+    "a useful next step — without inventing facts and without pretending the document covers "
+    "material it doesn't.\n\n"
+    "Output STRICT JSON ONLY:\n\n"
+    '{ "text": "<the response, plain text, max 140 words>" }\n\n'
+    "The response MUST have this structure:\n"
+    "  1. ONE short opening line stating the document doesn't cover the asked subject. Examples: 'Not in this document.' / 'This book covers X, not Y.'\n"
+    "  2. ONE sentence on what the document IS about, drawn from the document scope you were given.\n"
+    "  3. If you were given 'closest_topics' that are genuinely related, name 1-2 of them with their section + page reference. If the list is empty or none are related, skip this step — never invent section references.\n"
+    "  4. If you were given 'related_but_different_sources', name the distinction explicitly: e.g. 'This book covers paint nozzles (§N, p. P), not water nozzles — they're related but operate on different principles.'\n"
+    "  5. ONE short sentence pointing the user to a more useful external source. Be specific (named database / catalog / standard). If you genuinely don't know what to suggest, omit.\n"
+    "  6. End with EXACTLY this phrase on its own short line: 'Want me to answer from general knowledge anyway?'\n\n"
+    "Rules:\n"
+    "  - Never apologise. No 'Unfortunately' / 'I'm sorry'.\n"
+    "  - Never include literal placeholders like <...> in the output.\n"
+    "  - Plain text only — no markdown headings, no bullets, no citation brackets like [N] (this response doesn't cite the document, it explains why it can't)."
+)
+
+
+@dataclass
+class NeighborConcept:
+    """Closest concept in the document by cosine similarity, plus the
+    introducing section so the pivot response can cite a page."""
+
+    concept_name: str
+    section_title: str | None
+    section_kind: str | None
+    page_start: int | None
+
+
+def not_in_document_agent(
+    *,
+    query: str,
+    document_title: str | None,
+    document_summary: str | None,
+    neighbor_concepts: list[NeighborConcept],
+    fit: GroundingFit | None = None,
+    related_sources: list[RetrievalResult] | None = None,
+) -> AnswerResponse:
+    """Generate the pivot response shown when the document can't
+    answer the user's question.
+
+    Two flavours handled by the same prompt:
+      * ``not_in_doc`` — empty / all-unrelated retrieval. Pivot
+        leans on ``neighbor_concepts`` to suggest the closest topics
+        the doc DOES cover.
+      * ``subject_mismatch`` — retrieval found related-but-different
+        material (the water/paint nozzle case). Pivot leans on
+        ``related_sources`` + the classifier's ``source_subject``
+        notes to name what the doc actually discusses.
+    """
+    payload: dict[str, Any] = {
+        "user_question": query,
+        "document_title": document_title or "this document",
+        "document_summary": document_summary or "",
+    }
+    if neighbor_concepts:
+        payload["closest_topics"] = [
+            {
+                "concept": n.concept_name,
+                "section_title": n.section_title or "",
+                "page_start": n.page_start or 0,
+            }
+            for n in neighbor_concepts[:4]
+        ]
+    if related_sources:
+        payload["related_but_different_sources"] = [
+            {
+                "subject": next(
+                    (
+                        s.source_subject
+                        for s in (fit.sources if fit else [])
+                        if s.index == idx
+                    ),
+                    "",
+                ),
+                "section": src.document_name,
+                "page_start": src.page_number,
+                "excerpt": (src.content or "")[:300],
+            }
+            for idx, src in enumerate(related_sources[:3], start=1)
+        ]
+
+    user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
+
+    # Deterministic fallback used when the JSON call fails for any
+    # reason. Keeps the user from staring at a hanging spinner.
+    fallback_lines = ["Not in this document."]
+    if document_title:
+        fallback_lines.append(
+            f"{document_title} doesn't cover what you asked."
+        )
+    if neighbor_concepts:
+        first = neighbor_concepts[0]
+        if first.section_title and first.page_start:
+            fallback_lines.append(
+                f"The closest topic in this book is "
+                f"{first.concept_name} "
+                f"({first.section_title}, p. {first.page_start})."
+            )
+    fallback_lines.append(
+        "Want me to answer from general knowledge anyway?"
+    )
+    fallback_text = "\n\n".join(fallback_lines)
+
+    try:
+        completion = _get_client().chat.completions.create(
+            model=settings.openai_reasoning_model,
+            messages=[
+                {"role": "system", "content": _NOT_IN_DOC_SYSTEM},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2,
+            max_tokens=400,
+        )
+        raw = (completion.choices[0].message.content or "").strip()
+        parsed = json.loads(raw)
+        text = str(parsed.get("text") or "").strip()
+        if not text:
+            text = fallback_text
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("not_in_document_agent_failed: %s", exc)
+        text = fallback_text
+
+    return AnswerResponse(
+        text=text,
+        sections=[
+            AnswerSection(type="explanation", content=text, grounded=False)
+        ],
+        citations=[],
+        needs_general_knowledge_optin=True,
+    )

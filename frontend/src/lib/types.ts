@@ -264,6 +264,17 @@ export interface ChatMessage {
   // clickable chips below the assistant bubble so Library mode acts as a
   // guided learning interface rather than a one-shot Q&A endpoint.
   suggestedQuestions?: string[];
+  // True when this assistant message is a not-in-document pivot —
+  // the backend's grounding-fit assessor decided the user's question
+  // wasn't well-covered by the document, or retrieval returned only
+  // related-but-different sources. The frontend renders an
+  // "Answer anyway from general knowledge" pill below the bubble
+  // so the user can opt into a non-grounded answer.
+  needsGeneralKnowledgeOptin?: boolean;
+  // The original user query that produced this pivot. Used by the
+  // opt-in action to re-send the question in standard (no-retrieval)
+  // mode and produce a general-knowledge answer.
+  originatingUserQuery?: string;
 }
 
 export interface PromptAttachment {
@@ -341,6 +352,12 @@ export type WsServerEvent =
       // active path exists for the document — the frontend pops the
       // Start learning dialog.
       needs_diagnostic?: boolean;
+      // Set when the assistant's reply was a not-in-document pivot
+      // (the user's question wasn't covered or retrieval returned a
+      // related-but-different subject). The frontend renders an
+      // "Answer anyway from general knowledge" pill below the
+      // message so the user can opt into a non-grounded answer.
+      needs_general_knowledge_optin?: boolean;
     }
   | { type: "error"; message: string };
 

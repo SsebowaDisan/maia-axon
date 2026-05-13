@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Brain, Check, Copy, FileText, ImageIcon, MoreHorizontal, Paperclip, Pencil, Share2, TableProperties, ThumbsDown, ThumbsUp, User2 } from "lucide-react";
+import { AlertTriangle, Brain, Check, Copy, FileText, ImageIcon, Loader2, MoreHorizontal, Paperclip, Pencil, Share2, Sparkles, TableProperties, ThumbsDown, ThumbsUp, User2 } from "lucide-react";
 
 import { ExportDialog } from "@/components/chat/ExportDialog";
 import { MessageFeedbackDialog } from "@/components/chat/MessageFeedbackDialog";
@@ -15,6 +15,49 @@ import { formatRelativeTime, toEditableDraft } from "@/lib/utils";
 import { useDocumentStore } from "@/stores/documentStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useGroupStore } from "@/stores/groupStore";
+
+function GeneralKnowledgeOptInPill({ query }: { query: string | undefined }) {
+  // Rendered below a not-in-document pivot reply. Clicking re-sends
+  // the user's original question in standard (no-retrieval) mode so
+  // the LLM answers from its training data instead of the corpus.
+  // Visually distinct from suggested-questions because this is an
+  // opt-OUT of grounding, not a continuation of grounded study.
+  const sendMessage = useChatStore((state) => state.sendMessage);
+  const streaming = useChatStore((state) => state.streaming);
+  const [pending, setPending] = useState(false);
+  if (!query) return null;
+  const onClick = async () => {
+    if (streaming || pending) return;
+    setPending(true);
+    try {
+      await sendMessage(query, { mode: "standard" });
+    } finally {
+      setPending(false);
+    }
+  };
+  return (
+    <div className="mt-5">
+      <button
+        type="button"
+        disabled={streaming || pending}
+        onClick={() => void onClick()}
+        className="inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accentSoft px-4 py-2 text-[13px] font-medium text-accent transition hover:border-accent hover:bg-accent hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {pending ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Sparkles className="h-3.5 w-3.5" />
+        )}
+        Answer anyway from general knowledge
+      </button>
+      <p className="mt-2 text-[11px] text-muted">
+        Bypasses the document. The answer comes from the model&apos;s general
+        training, not your library.
+      </p>
+    </div>
+  );
+}
+
 
 function SuggestedQuestionsRow({ questions }: { questions: string[] }) {
   // Library mode is a learning interface: clicking a chip sends the
@@ -400,6 +443,14 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
                     />
                     {message.visualizations.length ? (
                       <MessageVisualizationDashboard visualizations={message.visualizations} />
+                    ) : null}
+                    {message.role === "assistant" &&
+                    !message.isStreaming &&
+                    message.status === "done" &&
+                    message.needsGeneralKnowledgeOptin ? (
+                      <GeneralKnowledgeOptInPill
+                        query={message.originatingUserQuery}
+                      />
                     ) : null}
                     {message.role === "assistant" &&
                     !message.isStreaming &&

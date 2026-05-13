@@ -310,18 +310,36 @@ export const useChatStore = create<ChatState>()(
           break;
         case "done":
           flushTokenBuffer();
-          updateAssistant((message) => ({
-            ...message,
-            isStreaming: false,
-            status: "done",
-            needsClarification: message.citations.length === 0 && /\?$/.test(message.content.trim()),
-            // Suggested follow-up questions arrive on the final frame so we
-            // can render them as clickable chips below the assistant bubble
-            // the moment the stream completes (no extra round-trip).
-            suggestedQuestions: Array.isArray(event.suggested_questions)
-              ? event.suggested_questions
-              : message.suggestedQuestions,
-          }));
+          updateAssistant((message) => {
+            // Capture the user's question that produced this reply
+            // so the opt-in pill can re-send it in standard mode.
+            // We look at the message immediately before the assistant
+            // bubble we're about to mark "done".
+            const state = get();
+            const idx = lastAssistantIndex(state.messages);
+            const originating =
+              idx > 0 ? state.messages[idx - 1]?.content : undefined;
+            return {
+              ...message,
+              isStreaming: false,
+              status: "done",
+              needsClarification:
+                message.citations.length === 0 && /\?$/.test(message.content.trim()),
+              // Suggested follow-up questions arrive on the final frame so we
+              // can render them as clickable chips below the assistant bubble
+              // the moment the stream completes (no extra round-trip).
+              suggestedQuestions: Array.isArray(event.suggested_questions)
+                ? event.suggested_questions
+                : message.suggestedQuestions,
+              // Pivot reply → frontend renders the "Answer anyway"
+              // pill so the user can opt into a general-knowledge
+              // answer for this same question.
+              needsGeneralKnowledgeOptin: !!event.needs_general_knowledge_optin,
+              originatingUserQuery: event.needs_general_knowledge_optin
+                ? originating
+                : message.originatingUserQuery,
+            };
+          });
           // Learn mode: backend tells us the user has no active path —
           // pop the diagnostic dialog so they can create one. Routed
           // by document id remembered from the request side.

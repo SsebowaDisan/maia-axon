@@ -36,6 +36,7 @@ from app.services.answer_engine import (
     _build_mindmap,
     _format_sources_for_prompt,
     _style_answer_response,
+    assess_grounding_fit,
     axon_group_agent,
     ava_agent,
     classify_ava_question,
@@ -49,8 +50,10 @@ from app.services.answer_engine import (
     identity_agent,
     is_structural_listing_sources,
     language_instruction_for_query,
+    not_in_document_agent,
     structural_listing_agent,
 )
+from app.services.concept_neighbors import find_neighbor_concepts
 from app.services.google_marketing import generate_ga4_answer, generate_google_ads_answer
 from app.services.learn_chat import (
     build_learn_system_prompt,
@@ -190,6 +193,47 @@ def _build_user_content(text: str, image_parts: list[dict]) -> str | list[dict]:
     if not image_parts:
         return text
     return [{"type": "text", "text": text}, *image_parts]
+
+
+async def _send_pivot_and_done(
+    websocket: WebSocket,
+    db: AsyncSession,
+    conversation: Conversation,
+    query: str,
+    mode: str,
+    answer: AnswerResponse,
+) -> None:
+    """Stream a not-in-document pivot response over the WS in one
+    shot and persist it. The pivot doesn't need streaming — it's
+    short and produced by a single non-streaming call — so we send
+    the whole text in one token frame for snappier perceived UX.
+
+    The frontend reads ``needs_general_knowledge_optin`` from the
+    done frame to render the "Answer anyway from general knowledge"
+    pill below the message.
+    """
+    await websocket.send_json({"type": "token", "content": answer.text})
+    await websocket.send_json({"type": "citations", "data": []})
+    await websocket.send_json({"type": "visualizations", "data": []})
+    await websocket.send_json({"type": "mindmap", "data": None})
+    await _persist_assistant_message(
+        db,
+        conversation,
+        query,
+        mode,
+        answer.text,
+        [],
+        [],
+        None,
+    )
+    await websocket.send_json(
+        {
+            "type": "done",
+            "conversation_id": str(conversation.id),
+            "suggested_questions": [],
+            "needs_general_knowledge_optin": True,
+        }
+    )
 
 
 @router.websocket("/ws/chat")
@@ -574,23 +618,42 @@ async def websocket_chat(websocket: WebSocket):
                 sources = retrieval.results
 
                 if not sources:
-                    no_sources_text = "I couldn't find relevant information in the selected group's documents."
-                    await websocket.send_json({
-                        "type": "token",
-                        "content": no_sources_text,
-                    })
-                    await websocket.send_json({"type": "visualizations", "data": []})
-                    await _persist_assistant_message(
-                        db,
-                        conversation,
-                        message,
-                        mode,
-                        no_sources_text,
-                        [],
-                        [],
-                        None,
+                    # Empty retrieval → not-in-document pivot. We try
+                    # to surface the closest concepts the doc DOES
+                    # cover so the user gets a useful next step
+                    # instead of a dead end. ``document_ids`` is set
+                    # for library/learn modes (the user picked which
+                    # docs the chat is scoped to); when unset we fall
+                    # back to a plain pivot with no neighbours.
+                    neighbors = []
+                    if document_ids:
+                        try:
+                            neighbors = await find_neighbor_concepts(
+                                db,
+                                query=message,
+                                document_ids=document_ids,
+                                limit=4,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("neighbor_concepts_failed: %s", exc)
+                    primary_doc = None
+                    if document_ids:
+                        primary_doc = await db.scalar(
+                            select(Document).where(Document.id == document_ids[0])
+                        )
+                    pivot = await asyncio.to_thread(
+                        not_in_document_agent,
+                        query=message,
+                        document_title=(primary_doc.filename if primary_doc else None),
+                        document_summary=None,
+                        neighbor_concepts=neighbors,
+                        fit=None,
+                        related_sources=None,
                     )
-                    await websocket.send_json({"type": "done", "conversation_id": str(conversation.id), "suggested_questions": list(_local_suggested_questions(locals()))})
+                    pivot = _style_answer_response(pivot)
+                    await _send_pivot_and_done(
+                        websocket, db, conversation, message, mode, pivot
+                    )
                     continue
 
                 if is_structural_listing_sources(sources):
@@ -619,6 +682,61 @@ async def websocket_chat(websocket: WebSocket):
                         suggested_questions=getattr(answer, "suggested_questions", None) or None,
                     )
                     await websocket.send_json({"type": "done", "conversation_id": str(conversation.id), "suggested_questions": list(_local_suggested_questions(locals()))})
+                    continue
+
+                # --- Stage 1.5: Subject-match check ---
+                # Before we let the LLM answer, classify whether the
+                # retrieved sources actually match the user's question
+                # subject. This catches the "user asked about water
+                # nozzles, retrieval returned paint nozzles" failure:
+                # without this step the LLM happily blends them.
+                #
+                # The assessor itself never raises — on any failure
+                # it falls back to ``well_covered`` so we preserve
+                # today's grounded-answer path.
+                fit = await asyncio.to_thread(
+                    assess_grounding_fit, message, sources
+                )
+                if fit.verdict in ("not_in_doc", "subject_mismatch"):
+                    related_sources_for_pivot = (
+                        [
+                            sources[s.index - 1]
+                            for s in fit.sources
+                            if s.classification == "RELATED"
+                            and 1 <= s.index <= len(sources)
+                        ]
+                        if fit.verdict == "subject_mismatch"
+                        else None
+                    )
+                    neighbors = []
+                    if fit.verdict == "not_in_doc" and document_ids:
+                        try:
+                            neighbors = await find_neighbor_concepts(
+                                db,
+                                query=message,
+                                document_ids=document_ids,
+                                limit=4,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("neighbor_concepts_failed: %s", exc)
+                    primary_doc = None
+                    if document_ids:
+                        primary_doc = await db.scalar(
+                            select(Document).where(Document.id == document_ids[0])
+                        )
+                    pivot = await asyncio.to_thread(
+                        not_in_document_agent,
+                        query=message,
+                        document_title=(primary_doc.filename if primary_doc else None),
+                        document_summary=None,
+                        neighbor_concepts=neighbors,
+                        fit=fit,
+                        related_sources=related_sources_for_pivot,
+                    )
+                    pivot = _style_answer_response(pivot)
+                    await _send_pivot_and_done(
+                        websocket, db, conversation, message, mode, pivot
+                    )
                     continue
 
                 # --- Stage 2: Intent Classification ---
