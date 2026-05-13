@@ -7,10 +7,44 @@ import { GripHorizontal, MessageSquare, Maximize2, Minimize2, PanelRightClose, P
 
 import { DocumentChatPane } from "@/components/pdf/DocumentChatPane";
 import { useDialogDismiss } from "@/hooks/useDialogDismiss";
-import type { Document } from "@/lib/types";
+import type { ChatMessage, Document, SearchMode } from "@/lib/types";
+import { useChatStore } from "@/stores/chatStore";
+import { useConversationStore } from "@/stores/conversationStore";
 import { useDocumentStore } from "@/stores/documentStore";
 import { useGroupStore } from "@/stores/groupStore";
 import { usePDFViewerStore } from "@/stores/pdfViewerStore";
+
+// Per-document conversation id. When the user opens a PDF preview
+// we look up whether they've chatted about this PDF before and
+// resume that conversation; otherwise they get a fresh thread that
+// becomes the document's conversation as soon as they send their
+// first message. Stored in localStorage so it survives reloads.
+const DOC_CONVERSATIONS_KEY = "pdfDocumentConversations";
+
+function readDocConversations(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(DOC_CONVERSATIONS_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeDocConversation(documentId: string, conversationId: string | null) {
+  if (typeof window === "undefined") return;
+  try {
+    const map = readDocConversations();
+    if (conversationId) {
+      map[documentId] = conversationId;
+    } else {
+      delete map[documentId];
+    }
+    window.localStorage.setItem(DOC_CONVERSATIONS_KEY, JSON.stringify(map));
+  } catch {
+    /* ignore quota errors */
+  }
+}
 
 // Re-use the chat's full PDFViewer (search, highlights, annotations,
 // outline, ask-Maia, etc.) inside the library preview dialog. SSR
@@ -122,6 +156,17 @@ export function DocumentPreviewDialog({
   const previousSelection = useRef<string[] | null>(null);
   const setActiveGroup = useGroupStore((s) => s.setActiveGroup);
   const previousActiveGroup = useRef<string | null>(null);
+  // We isolate the preview's chat from the main-app chat so the
+  // user doesn't see (e.g.) their "Google Ads Report for Coateq"
+  // conversation bleeding into a PDF preview. On open we stash the
+  // main chat's state, swap to either this document's saved
+  // conversation or a fresh thread; on close we restore.
+  const previousChatState = useRef<{
+    messages: ChatMessage[];
+    conversationId: string | null;
+    draft: string;
+    mode: SearchMode;
+  } | null>(null);
   // Chat-open is shared with PDFToolbar via the pdfViewerStore so the
   // toolbar button can toggle it. We seed it from localStorage and
   // mirror writes back so the preference sticks across opens.
@@ -205,6 +250,43 @@ export function DocumentPreviewDialog({
     if (document.group_id) {
       setActiveGroup(document.group_id);
     }
+
+    // Stash main-app chat state, then swap to a doc-scoped session.
+    // If this document has a saved conversation, resume it from
+    // cache (no network roundtrip); otherwise clear to a fresh
+    // thread that the backend will assign a new conversation_id to
+    // on the first message.
+    const chatStore = useChatStore.getState();
+    const convStore = useConversationStore.getState();
+    previousChatState.current = {
+      messages: chatStore.messages,
+      conversationId: convStore.activeConversationId,
+      draft: chatStore.draft,
+      mode: chatStore.mode,
+    };
+
+    const savedConvId = readDocConversations()[document.id] ?? null;
+    if (savedConvId) {
+      const cached = chatStore.getCachedMessagesForConversation(savedConvId);
+      if (cached && cached.length > 0) {
+        chatStore.hydrateMessages(cached, savedConvId);
+        convStore.setActiveConversationId(savedConvId);
+      } else {
+        // No cached transcript yet — fetch in the background. Until
+        // it arrives the user sees an empty thread, which is fine.
+        chatStore.clearChat();
+        convStore.setActiveConversationId(savedConvId);
+        void convStore.loadConversation(savedConvId).catch(() => {
+          // Stale id (the conversation was deleted). Drop it and
+          // let the user start fresh next time.
+          writeDocConversation(document.id, null);
+        });
+      }
+    } else {
+      chatStore.clearChat();
+      convStore.setActiveConversationId(null);
+    }
+    chatStore.setMode("library");
     return () => {
       closeStore();
       if (previousSelection.current !== null) {
@@ -215,6 +297,35 @@ export function DocumentPreviewDialog({
         setActiveGroup(previousActiveGroup.current);
         previousActiveGroup.current = null;
       }
+
+      // Save whatever conversation the user ended up on as this
+      // document's persistent thread, then restore the main app's
+      // chat to what it was before the preview opened.
+      const docId = document.id;
+      const endingConvId = useConversationStore.getState().activeConversationId;
+      if (endingConvId) {
+        writeDocConversation(docId, endingConvId);
+      }
+      // If a stream is still in flight (user closed the preview
+      // mid-response) stop it first so subsequent WS events don't
+      // land on the restored main-app messages array and corrupt it.
+      if (useChatStore.getState().streaming) {
+        useChatStore.getState().stopStreaming();
+      }
+      const stashed = previousChatState.current;
+      if (stashed) {
+        useChatStore.setState({
+          messages: stashed.messages,
+          draft: stashed.draft,
+          mode: stashed.mode,
+          streaming: false,
+          editingMessageId: null,
+        });
+        useConversationStore
+          .getState()
+          .setActiveConversationId(stashed.conversationId);
+      }
+      previousChatState.current = null;
     };
   }, [document, loadPage, closeStore, setSelectedDocuments, setActiveGroup]);
 
