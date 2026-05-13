@@ -106,8 +106,8 @@ const ROOT_ID = "__book_root__";
 // room to bend gracefully, with comparatively tight vertical stacking.
 // ---------------------------------------------------------------------------
 
-const LEVEL_X = 460;
-const LEAF_Y = 44;
+const LEVEL_X = 560;
+const LEAF_Y = 48;
 const NODE_W = 300;
 const NODE_W_ROOT = 320;
 
@@ -295,8 +295,9 @@ function layoutSubtree(
     // sweep gracefully into the child.
     type: "sweep",
     style: {
-      stroke: "rgba(110,90,55,0.45)",
-      strokeWidth: 1.4,
+      stroke: "rgba(110,80,40,0.7)",
+      strokeWidth: 1.8,
+      strokeLinecap: "round" as const,
     },
   });
 
@@ -739,8 +740,9 @@ function CanvasInner({
         defaultEdgeOptions={{
           type: "sweep",
           style: {
-            stroke: "rgba(110,90,55,0.45)",
-            strokeWidth: 1.4,
+            stroke: "rgba(110,80,40,0.7)",
+            strokeWidth: 1.8,
+            strokeLinecap: "round" as const,
           },
         }}
         style={{
