@@ -68,7 +68,13 @@ const VIEWPORT_INSET = 16;
 const DRAG_KEEP_VISIBLE = 80;
 const STORAGE_KEY = "pdfDialogSize";
 const CHAT_OPEN_STORAGE_KEY = "pdfDialogChatOpen";
-const CHAT_PANE_WIDTH = 420;
+const CHAT_PANE_WIDTH_STORAGE_KEY = "pdfDialogChatPaneWidth";
+// Default + resize bounds for the chat pane. Min keeps the composer
+// + message body readable; max is enforced dynamically against the
+// dialog width below so the PDF never collapses to nothing.
+const DEFAULT_CHAT_PANE_WIDTH = 420;
+const MIN_CHAT_PANE_WIDTH = 320;
+const MIN_PDF_PANE_WIDTH = 560;
 // Below this dialog width we hide the chat pane regardless of the
 // toggle state — there isn't enough horizontal room to read the PDF
 // AND chat side-by-side. User can maximize the dialog to get it back.
@@ -173,6 +179,22 @@ export function DocumentPreviewDialog({
   const chatPaneOpen = usePDFViewerStore((s) => s.chatPaneOpen);
   const setChatPaneAvailable = usePDFViewerStore((s) => s.setChatPaneAvailable);
   const setChatPaneOpen = usePDFViewerStore((s) => s.setChatPaneOpen);
+  // User-resizable chat pane width. Persisted across sessions so the
+  // user's preferred split stays the same on next open.
+  const [chatPaneWidth, setChatPaneWidth] = useState<number>(() => {
+    if (typeof window === "undefined") return DEFAULT_CHAT_PANE_WIDTH;
+    try {
+      const raw = window.localStorage.getItem(CHAT_PANE_WIDTH_STORAGE_KEY);
+      const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+      if (Number.isFinite(parsed) && parsed >= MIN_CHAT_PANE_WIDTH) {
+        return parsed;
+      }
+    } catch {
+      /* ignore corrupt storage */
+    }
+    return DEFAULT_CHAT_PANE_WIDTH;
+  });
+  const [resizingChatPane, setResizingChatPane] = useState(false);
   const {
     handleOpenChange,
     handlePointerDownOutside,
@@ -357,6 +379,18 @@ export function DocumentPreviewDialog({
     }
   }, [chatPaneOpen]);
 
+  useEffect(() => {
+    if (typeof window === "undefined" || resizingChatPane) return;
+    try {
+      window.localStorage.setItem(
+        CHAT_PANE_WIDTH_STORAGE_KEY,
+        String(Math.round(chatPaneWidth)),
+      );
+    } catch {
+      /* ignore storage errors */
+    }
+  }, [chatPaneWidth, resizingChatPane]);
+
   // Tell the PDF toolbar (via the shared pdfViewerStore) that a chat
   // pane is available to toggle. Clear the flag on unmount so the
   // main-app PDF viewer doesn't show an orphan Chat button.
@@ -531,12 +565,60 @@ export function DocumentPreviewDialog({
 
   // Chat-pane visibility: the user toggles it via the PDF toolbar's
   // Chat button. We override to hide when the dialog is too narrow
-  // for both panes to be usable (PDF needs ~640px, chat needs the
-  // CHAT_PANE_WIDTH allocation). At that size the toolbar button is
+  // for both panes to be usable (PDF needs MIN_PDF_PANE_WIDTH, chat
+  // needs MIN_CHAT_PANE_WIDTH). At that size the toolbar button is
   // still shown (so the user knows the affordance exists) but
   // clicking widens the dialog instead of changing layout.
   const chatRoomAvailable = renderedSize.width >= CHAT_MIN_DIALOG_WIDTH;
   const chatVisible = chatPaneOpen && chatRoomAvailable && document !== null;
+  // Effective chat-pane width clamped against the current dialog
+  // width so the PDF always keeps MIN_PDF_PANE_WIDTH on screen.
+  const effectiveChatWidth = chatVisible
+    ? Math.max(
+        MIN_CHAT_PANE_WIDTH,
+        Math.min(chatPaneWidth, renderedSize.width - MIN_PDF_PANE_WIDTH),
+      )
+    : 0;
+
+  const startChatResize = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!chatVisible) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const startMouseX = event.clientX;
+      const startWidth = effectiveChatWidth;
+      const dialogWidth = renderedSize.width;
+      setResizingChatPane(true);
+      const previousCursor = window.document.body.style.cursor;
+      const previousSelect = window.document.body.style.userSelect;
+      window.document.body.style.cursor = "col-resize";
+      window.document.body.style.userSelect = "none";
+
+      const onMove = (moveEvent: MouseEvent) => {
+        // Drag right shrinks the chat (mouse moves right → divider
+        // shifts right → less room on the right for chat). Reverse:
+        // drag left grows the chat. So we subtract the delta.
+        const delta = moveEvent.clientX - startMouseX;
+        const proposed = startWidth - delta;
+        const maxAllowed = dialogWidth - MIN_PDF_PANE_WIDTH;
+        const next = Math.max(
+          MIN_CHAT_PANE_WIDTH,
+          Math.min(proposed, maxAllowed),
+        );
+        setChatPaneWidth(next);
+      };
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        window.document.body.style.cursor = previousCursor;
+        window.document.body.style.userSelect = previousSelect;
+        setResizingChatPane(false);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [chatVisible, effectiveChatWidth, renderedSize.width],
+  );
 
   // When the user toggles chat on but the dialog is too narrow, widen
   // the dialog enough to show both panes (preserving the current
@@ -630,12 +712,30 @@ export function DocumentPreviewDialog({
               {document ? <PDFViewer /> : null}
             </div>
             {chatVisible ? (
-              <div
-                className="flex h-full shrink-0 flex-col border-l border-black/[0.06] bg-panel"
-                style={{ width: CHAT_PANE_WIDTH }}
-              >
-                <DocumentChatPane />
-              </div>
+              <>
+                {/* Draggable divider between the PDF and the chat
+                    pane. 6px visible line, 12px hit-target so it's
+                    easy to grab. Cursor flips to col-resize while
+                    hovering and stays that way during drag. */}
+                <div
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Resize chat pane"
+                  onMouseDown={startChatResize}
+                  className={`group relative h-full w-[6px] shrink-0 cursor-col-resize select-none bg-black/[0.05] transition hover:bg-accent/40 ${
+                    resizingChatPane ? "bg-accent/50" : ""
+                  }`}
+                >
+                  {/* Wider invisible hit area for easier grabbing. */}
+                  <div className="absolute inset-y-0 left-[-3px] right-[-3px]" />
+                </div>
+                <div
+                  className="flex h-full shrink-0 flex-col border-l border-black/[0.06] bg-panel"
+                  style={{ width: effectiveChatWidth }}
+                >
+                  <DocumentChatPane />
+                </div>
+              </>
             ) : null}
           </div>
           {/* Corner resize handles. Invisible — the cursor change on
