@@ -107,7 +107,7 @@ const ROOT_ID = "__book_root__";
 // ---------------------------------------------------------------------------
 
 const LEVEL_X = 640;
-const LEAF_Y = 48;
+const LEAF_Y = 72;
 const NODE_W = 300;
 const NODE_W_ROOT = 320;
 
@@ -623,11 +623,17 @@ function CanvasInner({
   // We delay one frame so ReactFlow has measured the new layout
   // before computing the fit — otherwise the first frame after open
   // would fit-to-an-empty-set and the root ended up off-screen.
+  //
+  // minZoom is capped at 0.75 on purpose: when a parent has many
+  // siblings (the German book has 58 chapters), letting fitView
+  // zoom out to 0.3 squashes every pill together and the user
+  // can't read anything. Instead we keep a comfortable zoom and
+  // let them scroll/pan — same pattern as NotebookLM.
   useEffect(() => {
     if (!flow.nodes.length) return;
     const handle = window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
-        reactFlow.fitView({ padding: 0.2, duration: 320, minZoom: 0.3, maxZoom: 1.2 });
+        reactFlow.fitView({ padding: 0.15, duration: 320, minZoom: 0.75, maxZoom: 1.0 });
       });
     });
     return () => window.cancelAnimationFrame(handle);
@@ -737,7 +743,7 @@ function CanvasInner({
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         fitView
-        fitViewOptions={{ padding: 0.2, minZoom: 0.3, maxZoom: 1.2 }}
+        fitViewOptions={{ padding: 0.15, minZoom: 0.75, maxZoom: 1.0 }}
         nodesDraggable={false}
         nodesConnectable={false}
         panOnScroll
