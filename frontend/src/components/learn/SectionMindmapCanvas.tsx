@@ -98,13 +98,16 @@ interface NodePayload {
 const ROOT_ID = "__book_root__";
 
 // ---------------------------------------------------------------------------
-// Visual tuning — generous spacing so curved edges have room to breathe.
+// Visual tuning — tight vertical stacking, wide horizontal breathing.
+// Matches NotebookLM's mindmap density: a tall narrow column of compact
+// pill nodes per level, with generous gaps between levels so the bezier
+// curves can curve smoothly without crossing siblings.
 // ---------------------------------------------------------------------------
 
-const LEVEL_X = 360;
-const LEAF_Y = 96;
-const NODE_W = 280;
-const NODE_W_ROOT = 320;
+const LEVEL_X = 280;
+const LEAF_Y = 38;
+const NODE_W = 220;
+const NODE_W_ROOT = 240;
 
 // ---------------------------------------------------------------------------
 // Tree helpers
@@ -166,55 +169,58 @@ function masteryAccent(score: number | null): string {
 }
 
 function themeFor(kind: Kind, mastery: number | null): Theme {
+  // Compact-pill mindmap: each level has a distinct fill that reads at
+  // a glance without needing a text label on the node. Shadows are
+  // intentionally subtle — the pills sit on the canvas, they don't
+  // hover above it. Edges remain the primary visual structure.
   if (kind === "root") {
     return {
-      bg: "linear-gradient(180deg, #2a2522 0%, #1a1614 100%)",
-      border: "rgba(255,255,255,0.08)",
+      bg: "#2a2522",
+      border: "rgba(0,0,0,0.18)",
       text: "rgba(255,255,255,0.96)",
       muted: "rgba(255,255,255,0.6)",
       accent: "rgba(255,250,235,0.92)",
-      shadow: "0 18px 40px rgba(17,12,8,0.28), 0 2px 4px rgba(17,12,8,0.18)",
+      shadow: "0 2px 6px rgba(17,12,8,0.12)",
     };
   }
   if (kind === "group") {
-    // Warm copper/amber gradient — distinct from chapter cards so
-    // the synthetic layer reads as "scope" rather than content.
     return {
-      bg: "linear-gradient(180deg, #f7ecd9 0%, #ead8b8 100%)",
-      border: "rgba(166,124,73,0.4)",
-      text: "rgba(78,52,22,0.95)",
+      bg: "#f3e6c9",
+      border: "rgba(166,124,73,0.42)",
+      text: "rgba(78,52,22,0.94)",
       muted: "rgba(110,80,40,0.7)",
       accent: "rgba(166,124,73,0.95)",
-      shadow: "0 10px 26px rgba(78,52,22,0.10), 0 1px 2px rgba(78,52,22,0.05)",
+      shadow: "0 1px 3px rgba(78,52,22,0.06)",
     };
   }
   if (kind === "topic") {
     return {
-      bg: "linear-gradient(180deg, #faf8f3 0%, #f1ede2 100%)",
-      border: "rgba(146,138,128,0.32)",
+      bg: "#e9e3d1",
+      border: "rgba(146,128,90,0.38)",
       text: "rgba(31,27,24,0.94)",
       muted: "rgba(89,80,71,0.7)",
-      accent: "rgba(110,80,55,0.85)",
-      shadow: "0 8px 22px rgba(17,12,8,0.08), 0 1px 2px rgba(17,12,8,0.05)",
+      accent: "rgba(110,90,55,0.85)",
+      shadow: "0 1px 3px rgba(17,12,8,0.05)",
     };
   }
   if (kind === "subtopic") {
     return {
-      bg: "#ffffff",
-      border: "rgba(166,156,142,0.32)",
+      bg: "#f1ebd9",
+      border: "rgba(166,156,128,0.38)",
       text: "rgba(31,27,24,0.92)",
       muted: "rgba(89,80,71,0.65)",
-      accent: "rgba(110,80,55,0.7)",
-      shadow: "0 6px 16px rgba(17,12,8,0.07), 0 1px 2px rgba(17,12,8,0.04)",
+      accent: "rgba(110,90,55,0.75)",
+      shadow: "0 1px 3px rgba(17,12,8,0.04)",
     };
   }
+  // headline — mastery-tinted soft fill (always readable)
   return {
     bg: "#ffffff",
     border: masteryAccent(mastery),
     text: "rgba(31,27,24,0.92)",
     muted: "rgba(89,80,71,0.65)",
     accent: masteryAccent(mastery),
-    shadow: "0 6px 16px rgba(17,12,8,0.08), 0 1px 2px rgba(17,12,8,0.05)",
+    shadow: "0 1px 3px rgba(17,12,8,0.06)",
   };
 }
 
@@ -282,14 +288,14 @@ function layoutSubtree(
     id: `${parentId}->${id}`,
     source: parentId,
     target: id,
-    // Soft bezier curves instead of orthogonal smoothstep — feels
-    // organic and avoids the T-junction look that smoothstep produces
-    // when many siblings share a parent.
+    // Smooth bezier curves. With handles anchored on the right edge
+    // of the parent and the left edge of the child, ReactFlow's
+    // default bezier produces the NotebookLM-style S-curve where
+    // sibling lines fan out from a single point on the parent.
     type: "default",
     style: {
-      stroke: "rgba(146,138,128,0.55)",
-      strokeWidth: 1.6,
-      strokeLinecap: "round" as const,
+      stroke: "rgba(110,90,55,0.42)",
+      strokeWidth: 1.4,
     },
   });
 
@@ -377,170 +383,119 @@ function SectionNodeView({ data }: NodeProps<Node<NodePayload>>) {
   const t = themeFor(data.kind, data.mastery);
   const isRoot = data.kind === "root";
   const width = isRoot ? NODE_W_ROOT : NODE_W;
+  const titleTooltip =
+    data.kind === "root"
+      ? `${data.title} (${data.childCount} ${data.childCount === 1 ? "theme" : "themes"})`
+      : `${data.title} · pp. ${data.pageStart}${
+          data.pageEnd && data.pageEnd !== data.pageStart ? `–${data.pageEnd}` : ""
+        }`;
 
   return (
     <div
+      title={titleTooltip}
       style={{
         background: t.bg,
         border: `1px solid ${t.border}`,
         color: t.text,
         width,
-        borderRadius: 18,
-        padding: isRoot ? "14px 16px" : "12px 14px",
+        borderRadius: 10,
+        padding: "5px 10px",
         boxShadow: t.shadow,
         position: "relative",
-        cursor: data.hasChildren ? "pointer" : "default",
-        transition: "transform 120ms ease, box-shadow 120ms ease",
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.transform = "translateY(-1px)";
-        e.currentTarget.style.boxShadow = t.shadow.replace(/0\.\d+/g, (m) => {
-          const v = parseFloat(m);
-          return Math.min(0.95, v + 0.04).toFixed(2);
-        });
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.transform = "translateY(0)";
-        e.currentTarget.style.boxShadow = t.shadow;
+        cursor: data.hasChildren ? "pointer" : data.kind === "headline" ? "pointer" : "default",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        minHeight: 28,
+        transition: "background 100ms ease, border-color 100ms ease",
       }}
     >
       <Handle type="target" position={Position.Left} style={{ opacity: 0, width: 1, height: 1 }} />
       <Handle type="source" position={Position.Right} style={{ opacity: 0, width: 1, height: 1 }} />
 
-      {/* Tiny kind label up top — small caps, low contrast, gentle. */}
-      <div
+      {/* Single-line title with ellipsis. Color codes the level so
+          we don't need a "TOPIC · P. 13" label cluttering the pill. */}
+      <span
         style={{
-          fontSize: 9.5,
-          fontWeight: 600,
-          textTransform: "uppercase",
-          letterSpacing: "0.14em",
-          color: t.muted,
-          marginBottom: 6,
-        }}
-      >
-        {kindLabel(data.kind)}
-      </div>
-
-      {/* Title — clamps to three lines with ellipsis so long German
-          subtitles don't blow the layout. */}
-      <div
-        style={{
-          fontSize: isRoot ? 16 : data.kind === "topic" ? 14 : 13,
-          fontWeight: isRoot ? 700 : data.kind === "headline" ? 500 : 600,
-          lineHeight: 1.35,
+          flex: 1,
+          minWidth: 0,
+          fontSize: isRoot ? 12.5 : data.kind === "group" ? 12 : 11.5,
+          fontWeight: isRoot ? 700 : data.kind === "group" ? 600 : 500,
+          lineHeight: 1.3,
           letterSpacing: "-0.005em",
-          display: "-webkit-box",
-          WebkitLineClamp: 3,
-          WebkitBoxOrient: "vertical",
-          overflow: "hidden",
           color: t.text,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
         }}
       >
         {data.title}
-      </div>
+      </span>
 
-      {/* Footer: page-range pill + expand affordance. */}
-      <div
-        style={{
-          marginTop: 10,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 8,
-        }}
-      >
-        {data.kind !== "root" ? (
-          <span
-            style={{
-              fontSize: 10.5,
-              fontWeight: 600,
-              color: t.muted,
-              background: "rgba(0,0,0,0.04)",
-              padding: "2px 8px",
-              borderRadius: 999,
-              letterSpacing: "0.02em",
-            }}
-          >
-            p. {data.pageStart}
-            {data.pageEnd && data.pageEnd !== data.pageStart ? `–${data.pageEnd}` : ""}
-          </span>
-        ) : (
-          <span style={{ fontSize: 11, color: t.muted, fontWeight: 500 }}>
-            {data.childCount} {data.childCount === 1 ? "chapter" : "chapters"}
-          </span>
-        )}
-
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {data.kind === "headline" && data.onLearn && data.sectionId ? (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                data.onLearn?.(data.sectionId!, data.title);
-              }}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                background: "rgba(5,150,105,0.12)",
-                color: "rgb(4,120,87)",
-                border: "1px solid rgba(5,150,105,0.22)",
-                padding: "2px 8px",
-                borderRadius: 999,
-                fontSize: 10.5,
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-              title="Start learning this section"
-            >
-              <GraduationCap style={{ width: 11, height: 11 }} />
-              Learn
-            </button>
-          ) : null}
-
-          {data.hasChildren ? (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                data.onToggle?.();
-              }}
-              title={data.isExpanded ? "Collapse" : `Expand · ${data.childCount}`}
-              aria-label={data.isExpanded ? "Collapse" : "Expand"}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 4,
-                height: 22,
-                minWidth: 22,
-                padding: data.isExpanded ? 0 : "0 7px",
-                borderRadius: 999,
-                background: isRoot
-                  ? "rgba(255,255,255,0.12)"
-                  : `${t.accent.replace("rgba(", "rgba(").replace(/[\d.]+\)$/, "0.10)")}`,
-                border: `1px solid ${
-                  isRoot ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.08)"
-                }`,
-                color: isRoot ? "rgba(255,255,255,0.95)" : t.accent,
-                fontSize: 10,
-                fontWeight: 700,
-                cursor: "pointer",
-                transition: "background 100ms ease",
-              }}
-            >
-              {data.isExpanded ? (
-                <Minus style={{ width: 12, height: 12 }} />
-              ) : (
-                <>
-                  <ChevronRight style={{ width: 12, height: 12 }} />
-                  <span>{data.childCount}</span>
-                </>
-              )}
-            </button>
-          ) : null}
-        </div>
-      </div>
+      {data.hasChildren ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            data.onToggle?.();
+          }}
+          title={data.isExpanded ? "Collapse" : `Expand · ${data.childCount}`}
+          aria-label={data.isExpanded ? "Collapse" : "Expand"}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 2,
+            height: 18,
+            minWidth: 18,
+            padding: data.isExpanded ? 0 : "0 5px",
+            borderRadius: 999,
+            background: isRoot
+              ? "rgba(255,255,255,0.16)"
+              : "rgba(0,0,0,0.05)",
+            border: `1px solid ${isRoot ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.07)"}`,
+            color: isRoot ? "rgba(255,255,255,0.92)" : t.accent,
+            fontSize: 9.5,
+            fontWeight: 700,
+            flexShrink: 0,
+            cursor: "pointer",
+          }}
+        >
+          {data.isExpanded ? (
+            <Minus style={{ width: 10, height: 10 }} />
+          ) : (
+            <>
+              <ChevronRight style={{ width: 10, height: 10 }} />
+              <span>{data.childCount}</span>
+            </>
+          )}
+        </button>
+      ) : data.kind === "headline" && data.onLearn && data.sectionId ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            data.onLearn?.(data.sectionId!, data.title);
+          }}
+          title="Start learning this section"
+          aria-label="Start learning this section"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            height: 18,
+            width: 18,
+            borderRadius: 999,
+            background: "rgba(5,150,105,0.14)",
+            color: "rgb(4,120,87)",
+            border: "1px solid rgba(5,150,105,0.22)",
+            flexShrink: 0,
+            cursor: "pointer",
+          }}
+        >
+          <GraduationCap style={{ width: 10, height: 10 }} />
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -748,20 +703,22 @@ function CanvasInner({
         defaultEdgeOptions={{
           type: "default",
           style: {
-            stroke: "rgba(146,138,128,0.55)",
-            strokeWidth: 1.6,
+            stroke: "rgba(110,90,55,0.42)",
+            strokeWidth: 1.4,
           },
         }}
         style={{
-          background:
-            "radial-gradient(circle at 20% 0%, rgba(244,239,228,0.85) 0%, rgba(244,239,228,0) 60%), #f7f6f2",
+          background: "#faf8f3",
         }}
       >
+        {/* Very faint dot grid — visible at high zoom for orientation
+            but invisible from typical fit-view distance, matching the
+            reference's clean flat backdrop. */}
         <Background
           variant={BackgroundVariant.Dots}
-          gap={28}
-          size={1.2}
-          color="rgba(146,138,128,0.35)"
+          gap={32}
+          size={0.8}
+          color="rgba(146,138,128,0.20)"
         />
         <Controls position="bottom-right" showInteractive={false} />
       </ReactFlow>
