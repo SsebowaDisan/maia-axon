@@ -85,6 +85,11 @@ export function DocumentChatComposer() {
   const [topicTree, setTopicTree] = useState<MindmapSectionNode[] | null>(null);
   const [topicQuery, setTopicQuery] = useState<string | null>(null);
   const [topicHighlight, setTopicHighlight] = useState(0);
+  // Selected topic shown as a removable chip above the textarea. Lives
+  // in local state — it's just a UI affordance until send time, when
+  // the prompt is augmented with the topic name + page range so backend
+  // retrieval has the focus context.
+  const [topicChip, setTopicChip] = useState<FlatTopic | null>(null);
   const flatTopics = useMemo(() => (topicTree ? flattenTopics(topicTree) : []), [topicTree]);
   const filteredTopics = useMemo(() => {
     if (topicQuery == null) return [];
@@ -150,14 +155,37 @@ export function DocumentChatComposer() {
 
   const canSend =
     !streaming &&
-    (draft.trim().length > 0 || promptAttachments.length > 0 || !!passageContext);
+    (draft.trim().length > 0 ||
+      promptAttachments.length > 0 ||
+      !!passageContext ||
+      !!topicChip);
 
   async function handleSend() {
     if (!canSend) return;
     if (topicQuery !== null) return; // suppress send while typeahead open
-    const message = draft.trim();
+    const rawMessage = draft.trim();
+    // Splice the topic name + page range into the outgoing prompt so
+    // backend retrieval narrows to that section. Chip is local UI only;
+    // the wire payload is plain text. If the user didn't write anything
+    // alongside, default to a "tell me about this section" question.
+    const composed = topicChip
+      ? (() => {
+          const pageRef =
+            topicChip.page_start && topicChip.page_end &&
+            topicChip.page_end !== topicChip.page_start
+              ? ` (pp. ${topicChip.page_start}–${topicChip.page_end})`
+              : topicChip.page_start
+                ? ` (p. ${topicChip.page_start})`
+                : "";
+          const lead = `About the section "${topicChip.title}"${pageRef}: `;
+          return rawMessage.length > 0
+            ? `${lead}${rawMessage}`
+            : `${lead}what does this section cover?`;
+        })()
+      : rawMessage;
     setDraft("");
     setTopicQuery(null);
+    setTopicChip(null);
     // Defensive: ensure the doc-scoped chat always sends with the
     // active document selected AND the doc's group active. The dialog
     // effect normally handles this on open, but persist hydration
@@ -172,7 +200,7 @@ export function DocumentChatComposer() {
         useGroupStore.getState().setActiveGroup(currentDocument.group_id);
       }
     }
-    await sendMessage(message);
+    await sendMessage(composed);
   }
 
   // Drive the topic typeahead based on the current draft. We re-run
@@ -198,15 +226,14 @@ export function DocumentChatComposer() {
 
   const handleSelectTopic = useCallback(
     (topic: FlatTopic) => {
-      // Replace the trailing "%query" token with the topic title in
-      // plain text. Keeps the conversation transcript readable and
-      // gives the LLM a clean reference it can ground retrieval on.
-      const replaced = draft.replace(TOPIC_TRIGGER, (_match, lead) =>
-        `${lead}${topic.title} `,
-      );
-      setDraft(replaced);
+      // Strip the trailing "%query" token from the draft and pin the
+      // topic as a chip above the textarea. The chip is removable; on
+      // send we splice the topic name + page range into the prompt so
+      // backend retrieval narrows to that section.
+      const replaced = draft.replace(TOPIC_TRIGGER, (_match, lead) => lead);
+      setDraft(replaced.trimStart());
       setTopicQuery(null);
-      // Re-focus + caret to end so the user can keep typing.
+      setTopicChip(topic);
       requestAnimationFrame(() => {
         const el = textareaRef.current;
         if (!el) return;
@@ -258,6 +285,40 @@ export function DocumentChatComposer() {
         className="hidden"
         onChange={(event) => void handleAttachFiles(event.target.files)}
       />
+
+      {/* Topic chip — picked from the % typeahead, removable. */}
+      {topicChip ? (
+        <div className="px-3 pt-2.5">
+          <div
+            className="flex max-w-full items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.06] px-2 py-1 text-[11px]"
+            title={topicChip.title}
+          >
+            <Layers className="h-3 w-3 shrink-0 text-accent/80" />
+            <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.14em] text-accent/80">
+              Topic
+            </span>
+            <span className="min-w-0 max-w-[240px] truncate text-ink/85">
+              {topicChip.title}
+            </span>
+            {topicChip.page_start ? (
+              <span className="shrink-0 text-[10px] text-muted">
+                p{topicChip.page_start}
+                {topicChip.page_end && topicChip.page_end !== topicChip.page_start
+                  ? `–${topicChip.page_end}`
+                  : ""}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setTopicChip(null)}
+              aria-label="Remove topic"
+              className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-muted transition hover:bg-black/[0.08] hover:text-ink"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {/* Attached passage (from PDF "Ask Maia about this") */}
       {passageContext ? (
