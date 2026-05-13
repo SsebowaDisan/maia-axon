@@ -1,10 +1,43 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { BookOpen, GraduationCap, Loader2, Paperclip, Quote, Send, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BookOpen, FileText, GraduationCap, Layers, Loader2, Paperclip, Quote, Send, X } from "lucide-react";
 
-import type { SearchMode } from "@/lib/types";
+import { api } from "@/lib/api";
+import type { MindmapSectionNode, SearchMode } from "@/lib/types";
 import { useChatStore } from "@/stores/chatStore";
+import { usePDFViewerStore } from "@/stores/pdfViewerStore";
+
+// "%foo" trigger. Recognised when the cursor is at the end of a token
+// that starts with % and contains no whitespace or further %. Mirrors
+// the #/@ patterns the main composer uses.
+const TOPIC_TRIGGER = /(^|\s)%([^\s%]*)$/;
+
+interface FlatTopic {
+  id: string;
+  kind: "topic" | "subtopic" | "headline";
+  title: string;
+  page_start: number;
+  page_end: number;
+  depth: number;
+}
+
+function flattenTopics(tree: MindmapSectionNode[]): FlatTopic[] {
+  const out: FlatTopic[] = [];
+  function walk(node: MindmapSectionNode, depth: number) {
+    out.push({
+      id: node.id,
+      kind: node.kind,
+      title: node.title,
+      page_start: node.page_start,
+      page_end: node.page_end,
+      depth,
+    });
+    for (const child of node.children) walk(child, depth + 1);
+  }
+  for (const root of tree) walk(root, 0);
+  return out;
+}
 
 /**
  * Slim composer dedicated to the PDF preview's chat pane.
@@ -42,6 +75,52 @@ export function DocumentChatComposer() {
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Topic-typeahead state. We fetch sections once per document then
+  // filter client-side as the user types after "%".
+  const currentDocument = usePDFViewerStore((s) => s.currentDocument);
+  const [topicTree, setTopicTree] = useState<MindmapSectionNode[] | null>(null);
+  const [topicQuery, setTopicQuery] = useState<string | null>(null);
+  const [topicHighlight, setTopicHighlight] = useState(0);
+  const flatTopics = useMemo(() => (topicTree ? flattenTopics(topicTree) : []), [topicTree]);
+  const filteredTopics = useMemo(() => {
+    if (topicQuery == null) return [];
+    const q = topicQuery.trim().toLowerCase();
+    const pool = flatTopics.filter((t) => t.title.trim().length > 0);
+    if (!q) return pool.slice(0, 30);
+    return pool
+      .filter((t) => t.title.toLowerCase().includes(q))
+      .slice(0, 30);
+  }, [flatTopics, topicQuery]);
+
+  // Fetch sections lazily the first time the user opens the % menu,
+  // then cache. Refetch only when the document changes.
+  useEffect(() => {
+    if (!currentDocument || topicQuery === null) return;
+    if (topicTree !== null) return;
+    let cancelled = false;
+    api
+      .getDocumentSections(currentDocument.id)
+      .then((data) => {
+        if (cancelled) return;
+        setTopicTree(data);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTopicTree([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentDocument, topicQuery, topicTree]);
+
+  // If the document changes (different PDF in the preview), invalidate
+  // the cached topic tree so the next % opens fetch fresh data.
+  useEffect(() => {
+    setTopicTree(null);
+    setTopicQuery(null);
+  }, [currentDocument?.id]);
 
   // The composer always defaults to library mode when the preview
   // opens (this is the doc-scoped chat). The user can flip to learn
@@ -73,10 +152,67 @@ export function DocumentChatComposer() {
 
   async function handleSend() {
     if (!canSend) return;
+    if (topicQuery !== null) return; // suppress send while typeahead open
     const message = draft.trim();
     setDraft("");
+    setTopicQuery(null);
     await sendMessage(message);
   }
+
+  // Drive the topic typeahead based on the current draft. We re-run
+  // the regex on every change; if there's a trailing "%..." token,
+  // surface the dropdown; otherwise hide it.
+  const updateTopicQueryFrom = useCallback((value: string) => {
+    const match = TOPIC_TRIGGER.exec(value);
+    if (match) {
+      setTopicQuery(match[2] ?? "");
+      setTopicHighlight(0);
+    } else {
+      setTopicQuery(null);
+    }
+  }, []);
+
+  const handleDraftChange = useCallback(
+    (value: string) => {
+      setDraft(value);
+      updateTopicQueryFrom(value);
+    },
+    [setDraft, updateTopicQueryFrom],
+  );
+
+  const handleSelectTopic = useCallback(
+    (topic: FlatTopic) => {
+      // Replace the trailing "%query" token with the topic title in
+      // plain text. Keeps the conversation transcript readable and
+      // gives the LLM a clean reference it can ground retrieval on.
+      const replaced = draft.replace(TOPIC_TRIGGER, (_match, lead) =>
+        `${lead}${topic.title} `,
+      );
+      setDraft(replaced);
+      setTopicQuery(null);
+      // Re-focus + caret to end so the user can keep typing.
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      });
+    },
+    [draft, setDraft],
+  );
+
+  // Click-outside dismiss.
+  useEffect(() => {
+    if (topicQuery === null) return;
+    function onDown(event: PointerEvent) {
+      const node = event.target as Node;
+      if (!containerRef.current?.contains(node)) {
+        setTopicQuery(null);
+      }
+    }
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [topicQuery]);
 
   async function handleAttachFiles(files: FileList | File[] | null) {
     if (!files || (files as FileList).length === 0) return;
@@ -85,7 +221,19 @@ export function DocumentChatComposer() {
   }
 
   return (
-    <div className="rounded-2xl border border-black/[0.07] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+    <div
+      ref={containerRef}
+      className="relative rounded-2xl border border-black/[0.07] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]"
+    >
+      {topicQuery !== null ? (
+        <TopicPicker
+          topics={filteredTopics}
+          loading={topicTree === null}
+          highlight={topicHighlight}
+          onHover={setTopicHighlight}
+          onSelect={handleSelectTopic}
+        />
+      ) : null}
       <input
         ref={fileInputRef}
         type="file"
@@ -150,8 +298,37 @@ export function DocumentChatComposer() {
         <textarea
           ref={textareaRef}
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => handleDraftChange(event.target.value)}
           onKeyDown={(event) => {
+            if (topicQuery !== null && filteredTopics.length > 0) {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setTopicHighlight((h) => (h + 1) % filteredTopics.length);
+                return;
+              }
+              if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setTopicHighlight((h) =>
+                  (h - 1 + filteredTopics.length) % filteredTopics.length,
+                );
+                return;
+              }
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                handleSelectTopic(filteredTopics[topicHighlight]);
+                return;
+              }
+              if (event.key === "Tab") {
+                event.preventDefault();
+                handleSelectTopic(filteredTopics[topicHighlight]);
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setTopicQuery(null);
+                return;
+              }
+            }
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               void handleSend();
@@ -159,8 +336,8 @@ export function DocumentChatComposer() {
           }}
           placeholder={
             mode === "learn"
-              ? "Ask the tutor about this section…"
-              : "Ask about this document…"
+              ? "Ask the tutor about this section…  (% lists topics)"
+              : "Ask about this document…  (% lists topics)"
           }
           rows={1}
           disabled={streaming}
@@ -200,6 +377,74 @@ export function DocumentChatComposer() {
           )}
         </button>
       </div>
+    </div>
+  );
+}
+
+function TopicPicker({
+  topics,
+  loading,
+  highlight,
+  onHover,
+  onSelect,
+}: {
+  topics: FlatTopic[];
+  loading: boolean;
+  highlight: number;
+  onHover: (index: number) => void;
+  onSelect: (topic: FlatTopic) => void;
+}) {
+  return (
+    <div
+      role="listbox"
+      aria-label="Topics in this document"
+      className="absolute bottom-full left-0 right-0 mb-2 max-h-[280px] overflow-hidden rounded-xl border border-black/[0.08] bg-white shadow-[0_18px_50px_rgba(15,23,42,0.14)]"
+    >
+      <div className="border-b border-black/[0.05] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
+        Topics in this document
+      </div>
+      {loading ? (
+        <div className="flex items-center gap-2 px-3 py-3 text-[12px] text-muted">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading topics…
+        </div>
+      ) : topics.length === 0 ? (
+        <div className="px-3 py-3 text-[12px] text-muted">
+          No matching topics in this document.
+        </div>
+      ) : (
+        <div className="max-h-[240px] overflow-y-auto scrollbar-thin">
+          {topics.map((topic, idx) => {
+            const Icon =
+              topic.kind === "topic" ? Layers : topic.kind === "subtopic" ? FileText : BookOpen;
+            const isHighlighted = idx === highlight;
+            return (
+              <button
+                key={topic.id}
+                type="button"
+                role="option"
+                aria-selected={isHighlighted}
+                onMouseEnter={() => onHover(idx)}
+                onClick={() => onSelect(topic)}
+                style={{ paddingLeft: 12 + topic.depth * 10 }}
+                className={`flex w-full items-center gap-2 py-1.5 pr-3 text-left text-[12.5px] transition ${
+                  isHighlighted ? "bg-accentSoft text-accent" : "text-ink hover:bg-black/[0.04]"
+                }`}
+              >
+                <Icon
+                  className={`h-3 w-3 shrink-0 ${
+                    isHighlighted ? "text-accent" : "text-muted/70"
+                  }`}
+                />
+                <span className="min-w-0 flex-1 truncate">{topic.title}</span>
+                <span className="shrink-0 text-[10.5px] text-muted/70">
+                  p. {topic.page_start}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
