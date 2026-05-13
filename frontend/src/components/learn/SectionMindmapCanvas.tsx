@@ -98,12 +98,13 @@ interface NodePayload {
 const ROOT_ID = "__book_root__";
 
 // ---------------------------------------------------------------------------
-// Visual tuning — compact pills with enough breathing room that long
-// German chapter titles fit on one line and sibling pills don't touch.
+// Visual tuning — copies the NotebookLM / genealogy-mindmap layout:
+// long horizontal sweeps between levels so the bezier curves get the
+// room to bend gracefully, with comparatively tight vertical stacking.
 // ---------------------------------------------------------------------------
 
-const LEVEL_X = 340;
-const LEAF_Y = 56;
+const LEVEL_X = 460;
+const LEAF_Y = 44;
 const NODE_W = 300;
 const NODE_W_ROOT = 320;
 
@@ -396,15 +397,15 @@ function SectionNodeView({ data }: NodeProps<Node<NodePayload>>) {
         border: `1px solid ${t.border}`,
         color: t.text,
         width,
-        borderRadius: 10,
-        padding: "5px 10px",
+        borderRadius: 8,
+        padding: "3px 10px",
         boxShadow: t.shadow,
         position: "relative",
         cursor: data.hasChildren ? "pointer" : data.kind === "headline" ? "pointer" : "default",
         display: "flex",
         alignItems: "center",
-        gap: 8,
-        minHeight: 28,
+        gap: 6,
+        minHeight: 24,
         transition: "background 100ms ease, border-color 100ms ease",
       }}
     >
