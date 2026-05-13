@@ -379,23 +379,70 @@ export function PDFPageJS({
     if (rawRects.length === 0) {
       return;
     }
-    // No per-line merging. Every previous attempt at merging
-    // (bridging-anything-on-the-same-line / adjacency thresholds /
-    // tree-walking) ended up dragging the highlight onto words the
-    // user did not select — PDF.js text-layer rects can extend past
-    // the visible glyph cluster, especially for justified runs and
-    // overlapping spans. So we just record each per-character-cluster
-    // rect that the browser already computed against the visual
-    // selection. AnnotationOverlay renders these as solid borderless
-    // tiles, so adjacent rects read as one continuous strip even
-    // though they're stored separately.
+    // PDF.js renders each character cluster as its own span, so
+    // ``range.getClientRects()`` returns one rect per cluster — and
+    // when we draw those rects as-is, the 1-2px gaps between
+    // adjacent clusters show through as visible white slivers
+    // *inside* selected words (Ven|tila|toren). Previous attempts at
+    // per-line merging went too far and bled onto unselected text;
+    // we go narrower here: merge only adjacent rects on the same
+    // visual line whose horizontal gap is small enough to be a
+    // normal character or word space. The 0.5×height threshold
+    // bridges character clusters and ordinary spaces but stays well
+    // below the gap between columns or end-of-line-to-start-of-next.
     type Strip = { left: number; right: number; top: number; bottom: number };
-    const lines: Strip[] = rawRects.map((rect) => ({
+    const rawStrips: Strip[] = rawRects.map((rect) => ({
       left: rect.left,
       right: rect.right,
       top: rect.top,
       bottom: rect.bottom,
     }));
+
+    // Group by visual line. Two rects belong to the same line when
+    // their vertical centres are within a few pixels — line heights
+    // can vary slightly because PDF.js sub-pixel positions
+    // descenders / ascenders.
+    const lineGroups = new Map<number, Strip[]>();
+    for (const s of rawStrips) {
+      const center = (s.top + s.bottom) / 2;
+      const key = Math.round(center / 4) * 4;
+      const list = lineGroups.get(key) ?? [];
+      list.push(s);
+      lineGroups.set(key, list);
+    }
+
+    const lines: Strip[] = [];
+    for (const group of lineGroups.values()) {
+      group.sort((a, b) => a.left - b.left);
+      let current: Strip | null = null;
+      for (const next of group) {
+        if (!current) {
+          current = { ...next };
+          continue;
+        }
+        const gap = next.left - current.right;
+        const height = Math.max(
+          current.bottom - current.top,
+          next.bottom - next.top,
+        );
+        // Bridge character clusters + normal word spaces. Half the
+        // line height comfortably covers a typical space character
+        // (~0.3× em) while staying narrow enough to never reach
+        // across a column gap (>1× em) or a different word block.
+        if (gap < height * 0.5) {
+          current.right = Math.max(current.right, next.right);
+          current.top = Math.min(current.top, next.top);
+          current.bottom = Math.max(current.bottom, next.bottom);
+        } else {
+          lines.push(current);
+          current = { ...next };
+        }
+      }
+      if (current) lines.push(current);
+    }
+    // Render in reading order — top-to-bottom, then left-to-right.
+    // Stable order keeps the box list deterministic for storage.
+    lines.sort((a, b) => a.top - b.top || a.left - b.left);
     const scaleX = pageSize.pdfWidth / pageSize.width;
     const scaleY = pageSize.pdfHeight / pageSize.height;
     const boxes = lines.map((line) => {
