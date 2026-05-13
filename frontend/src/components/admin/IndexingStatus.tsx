@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Loader2, Network, RotateCcw, Upload } from "lucide-react";
 
 import { DeleteConfirmDialog } from "@/components/shared/DeleteConfirmDialog";
 import { Button } from "@/components/ui/button";
+import { prefetchPdfFile } from "@/lib/api";
 import type { Document, DocumentStatusValue } from "@/lib/types";
 import { documentProgressLabel, formatBytes, statusLabel } from "@/lib/utils";
 import { useDocumentStore } from "@/stores/documentStore";
@@ -42,6 +43,11 @@ export function IndexingStatus({
   const setPendingAutoOpen = usePDFViewerStore((state) => state.setPendingAutoOpen);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Hover-prefetch debounce: only kick off a PDF download if the
+  // pointer has been on the card for > 220ms. Below that the user
+  // is just sweeping the cursor across the library list and we
+  // don't want to burn bandwidth on every card they pass over.
+  const prefetchTimer = useRef<number | null>(null);
 
   const status = statusOverride?.status ?? document.status;
   const progressCurrent = statusOverride?.progress_current ?? document.progress_current;
@@ -54,14 +60,36 @@ export function IndexingStatus({
   const progressLabel = documentProgressLabel(progressCurrent, progressTotal);
   const hasMindmap = (document.section_count ?? 0) > 0 && isPreviewable;
 
+  const startHoverPrefetch = () => {
+    if (!isPreviewable) return;
+    if (prefetchTimer.current !== null) return;
+    prefetchTimer.current = window.setTimeout(() => {
+      void prefetchPdfFile(document.id);
+      prefetchTimer.current = null;
+    }, 220);
+  };
+  const cancelHoverPrefetch = () => {
+    if (prefetchTimer.current !== null) {
+      window.clearTimeout(prefetchTimer.current);
+      prefetchTimer.current = null;
+    }
+  };
+
   return (
-    <div className={`rounded-[24px] border p-4 ${isDeleted ? "border-danger/20 bg-danger/5 opacity-70" : "border-line bg-panel/80"}`}>
+    <div
+      className={`rounded-[24px] border p-4 ${isDeleted ? "border-danger/20 bg-danger/5 opacity-70" : "border-line bg-panel/80"}`}
+      onMouseEnter={startHoverPrefetch}
+      onMouseLeave={cancelHoverPrefetch}
+    >
       <div className="flex items-start justify-between gap-4">
         <button
           type="button"
           className={`min-w-0 text-left ${isPreviewable ? "cursor-pointer transition hover:opacity-80" : "cursor-default"}`}
           onClick={() => {
-            if (isPreviewable) {
+            if (isPreviewable && onOpen) {
+              // Kick the PDF fetch off immediately so pdf.js finds
+              // the response in the HTTP cache when the dialog mounts.
+              void prefetchPdfFile(document.id);
               onOpen(document);
             }
           }}

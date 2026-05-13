@@ -27,8 +27,10 @@ const ZOOM_MAX = 4;
 
 function PDFLoadIndicator({
   progress,
+  previewImageUrl,
 }: {
   progress: { loaded: number; total: number } | null;
+  previewImageUrl: string | null;
 }) {
   // pdfjs reports `total` from the Content-Length header. With range
   // requests the first response covers only a chunk, so `total` may be
@@ -39,20 +41,44 @@ function PDFLoadIndicator({
       ? Math.min(100, Math.round((progress.loaded / progress.total) * 100))
       : null;
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-4 text-white">
-      <div className="relative h-1.5 w-[220px] overflow-hidden rounded-full bg-white/20">
-        {pct !== null ? (
-          <div
-            className="absolute inset-y-0 left-0 rounded-full bg-white transition-[width] duration-150 ease-out"
-            style={{ width: `${pct}%` }}
+    <div className="relative flex h-full flex-col items-center justify-center gap-4 overflow-hidden text-white">
+      {previewImageUrl ? (
+        // Backdrop: the page-1 thumbnail we already cached when the
+        // dialog opened (loadPage) renders behind the progress bar so
+        // the user sees the actual page material immediately instead
+        // of an empty grey panel. We dim with an overlay so the
+        // progress text stays readable. Plain <img> on purpose —
+        // next/image needs server-side optimisation that doesn't
+        // apply to our MinIO/GCS-served page images.
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={previewImageUrl}
+            alt=""
+            className="pointer-events-none absolute inset-0 m-auto max-h-full max-w-[60%] object-contain opacity-50 blur-[2px]"
+            aria-hidden="true"
           />
-        ) : (
-          <div className="maia-pdf-shimmer absolute inset-y-0 left-0 w-1/3 rounded-full bg-white/80" />
-        )}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/30 via-black/40 to-black/55"
+          />
+        </>
+      ) : null}
+      <div className="relative z-10 flex flex-col items-center gap-4">
+        <div className="relative h-1.5 w-[220px] overflow-hidden rounded-full bg-white/20">
+          {pct !== null ? (
+            <div
+              className="absolute inset-y-0 left-0 rounded-full bg-white transition-[width] duration-150 ease-out"
+              style={{ width: `${pct}%` }}
+            />
+          ) : (
+            <div className="maia-pdf-shimmer absolute inset-y-0 left-0 w-1/3 rounded-full bg-white/80" />
+          )}
+        </div>
+        <p className="text-[11px] uppercase tracking-[0.18em] text-white/80">
+          {pct !== null ? `Loading PDF · ${pct}%` : "Loading PDF…"}
+        </p>
       </div>
-      <p className="text-[11px] uppercase tracking-[0.18em] text-white/80">
-        {pct !== null ? `Loading PDF · ${pct}%` : "Loading PDF…"}
-      </p>
     </div>
   );
 }
@@ -1130,7 +1156,14 @@ export function PDFViewer() {
                 pdfProxyFileRef.current = pdfFile?.url ?? null;
                 setPdfProxy(doc);
               }}
-              loading={<PDFLoadIndicator progress={loadProgress} />}
+              loading={
+                <PDFLoadIndicator
+                  progress={loadProgress}
+                  previewImageUrl={
+                    pageCache[pageKey(currentDocument.id, 1)]?.image_url ?? null
+                  }
+                />
+              }
               error={
                 <div className="mx-auto max-w-[640px] mt-10 border border-black/[0.08] bg-white px-6 py-6 text-center text-sm text-warn">
                   Could not load this PDF. Try refreshing or contact support if it

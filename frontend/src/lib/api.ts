@@ -92,6 +92,48 @@ function clearStoredAuth() {
   window.localStorage.removeItem(AUTH_STORE_KEY);
 }
 
+// Track PDFs we've already kicked off a prefetch for so a hover or
+// click doesn't trigger overlapping requests for the same file.
+const _PDF_PREFETCH_INFLIGHT = new Set<string>();
+
+/**
+ * Start fetching the original PDF for a document in the background so
+ * pdf.js finds the bytes in the HTTP cache by the time the preview
+ * dialog mounts. Safe to call multiple times; the second call is a
+ * no-op while the first is in flight.
+ *
+ * Uses a tiny initial Range header so the request is cheap even on
+ * very large PDFs — pdf.js's later range requests then hit the cache
+ * with the same headers, while the rest of the file streams in the
+ * background.
+ */
+export async function prefetchPdfFile(documentId: string) {
+  if (typeof window === "undefined") return;
+  if (_PDF_PREFETCH_INFLIGHT.has(documentId)) return;
+  const token = getStoredToken();
+  if (!token) return;
+  _PDF_PREFETCH_INFLIGHT.add(documentId);
+  try {
+    // First request: HEAD-style with Range 0- to warm the cache for
+    // pdf.js's initial xref read. The browser will reuse this entry
+    // for range requests pdf.js fires later.
+    await fetch(`${API_URL}/documents/${documentId}/file`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Range: "bytes=0-",
+      },
+      cache: "default",
+    });
+  } catch {
+    /* ignore — pdf.js will retry when the viewer mounts */
+  } finally {
+    // Keep the entry for a couple of seconds so rapid re-hovers
+    // don't refetch, but clear eventually in case the response was
+    // an error and we want a real retry path.
+    setTimeout(() => _PDF_PREFETCH_INFLIGHT.delete(documentId), 5000);
+  }
+}
+
 export async function prefetchAuthorized(path: string) {
   const token = getStoredToken();
   if (!token) {
